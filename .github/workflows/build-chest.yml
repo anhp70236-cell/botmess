@@ -18,7 +18,7 @@ jobs:
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=14.0 \
             -fobjc-arc -dynamiclib \
-            -framework UIKit -framework Foundation -framework QuartzCore \
+            -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics \
             -install_name @rpath/ChestHelper.dylib \
             -o ChestHelper.dylib ChestHelper.m
           file ChestHelper.dylib
