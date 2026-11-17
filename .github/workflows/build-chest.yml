@@ -1,45 +1,61 @@
-name: Build TikTok Chest IPA
+name: Build TikTok ChestMenu IPA
 
 on:
   workflow_dispatch:
     inputs:
       ipa_url:
-        description: "Link tải trực tiếp TikTok.ipa (đã giải mã / decrypted)"
+        description: "Link tải trực tiếp TikTok.ipa (đã decrypt)"
         required: true
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
-      - name: Biên dịch ChestHelper.dylib
+      - name: Build dylib
         run: |
+          set -e
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=14.0 \
-            -fobjc-arc -dynamiclib \
-            -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics \
-            -install_name @rpath/ChestHelper.dylib \
-            -o ChestHelper.dylib ChestHelper.m
-          file ChestHelper.dylib
+          clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=13.0 \
+            -fobjc-arc -fmodules -dynamiclib \
+            -framework UIKit -framework Foundation \
+            -install_name @rpath/ChestMenu.dylib \
+            -o ChestMenu.dylib ChestMenu.m
+          codesign -f -s - ChestMenu.dylib
 
       - name: Tải TikTok.ipa
         env:
-          IPA_URL: ${{ github.event.inputs.ipa_url }}
-        run: |
-          curl -L --fail "$IPA_URL" -o TikTok.ipa
-          ls -lh TikTok.ipa
-
-      - name: Cài cyan (nhúng dylib)
-        run: |
-          brew install ldid
-          pip3 install --break-system-packages --force-reinstall https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+          IPA_URL: ${{ inputs.ipa_url }}
+        run: curl -L --fail --retry 3 -o TikTok.ipa "$IPA_URL"
 
       - name: Nhúng dylib vào IPA
         run: |
-          cyan -i TikTok.ipa -o TikTok_ChestHelper.ipa -f ChestHelper.dylib
+          set -e
+          git clone --depth 1 https://github.com/Tyilo/insert_dylib.git
+          clang -o insert_dylib_bin "$(find insert_dylib -name main.c | head -1)"
+          unzip -q TikTok.ipa -d work
+          APP=$(ls -d work/Payload/*.app | head -1)
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$APP/Info.plist")
+          mkdir -p "$APP/Frameworks"
+          cp ChestMenu.dylib "$APP/Frameworks/ChestMenu.dylib"
+          ./insert_dylib_bin --inplace --strip-codesign --all-yes \
+            "@executable_path/Frameworks/ChestMenu.dylib" "$APP/$EXE"
+          (cd work && zip -qry ../TikTok_ChestMenu.ipa Payload)
+          ls -lh TikTok_ChestMenu.ipa
 
-      - uses: actions/upload-artifact@v4
+      - name: Đưa IPA lên Releases (tải nhanh hơn Artifacts)
+        uses: softprops/action-gh-release@v2
         with:
-          name: TikTok_ChestHelper
-          path: TikTok_ChestHelper.ipa
+          tag_name: chestmenu-${{ github.run_number }}
+          name: TikTok ChestMenu #${{ github.run_number }}
+          files: TikTok_ChestMenu.ipa
+
+      - name: Lưu riêng file dylib (nhẹ)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChestMenu-dylib
+          path: ChestMenu.dylib
