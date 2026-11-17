@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       ipa_url:
-        description: "Link tải trực tiếp TikTok.ipa (đã decrypt)"
-        required: true
+        description: "Để trống nếu đã đặt biến TIKTOK_IPA_URL trong repo"
+        required: false
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -29,8 +29,13 @@ jobs:
 
       - name: Tải TikTok.ipa
         env:
-          IPA_URL: ${{ inputs.ipa_url }}
-        run: curl -L --fail --retry 3 -o TikTok.ipa "$IPA_URL"
+          IPA_URL: ${{ inputs.ipa_url || vars.TIKTOK_IPA_URL }}
+        run: |
+          if [ -z "$IPA_URL" ]; then
+            echo "::error::Chưa có link TikTok.ipa. Đặt biến TIKTOK_IPA_URL trong Settings > Secrets and variables > Actions > Variables"
+            exit 1
+          fi
+          curl -L --fail --retry 3 -o TikTok.ipa "$IPA_URL"
 
       - name: Nhúng dylib vào IPA
         run: |
