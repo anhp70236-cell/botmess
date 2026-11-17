@@ -1,0 +1,45 @@
+name: Build TikTok Chest IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "Link tải trực tiếp TikTok.ipa (đã giải mã / decrypted)"
+        required: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Biên dịch ChestHelper.dylib
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=14.0 \
+            -fobjc-arc -dynamiclib \
+            -framework UIKit -framework Foundation -framework QuartzCore \
+            -install_name @rpath/ChestHelper.dylib \
+            -o ChestHelper.dylib ChestHelper.m
+          file ChestHelper.dylib
+
+      - name: Tải TikTok.ipa
+        env:
+          IPA_URL: ${{ github.event.inputs.ipa_url }}
+        run: |
+          curl -L --fail "$IPA_URL" -o TikTok.ipa
+          ls -lh TikTok.ipa
+
+      - name: Cài cyan (nhúng dylib)
+        run: |
+          brew install ldid
+          pip3 install --break-system-packages --force-reinstall https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+
+      - name: Nhúng dylib vào IPA
+        run: |
+          cyan -i TikTok.ipa -o TikTok_ChestHelper.ipa -f ChestHelper.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TikTok_ChestHelper
+          path: TikTok_ChestHelper.ipa
