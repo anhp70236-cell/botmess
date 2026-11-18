@@ -1,4 +1,4 @@
-name: Build RioMenu dylib
+name: Build OffsetDumper IPA
 on:
   workflow_dispatch:
   push:
@@ -10,32 +10,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Dobby (iOS arm64)
-        run: |
-          git clone --depth 1 https://github.com/jmpews/Dobby.git
-          cmake -S Dobby -B Dobby/build \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DDOBBY_GENERATE_SHARED=OFF
-          cmake --build Dobby/build -j4
-          find Dobby/build -name "libdobby.a"
-
-      - name: Build dylib
+      - name: Build app
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          LIB=$(find Dobby/build -name "libdobby.a" | head -n1)
-          clang++ -arch arm64 -isysroot "$SDK" -miphoneos-version-min=13.0 \
-            -dynamiclib -fobjc-arc -std=c++17 -x objective-c++ \
-            -IDobby/include \
-            -framework UIKit -framework Foundation -framework QuartzCore \
-            Tweak.mm "$LIB" -lc++ \
-            -o RioMenu.dylib
-          codesign -f -s - RioMenu.dylib
+          APP=build/Payload/OffsetDumper.app
+          mkdir -p "$APP"
+          xcrun --sdk iphoneos swiftc App.swift \
+            -sdk "$SDK" -target arm64-apple-ios14.0 \
+            -O -parse-as-library -lc++ \
+            -o "$APP/OffsetDumper"
+          cp Info.plist "$APP/Info.plist"
+          codesign -f -s - "$APP"
+          cd build && zip -qry OffsetDumper.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RioMenu.dylib
-          path: RioMenu.dylib
+          name: OffsetDumper.ipa
+          path: build/OffsetDumper.ipa
