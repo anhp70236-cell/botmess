@@ -1,5 +1,5 @@
-// OffsetDumper - app iOS: chọn IPA game -> dump offset (máu, nhiệm vụ, người chơi, xe, bản đồ)
-// Đọc IPA kiểu streaming (không nạp cả file vào RAM), giải nén binary Mach-O, đọc bảng symbol + chuỗi.
+// OffsetDumper v2 - app iOS: chọn IPA game -> bấm DUMP -> xuất toàn bộ offset
+// Đọc IPA kiểu streaming (không nạp cả file vào RAM), giải nén binary Mach-O, đọc symbol + export trie + chuỗi.
 import UIKit
 import UniformTypeIdentifiers
 import Compression
@@ -17,6 +17,10 @@ func demangle(_ s: String) -> String {
         let r = String(cString: p); free(p); return r
     }
     return n
+}
+
+func C(_ h: Int) -> UIColor {
+    UIColor(red: CGFloat((h >> 16) & 255) / 255, green: CGFloat((h >> 8) & 255) / 255, blue: CGFloat(h & 255) / 255, alpha: 1)
 }
 
 // ======================= ZIP (đọc ngẫu nhiên, hỗ trợ zip64) =======================
@@ -54,6 +58,7 @@ final class ZipReader {
     }
 
     func entries() -> [ZipEntry]? {
+        guard size > 22 else { return nil }
         let tail = Int(min(size, 65535 + 22 + 64))
         guard let t = read(size - UInt64(tail), tail) else { return nil }
         var e = -1
@@ -175,9 +180,22 @@ struct Rd {
     }
 }
 
+func uleb(_ r: Rd, _ o: inout Int) -> UInt64 {
+    var res: UInt64 = 0
+    var shift: UInt64 = 0
+    while o < r.count {
+        let b = r.u8(o); o += 1
+        res |= UInt64(b & 0x7F) << shift
+        if b & 0x80 == 0 { break }
+        shift += 7
+        if shift > 63 { break }
+    }
+    return res
+}
+
 struct Seg { let name: String; let vm: UInt64; let vmsize: UInt64; let fo: UInt64 }
 struct Sym { let va: UInt64; let fo: UInt64; let name: String }
-struct MachoResult { var syms: [Sym] = []; var strs: [Sym] = []; var cryptid: UInt32 = 0; var nsymTotal = 0 }
+struct MachoResult { var syms: [Sym] = []; var strs: [Sym] = []; var cryptid: UInt32 = 0; var nsymTotal = 0; var trieCount = 0 }
 
 // ======================= Phân loại =======================
 let excludeKW = ["purchase", "storekit", "iap", "inapp", "in_app", "billing", "payment", "transaction",
@@ -200,7 +218,7 @@ func classify(_ l: String) -> Int? {
     return nil
 }
 
-func analyze(_ url: URL, wantStrings: Bool) -> MachoResult? {
+func analyze(_ url: URL) -> MachoResult? {
     guard let data = try? Data(contentsOf: url, options: .alwaysMapped) else { return nil }
     return data.withUnsafeBytes { raw -> MachoResult? in
         let r = Rd(p: raw)
@@ -222,9 +240,11 @@ func analyze(_ url: URL, wantStrings: Bool) -> MachoResult? {
         let ncmds = Int(r.u32(sb + 16))
         var off = sb + 32
         var segs = [Seg]()
-        var cstrs = [(addr: UInt64, size: UInt64, off: UInt64)]()
+        var strSecs = [(addr: UInt64, size: UInt64, off: UInt64)]()
         var symoff = 0, nsyms = 0, stroff = 0
+        var trieOff = 0, trieSize = 0
         var res = MachoResult()
+        let strNames: Set<String> = ["__cstring", "__objc_classname", "__objc_methname"]
         for _ in 0..<ncmds {
             guard off + 8 <= r.count else { break }
             let cmd = r.u32(off), sz = Int(r.u32(off + 4))
@@ -232,11 +252,15 @@ func analyze(_ url: URL, wantStrings: Bool) -> MachoResult? {
                 segs.append(Seg(name: r.cstr(off + 8, max: 16), vm: r.u64(off + 24), vmsize: r.u64(off + 32), fo: r.u64(off + 40)))
                 let nsec = Int(r.u32(off + 64)); var so = off + 72
                 for _ in 0..<nsec {
-                    if r.cstr(so, max: 16) == "__cstring" { cstrs.append((r.u64(so + 32), r.u64(so + 40), UInt64(r.u32(so + 48)))) }
+                    if strNames.contains(r.cstr(so, max: 16)) { strSecs.append((r.u64(so + 32), r.u64(so + 40), UInt64(r.u32(so + 48)))) }
                     so += 80
                 }
             } else if cmd == 0x2 {
                 symoff = Int(r.u32(off + 8)); nsyms = Int(r.u32(off + 12)); stroff = Int(r.u32(off + 16))
+            } else if cmd == 0x22 || cmd == 0x80000022 {
+                trieOff = Int(r.u32(off + 40)); trieSize = Int(r.u32(off + 44))
+            } else if cmd == 0x80000033 {
+                trieOff = Int(r.u32(off + 8)); trieSize = Int(r.u32(off + 12))
             } else if cmd == 0x2C {
                 res.cryptid = r.u32(off + 16)
             }
@@ -247,6 +271,7 @@ func analyze(_ url: URL, wantStrings: Bool) -> MachoResult? {
             for s in segs where va >= s.vm && va < s.vm + s.vmsize { return va - s.vm + s.fo }
             return 0
         }
+        var seen = Set<String>()
         res.nsymTotal = nsyms
         for i in 0..<nsyms {
             let e = sb + symoff + i * 16
@@ -256,24 +281,59 @@ func analyze(_ url: URL, wantStrings: Bool) -> MachoResult? {
             if val == 0 { continue }
             let raw = r.cstr(sb + stroff + Int(r.u32(e)))
             if raw.isEmpty { continue }
-            res.syms.append(Sym(va: val, fo: foff(val), name: demangle(raw)))
+            let nm = demangle(raw)
+            if seen.insert("\(val):\(nm)").inserted { res.syms.append(Sym(va: val, fo: foff(val), name: nm)) }
         }
-        if wantStrings && res.cryptid == 0 {
-            for c in cstrs {
-                var i = Int(c.off), end = Int(c.off + c.size)
-                end = min(end + sb, r.count); i += sb
+        // export trie (bổ sung symbol bị thiếu trong symtab)
+        if trieSize > 0, let textVM = segs.first(where: { $0.name == "__TEXT" })?.vm {
+            var stack: [(Int, String)] = [(0, "")]
+            var visited = Set<Int>()
+            var guardCount = 0
+            while let (nodeOff, prefix) = stack.popLast() {
+                if nodeOff >= trieSize || !visited.insert(nodeOff).inserted { continue }
+                guardCount += 1
+                if guardCount > 3_000_000 { break }
+                var o = sb + trieOff + nodeOff
+                let tsize = Int(uleb(r, &o))
+                let after = o + tsize
+                if tsize > 0 {
+                    var q = o
+                    let flags = uleb(r, &q)
+                    if flags & 0x8 == 0 {
+                        let addr = uleb(r, &q)
+                        if !prefix.isEmpty {
+                            let va = textVM + addr
+                            let nm = demangle(prefix)
+                            if seen.insert("\(va):\(nm)").inserted {
+                                res.syms.append(Sym(va: va, fo: foff(va), name: nm)); res.trieCount += 1
+                            }
+                        }
+                    }
+                }
+                o = after
+                let nchild = Int(r.u8(o)); o += 1
+                for _ in 0..<nchild {
+                    let label = r.cstr(o, max: 2048); o += label.utf8.count + 1
+                    let childOff = Int(uleb(r, &o))
+                    stack.append((childOff, prefix + label))
+                }
+            }
+        }
+        res.syms.sort { $0.va < $1.va }
+        // chuỗi (cstring + tên class/method ObjC)
+        if res.cryptid == 0 {
+            for c in strSecs {
+                var i = Int(c.off) + sb
+                let end = min(Int(c.off + c.size) + sb, r.count)
                 var start = i
                 while i < end {
                     if r.u8(i) == 0 {
                         let len = i - start
-                        if len >= 4 && len <= 100 {
-                            let s = r.cstr(start, max: 101)
-                            if s.utf8.allSatisfy({ $0 >= 32 && $0 < 127 }) {
-                                let l = s.lowercased()
-                                if !isExcluded(l), classify(l) != nil {
-                                    let rel = UInt64(start - sb)
-                                    res.strs.append(Sym(va: c.addr + (rel - c.off), fo: rel, name: s))
-                                }
+                        if len >= 4 && len <= 200 {
+                            let s = r.cstr(start, max: 201)
+                            if s.utf8.allSatisfy({ $0 >= 32 && $0 < 127 }) && !isExcluded(s.lowercased()) {
+                                let rel = UInt64(start - sb)
+                                res.strs.append(Sym(va: c.addr + rel - c.off, fo: rel, name: s))
                             }
                         }
                         start = i + 1
@@ -288,38 +348,62 @@ func analyze(_ url: URL, wantStrings: Bool) -> MachoResult? {
 
 func hex(_ v: UInt64) -> String { "0x" + String(v, radix: 16, uppercase: true) }
 
-func render(binary: String, r: MachoResult, all: Bool) -> (filtered: String, everything: String?) {
+final class OutFile {
+    let url: URL
+    let fh: FileHandle
+    var buf = ""
+    init?(_ url: URL) {
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        guard let h = FileHandle(forWritingAtPath: url.path) else { return nil }
+        self.url = url; fh = h
+    }
+    func w(_ s: String) { buf += s; if buf.utf8.count > (1 << 20) { flush() } }
+    func flush() { if !buf.isEmpty { fh.write(buf.data(using: .utf8) ?? Data()); buf = "" } }
+    func close() { flush(); try? fh.close() }
+}
+
+// Xuất 3 file: Dump_ (phân loại), ALL_ (toàn bộ symbol), STRINGS_ (toàn bộ chuỗi)
+func writeOutputs(binary: String, r: MachoResult, docs: URL) -> [URL] {
+    var outs = [URL]()
     var groups = [[Sym]](repeating: [], count: 5)
-    var rest = [Sym]()
+    var allSyms = [Sym]()
     for s in r.syms {
         let l = s.name.lowercased()
         if isExcluded(l) { continue }
-        if let c = classify(l) { groups[c].append(s) } else if all { rest.append(s) }
+        allSyms.append(s)
+        if let c = classify(l) { groups[c].append(s) }
     }
-    var out = "OFFSET DUMP - \(binary)\n"
-    out += "Format: VA | file offset (trong slice) | ten\n"
-    out += "Symbol tong: \(r.nsymTotal) | khop bo loc: \(groups.reduce(0) { $0 + $1.count })\n"
-    if r.cryptid != 0 {
-        out += "CANH BAO: binary con ma hoa FairPlay (cryptid=1). Ten ham/offset van dung nhung chuoi khong doc duoc; nen dung IPA da decrypt.\n"
+    let note = r.cryptid != 0 ? "CANH BAO: binary con ma hoa FairPlay (cryptid=1): ten ham/offset van dung, nhung chuoi khong doc duoc.\n" : ""
+
+    if let f = OutFile(docs.appendingPathComponent("Dump_\(binary).txt")) {
+        f.w("OFFSET DUMP (phan loai) - \(binary)\nFormat: VA | file offset (trong slice) | ten\n")
+        f.w("Symbol: \(allSyms.count) (symtab \(r.nsymTotal), export trie them \(r.trieCount)) | chuoi: \(r.strs.count)\n")
+        f.w(note)
+        f.w("Luu y: offset FIELD (vd m_fHealth trong CPed) khong co trong symbol.\nDa loai cac muc mua bang tien that.\n")
+        f.w(String(repeating: "=", count: 70) + "\n")
+        for i in 0..<5 {
+            f.w("\n" + catTitles[i] + " (\(groups[i].count))\n")
+            for s in groups[i] { f.w("\(hex(s.va)) | \(hex(s.fo)) | \(s.name)\n") }
+        }
+        f.w("\n### CHUOI LIEN QUAN\n")
+        var n = 0
+        for s in r.strs where classify(s.name.lowercased()) != nil {
+            f.w("\(hex(s.va)) | \(hex(s.fo)) | \(s.name)\n"); n += 1
+            if n >= 20000 { break }
+        }
+        f.close(); outs.append(f.url)
     }
-    out += "Luu y: offset FIELD (vd m_fHealth trong CPed) KHONG co trong symbol, tool nay khong dung duoc.\n"
-    out += "Da loai bo cac muc mua bang tien that (purchase/storekit/iap/billing/payment...).\n"
-    out += String(repeating: "=", count: 70) + "\n"
-    for i in 0..<5 {
-        out += "\n" + catTitles[i] + " (\(groups[i].count))\n"
-        for s in groups[i].sorted(by: { $0.va < $1.va }) { out += "\(hex(s.va)) | \(hex(s.fo)) | \(s.name)\n" }
+    if let f = OutFile(docs.appendingPathComponent("ALL_\(binary).txt")) {
+        f.w("TAT CA SYMBOL - \(binary) (\(allSyms.count))\nFormat: VA | file offset | ten\n")
+        for s in allSyms { f.w("\(hex(s.va)) | \(hex(s.fo)) | \(s.name)\n") }
+        f.close(); outs.append(f.url)
     }
-    if !r.strs.isEmpty {
-        out += "\n### CHUOI (string) LIEN QUAN (\(r.strs.count))\n"
-        for s in r.strs.prefix(5000) { out += "\(hex(s.va)) | \(hex(s.fo)) | \(s.name)\n" }
+    if !r.strs.isEmpty, let f = OutFile(docs.appendingPathComponent("STRINGS_\(binary).txt")) {
+        f.w("TAT CA CHUOI (cstring + ObjC class/method) - \(binary) (\(r.strs.count))\nFormat: VA | file offset | chuoi\n")
+        for s in r.strs { f.w("\(hex(s.va)) | \(hex(s.fo)) | \(s.name)\n") }
+        f.close(); outs.append(f.url)
     }
-    var every: String? = nil
-    if all {
-        var e = "TAT CA SYMBOL (khong gom muc mua tien that) - \(binary)\n"
-        for s in (groups.flatMap { $0 } + rest).sorted(by: { $0.va < $1.va }) { e += "\(hex(s.va)) | \(hex(s.fo)) | \(s.name)\n" }
-        every = e
-    }
-    return (out, every)
+    return outs
 }
 
 // ======================= UI =======================
@@ -332,61 +416,166 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         window?.makeKeyAndVisible()
         return true
     }
+    // Mở IPA từ Files / Chia sẻ -> Offset Dump
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        let s = url.startAccessingSecurityScopedResource()
+        (window?.rootViewController as? MainVC)?.setIPA(url, scoped: s)
+        return true
+    }
 }
 
 final class MainVC: UIViewController, UIDocumentPickerDelegate {
+    let fileLabel = UILabel()
     let pickBtn = UIButton(type: .system)
+    let listBtn = UIButton(type: .system)
+    let dumpBtn = UIButton(type: .system)
+    let openBtn = UIButton(type: .system)
     let shareBtn = UIButton(type: .system)
-    let sw = UISwitch()
     let bar = UIProgressView(progressViewStyle: .default)
+    let statusLabel = UILabel()
     let tv = UITextView()
+    var selected: URL?
+    var scoped = false
     var outputs = [URL]()
+    var running = false
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+    func style(_ b: UIButton, _ t: String, _ bg: UIColor) {
+        b.setTitle(t, for: .normal); b.setTitleColor(.white, for: .normal)
+        b.backgroundColor = bg; b.layer.cornerRadius = 14
+        b.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        b.heightAnchor.constraint(equalToConstant: 50).isActive = true
+    }
+    func card(_ views: [UIView]) -> UIView {
+        let c = UIView(); c.backgroundColor = C(0x1E232B); c.layer.cornerRadius = 16
+        let s = UIStackView(arrangedSubviews: views); s.axis = .vertical; s.spacing = 10
+        s.translatesAutoresizingMaskIntoConstraints = false; c.addSubview(s)
+        NSLayoutConstraint.activate([
+            s.topAnchor.constraint(equalTo: c.topAnchor, constant: 14),
+            s.bottomAnchor.constraint(equalTo: c.bottomAnchor, constant: -14),
+            s.leadingAnchor.constraint(equalTo: c.leadingAnchor, constant: 14),
+            s.trailingAnchor.constraint(equalTo: c.trailingAnchor, constant: -14)
+        ])
+        return c
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor(red: 0.17, green: 0.19, blue: 0.22, alpha: 1)
+        view.backgroundColor = C(0x14171C)
+        // tạo file README để thư mục app hiện trong Files
+        let readme = docs.appendingPathComponent("README.txt")
+        if !FileManager.default.fileExists(atPath: readme.path) {
+            try? "Offset Dump\nCopy file IPA vao thu muc nay (hoac chon IPA tu Files trong app). Ket qua dump cung nam o day.\n".write(to: readme, atomically: true, encoding: .utf8)
+        }
+
         let title = UILabel(); title.text = "Offset Dump"; title.textColor = .white
-        title.font = .boldSystemFont(ofSize: 24)
+        title.font = .systemFont(ofSize: 30, weight: .bold)
+        let sub = UILabel(); sub.text = "Chọn IPA game → bấm DUMP → lấy toàn bộ offset"; sub.textColor = C(0x9AA3B2)
+        sub.font = .systemFont(ofSize: 14); sub.numberOfLines = 0
 
-        pickBtn.setTitle("Chọn IPA & Dump", for: .normal)
-        pickBtn.backgroundColor = UIColor(red: 0.36, green: 0.56, blue: 0.82, alpha: 1)
-        pickBtn.setTitleColor(.white, for: .normal); pickBtn.layer.cornerRadius = 12
-        pickBtn.titleLabel?.font = .boldSystemFont(ofSize: 17)
+        fileLabel.text = "Chưa chọn IPA"; fileLabel.textColor = .white
+        fileLabel.font = .systemFont(ofSize: 15, weight: .medium); fileLabel.numberOfLines = 0
+        style(pickBtn, "Chọn IPA từ Files", C(0x5B8FD0))
         pickBtn.addTarget(self, action: #selector(pick), for: .touchUpInside)
+        style(listBtn, "Chọn IPA trong thư mục app", C(0x353C48))
+        listBtn.addTarget(self, action: #selector(pickFromApp), for: .touchUpInside)
 
-        shareBtn.setTitle("Chia sẻ / Lưu kết quả", for: .normal)
+        style(dumpBtn, "BẮT ĐẦU DUMP", C(0x34A853))
+        dumpBtn.titleLabel?.font = .systemFont(ofSize: 18, weight: .bold)
+        dumpBtn.addTarget(self, action: #selector(startDump), for: .touchUpInside)
+
+        statusLabel.text = "Sẵn sàng"; statusLabel.textColor = C(0x9AA3B2); statusLabel.font = .systemFont(ofSize: 13)
+        statusLabel.numberOfLines = 2
+        bar.progressTintColor = C(0x5B8FD0); bar.trackTintColor = C(0x353C48)
+
+        tv.isEditable = false; tv.backgroundColor = C(0x1E232B); tv.textColor = C(0xC8CDD6)
+        tv.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        tv.layer.cornerRadius = 16; tv.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
+        tv.text = "Kết quả lưu trong Files > On My iPhone > Offset Dump.\n"
+        tv.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+
+        style(openBtn, "Mở thư mục kết quả", C(0x353C48))
+        openBtn.addTarget(self, action: #selector(openFolder), for: .touchUpInside)
+        style(shareBtn, "Chia sẻ kết quả", C(0x353C48))
         shareBtn.addTarget(self, action: #selector(share), for: .touchUpInside)
+        let row = UIStackView(arrangedSubviews: [openBtn, shareBtn]); row.spacing = 10; row.distribution = .fillEqually
 
-        let swl = UILabel(); swl.text = "Xuất cả file ALL symbol (không lọc)"; swl.textColor = .lightGray
-        swl.font = .systemFont(ofSize: 14)
-        let swRow = UIStackView(arrangedSubviews: [swl, sw]); swRow.spacing = 8
-
-        tv.isEditable = false; tv.backgroundColor = UIColor(red: 0.12, green: 0.14, blue: 0.17, alpha: 1)
-        tv.textColor = UIColor(red: 0.78, green: 0.8, blue: 0.84, alpha: 1)
-        tv.font = .monospacedSystemFont(ofSize: 12, weight: .regular); tv.layer.cornerRadius = 10
-        tv.text = "Chọn file IPA (game đã decrypt). Kết quả lưu trong Files > On My iPhone > Offset Dump.\n"
-
-        let stack = UIStackView(arrangedSubviews: [title, pickBtn, swRow, bar, shareBtn, tv])
+        let stack = UIStackView(arrangedSubviews: [title, sub, card([fileLabel, pickBtn, listBtn]), dumpBtn,
+                                                   card([statusLabel, bar]), tv, row])
         stack.axis = .vertical; stack.spacing = 12
+        stack.setCustomSpacing(2, after: title)
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            stack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
-            pickBtn.heightAnchor.constraint(equalToConstant: 48)
+            stack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10)
         ])
     }
 
-    func log(_ s: String) { DispatchQueue.main.async { self.tv.text += s + "\n"; self.tv.scrollRangeToVisible(NSRange(location: self.tv.text.count - 1, length: 1)) } }
-    func prog(_ v: Double) { DispatchQueue.main.async { self.bar.progress = Float(v) } }
-    func busy(_ b: Bool) { DispatchQueue.main.async { self.pickBtn.isEnabled = !b; self.pickBtn.alpha = b ? 0.5 : 1; UIApplication.shared.isIdleTimerDisabled = b } }
+    func log(_ s: String) {
+        DispatchQueue.main.async {
+            self.tv.text += s + "\n"
+            if self.tv.text.count > 1 { self.tv.scrollRangeToVisible(NSRange(location: self.tv.text.count - 1, length: 1)) }
+        }
+    }
+    func status(_ s: String) { DispatchQueue.main.async { self.statusLabel.text = s } }
+    func prog(_ v: Double) { DispatchQueue.main.async { self.bar.progress = Float(min(max(v, 0), 1)) } }
+    func busy(_ b: Bool) {
+        DispatchQueue.main.async {
+            self.running = b
+            for x in [self.pickBtn, self.listBtn, self.dumpBtn] { x.isEnabled = !b; x.alpha = b ? 0.5 : 1 }
+            UIApplication.shared.isIdleTimerDisabled = b
+        }
+    }
 
+    // ---- chọn IPA ----
+    func setIPA(_ url: URL, scoped s: Bool) {
+        if running { return }
+        if scoped, let old = selected { old.stopAccessingSecurityScopedResource() }
+        selected = url; scoped = s
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+        DispatchQueue.main.async {
+            self.fileLabel.text = "\(url.lastPathComponent)\n\(size / 1_048_576) MB"
+            self.statusLabel.text = "Đã chọn IPA. Bấm BẮT ĐẦU DUMP."
+        }
+    }
     @objc func pick() {
-        let p = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false)
+        var types: [UTType] = [.item, .data, .archive, .zip]
+        if let t = UTType(filenameExtension: "ipa") { types.insert(t, at: 0) }
+        let p = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
         p.delegate = self
+        p.allowsMultipleSelection = false
         present(p, animated: true)
+    }
+    func documentPicker(_ c: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        setIPA(url, scoped: url.startAccessingSecurityScopedResource())
+    }
+    @objc func pickFromApp() {
+        let fm = FileManager.default
+        var items = [URL]()
+        for dir in [docs, docs.appendingPathComponent("Inbox")] {
+            if let fs = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                items += fs.filter { ["ipa", "zip"].contains($0.pathExtension.lowercased()) }
+            }
+        }
+        guard !items.isEmpty else {
+            log("Thư mục app chưa có IPA. Copy IPA vào Files > On My iPhone > Offset Dump rồi bấm lại.")
+            return
+        }
+        let a = UIAlertController(title: "Chọn IPA", message: nil, preferredStyle: .actionSheet)
+        for u in items { a.addAction(UIAlertAction(title: u.lastPathComponent, style: .default) { _ in self.setIPA(u, scoped: false) }) }
+        a.addAction(UIAlertAction(title: "Huỷ", style: .cancel))
+        a.popoverPresentationController?.sourceView = listBtn
+        present(a, animated: true)
+    }
+
+    @objc func openFolder() {
+        let s = docs.absoluteString.replacingOccurrences(of: "file://", with: "shareddocuments://")
+        if let u = URL(string: s) { UIApplication.shared.open(u) }
     }
     @objc func share() {
         guard !outputs.isEmpty else { log("Chưa có kết quả."); return }
@@ -394,29 +583,27 @@ final class MainVC: UIViewController, UIDocumentPickerDelegate {
         a.popoverPresentationController?.sourceView = shareBtn
         present(a, animated: true)
     }
-    func documentPicker(_ c: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        guard let url = urls.first else { return }
-        let ok = url.startAccessingSecurityScopedResource()
-        let all = sw.isOn
-        busy(true); outputs.removeAll()
+
+    // ---- dump ----
+    @objc func startDump() {
+        guard !running else { return }
+        guard let url = selected else { log("Chưa chọn IPA."); return }
+        busy(true); outputs.removeAll(); prog(0)
         DispatchQueue.global(qos: .userInitiated).async {
-            self.dump(ipa: url, all: all)
-            if ok { url.stopAccessingSecurityScopedResource() }
+            self.dump(ipa: url)
             self.busy(false)
         }
     }
 
-    func dump(ipa: URL, all: Bool) {
+    func dump(ipa: URL) {
         let fm = FileManager.default
         guard let zip = ZipReader(path: ipa.path), let ents = zip.entries() else {
-            log("Không đọc được file (không phải IPA/zip hợp lệ)."); return
+            log("Không đọc được file (không phải IPA/zip hợp lệ)."); status("Lỗi đọc file"); return
         }
-        log("IPA: \(zip.size / 1_048_576) MB, \(ents.count) mục")
+        log("\nIPA: \(zip.size / 1_048_576) MB, \(ents.count) mục")
         let tmp = fm.temporaryDirectory.appendingPathComponent("od_tmp")
         try? fm.removeItem(at: tmp); try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
-        // tên executable chính
         var mainExe = ""
         if let ie = ents.first(where: { $0.name.hasSuffix(".app/Info.plist") && $0.name.split(separator: "/").count == 3 }) {
             let pu = tmp.appendingPathComponent("Info.plist")
@@ -425,7 +612,6 @@ final class MainVC: UIViewController, UIDocumentPickerDelegate {
                 mainExe = (pl["CFBundleExecutable"] as? String) ?? ""
             }
         }
-        // danh sách binary cần quét
         var cands = [ZipEntry]()
         for e in ents where e.size > 64 * 1024 && e.name.hasPrefix("Payload/") && !e.name.hasSuffix("/") {
             let parts = e.name.split(separator: "/").map(String.init)
@@ -434,33 +620,35 @@ final class MainVC: UIViewController, UIDocumentPickerDelegate {
                         && parts[4] == String(parts[3].dropLast(10)) { cands.append(e) }
             else if e.name.hasSuffix(".dylib") { cands.append(e) }
         }
-        guard !cands.isEmpty else { log("Không thấy binary nào trong IPA."); return }
+        guard !cands.isEmpty else { log("Không thấy binary nào trong IPA."); status("Không có binary"); return }
         log("Binary cần quét: \(cands.count)")
 
         for (i, e) in cands.enumerated() {
             let bname = (e.name as NSString).lastPathComponent
-            log("\n[\(i + 1)/\(cands.count)] \(bname) (\(e.size / 1_048_576) MB) - giải nén...")
+            let n = Double(cands.count)
+            log("\n[\(i + 1)/\(cands.count)] \(bname) (\(e.size / 1_048_576) MB)")
+            status("[\(i + 1)/\(cands.count)] \(bname): giải nén...")
             let bu = tmp.appendingPathComponent("bin_\(i)")
-            let okx = zip.extract(e, to: bu) { self.prog(($0 + Double(i)) / Double(cands.count)) }
+            let okx = zip.extract(e, to: bu) { self.prog((Double(i) + $0 * 0.6) / n) }
             guard okx else { log("  lỗi giải nén, bỏ qua"); continue }
-            log("  đang đọc symbol...")
-            let want = true
-            if let r = analyze(bu, wantStrings: want) {
-                let (f, every) = render(binary: bname, r: r, all: all)
-                let fu = docs.appendingPathComponent("Dump_\(bname).txt")
-                try? f.write(to: fu, atomically: true, encoding: .utf8); outputs.append(fu)
-                if let ev = every {
-                    let eu = docs.appendingPathComponent("ALL_\(bname).txt")
-                    try? ev.write(to: eu, atomically: true, encoding: .utf8); outputs.append(eu)
+            status("[\(i + 1)/\(cands.count)] \(bname): đọc symbol & chuỗi...")
+            prog((Double(i) + 0.6) / n)
+            if let r = analyze(bu) {
+                let files = writeOutputs(binary: bname, r: r, docs: docs)
+                outputs += files
+                log("  \(r.syms.count) symbol (+\(r.trieCount) từ export trie), \(r.strs.count) chuỗi" + (r.cryptid != 0 ? " | CÒN MÃ HÓA (cryptid=1)" : ""))
+                for f in files {
+                    let sz = ((try? fm.attributesOfItem(atPath: f.path))?[.size] as? NSNumber)?.uint64Value ?? 0
+                    log("  → \(f.lastPathComponent) (\(sz / 1024) KB)")
                 }
-                log("  xong: \(r.syms.count) symbol, \(r.strs.count) chuỗi khớp" + (r.cryptid != 0 ? " | CÒN MÃ HÓA (cryptid=1)" : ""))
             } else {
                 log("  không phải Mach-O arm64, bỏ qua")
             }
             try? fm.removeItem(at: bu)
+            prog(Double(i + 1) / n)
         }
         try? fm.removeItem(at: tmp)
-        prog(1)
-        log("\nXONG. Đã lưu \(outputs.count) file trong Files > On My iPhone > Offset Dump. Bấm \"Chia sẻ\" để gửi file.")
+        status("Xong! \(outputs.count) file trong thư mục Offset Dump")
+        log("\nXONG. Mở Files > On My iPhone > Offset Dump hoặc bấm \"Mở thư mục kết quả\". Gửi file Dump_*.txt (và ALL_*.txt) cho Claude.")
     }
 }
