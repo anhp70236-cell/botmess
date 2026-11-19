@@ -28,6 +28,7 @@ jobs:
             -framework Foundation \
             -framework UIKit \
             -framework QuartzCore \
+            -framework CoreGraphics \
             src/PatchEngine.mm \
             src/VoiceModManager.mm \
             src/ModMenuUI.mm \
