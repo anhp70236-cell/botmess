@@ -1,0 +1,73 @@
+name: Patch IPA (voice, patch tĩnh)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: 'Link tải TRỰC TIẾP IPA đã giải mã (bỏ trống nếu dùng release_tag)'
+        required: false
+        default: ''
+      release_tag:
+        description: 'Hoặc: tag Release của repo này có đính kèm file .ipa'
+        required: false
+        default: ''
+      skip:
+        description: 'Tên patch muốn bỏ qua, cách nhau dấu phẩy (tuỳ chọn)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Chỉ kiểm tra offset, KHÔNG tạo IPA (nên chạy true trước)'
+        type: boolean
+        default: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Tải IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+          TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.ipa' --output game.ipa
+          elif [ -n "$IPA_URL" ]; then
+            curl -fL --retry 3 -o game.ipa "$IPA_URL"
+          else
+            echo "Cần nhập ipa_url hoặc release_tag"; exit 1
+          fi
+          ls -lh game.ipa
+
+      - name: Chạy patch
+        env:
+          SKIP: ${{ inputs.skip }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ -n "$SKIP" ]; then ARGS+=(--skip "$SKIP"); fi
+          if [ "$DRY" = "true" ]; then
+            python3 patch_unityframework.py game.ipa "${ARGS[@]}" --dry-run
+          else
+            python3 patch_unityframework.py game.ipa game_patched.ipa "${ARGS[@]}"
+            ls -lh game_patched.ipa
+          fi
+
+      - name: Upload game_patched.ipa
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: game_patched
+          path: game_patched.ipa
+          retention-days: 1
+          compression-level: 0
