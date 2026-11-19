@@ -8,7 +8,6 @@ on:
 jobs:
   build:
     runs-on: macos-latest
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -21,7 +20,7 @@ jobs:
             -arch arm64 \
             -isysroot "$SDK_PATH" \
             -miphoneos-version-min=14.0 \
-            -std=c++17 \
+            -std=gnu++17 \
             -fobjc-arc \
             -O2 \
             -dynamiclib \
@@ -34,7 +33,6 @@ jobs:
             src/ModMenuUI.mm \
             src/TweakEntry.mm \
             -o build/VoiceMod.dylib
-
           ldid -S build/VoiceMod.dylib 2>/dev/null || codesign -f -s - build/VoiceMod.dylib
           file build/VoiceMod.dylib
 
