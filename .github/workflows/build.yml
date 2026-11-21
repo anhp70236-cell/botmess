@@ -1,21 +1,28 @@
-name: Build VoiceFX
+name: Build NoAds dylib
+
 on:
   push:
-    branches: [ main, master ]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Tai fishhook
+
+      - name: Build dylib (arm64 iOS)
         run: |
-          mkdir -p scr
-          curl -fsSL -o scr/fishhook.c https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.c
-          curl -fsSL -o scr/fishhook.h https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.h
-      - name: Build dylib
-        run: bash build.sh
+          mkdir -p build
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          xcrun --sdk iphoneos clang \
+            -arch arm64 -isysroot "$SDK" -miphoneos-version-min=12.0 \
+            -dynamiclib -O2 -fvisibility=hidden \
+            -install_name @rpath/NoAds.dylib \
+            -o build/NoAds.dylib src/NoAds.c
+          codesign -f -s - build/NoAds.dylib
+          file build/NoAds.dylib
+
       - uses: actions/upload-artifact@v4
         with:
-          name: VoiceFX-dylib
-          path: build/VoiceFX.dylib
+          name: NoAds-dylib
+          path: build/NoAds.dylib
