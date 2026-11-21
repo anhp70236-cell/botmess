@@ -10,9 +10,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Tai fishhook
         run: |
-          mkdir -p src
-          curl -fsSL -o src/fishhook.c https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.c
-          curl -fsSL -o src/fishhook.h https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.h
+          mkdir -p scr
+          curl -fsSL -o scr/fishhook.c https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.c
+          curl -fsSL -o scr/fishhook.h https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.h
       - name: Build dylib
         run: bash build.sh
       - uses: actions/upload-artifact@v4
