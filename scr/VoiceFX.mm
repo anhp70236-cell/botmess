@@ -19,6 +19,7 @@ extern "C" {
 static VFXParams gP;
 static std::atomic<int> gCalls{0}, gProcessed{0}, gSR{0}, gIsFloat{0}, gCh{0};
 static std::atomic<long long> gFrames{0};
+static std::atomic<int> gUnitsSeen{0};
 
 // ---- vong dem 4 giay am thanh DA QUA XU LY, de nguoi dung tu nghe thu (chi may minh nghe, khong gui di) ----
 #define VFX_CAP_SEC 4
@@ -74,7 +75,7 @@ static VFXSlot* vfxGetSlot(AudioUnit u) {
     os_unfair_lock_lock(&gLock);
     VFXSlot* r = nullptr;
     for (int i = 0; i < 8; i++) if (gSlots[i].unit == u) { r = &gSlots[i]; break; }
-    if (!r) for (int i = 0; i < 8; i++) if (!gSlots[i].unit) { gSlots[i].unit = u; gSlots[i].state = 0; r = &gSlots[i]; break; }
+    if (!r) for (int i = 0; i < 8; i++) if (!gSlots[i].unit) { gSlots[i].unit = u; gSlots[i].state = 0; r = &gSlots[i]; gUnitsSeen++; break; }
     os_unfair_lock_unlock(&gLock);
     return r;
 }
@@ -107,7 +108,7 @@ static void vfxHandle(AudioUnit u, AudioBufferList* io, UInt32 frames) {
     VFXSlot* s = vfxGetSlot(u); if (!s) return;
     if (s->state == 0 || (++s->calls % 400) == 0) vfxRefresh(s);
     if (s->state != 1 || !s->proc) return;
-    if (!gP.enabled.load()) { s->proc->voiceActive = false; return; }
+    if (!gP.enabled.load()) return;   // tam dung: KHONG xoa trang thai da hoc duoc, de bat lai la chay ngay, khong bi tre
 
     const AudioStreamBasicDescription& f = s->fmt;
     bool isF = (f.mFormatFlags & kAudioFormatFlagIsFloat) != 0;
@@ -377,8 +378,8 @@ static UILabel* vfxLabel(NSString* t, UIFont* f, UIColor* c) { UILabel* l = [UIL
     else if (sr == 0) s = @"Mic: có luồng thu âm nhưng định dạng chưa hỗ trợ.";
     else {
         double secs = frames / (double)sr;
-        s = [NSString stringWithFormat:@"Mic: đã bắt • %d Hz • %@ • %d kênh%@", sr, gIsFloat.load() ? @"Float32" : @"Int16", gCh.load(),
-             self.swOn.isOn ? [NSString stringWithFormat:@" • đã xử lý %.0fs", secs] : @" • đang tắt"];
+        s = [NSString stringWithFormat:@"Mic: đã bắt • %d Hz • %@ • %d kênh%@ • lần dò mic: %d", sr, gIsFloat.load() ? @"Float32" : @"Int16", gCh.load(),
+             self.swOn.isOn ? [NSString stringWithFormat:@" • đã xử lý %.0fs", secs] : @" • đang tắt", gUnitsSeen.load()];
     }
     self.status.text = s;
 }
