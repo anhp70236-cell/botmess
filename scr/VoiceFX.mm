@@ -4,6 +4,8 @@
 #import <Foundation/Foundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <os/lock.h>
+#import <AVFoundation/AVFoundation.h>
+#include <vector>
 #include "VFXDSP.hpp"
 extern "C" {
 #include "fishhook.h"
@@ -16,6 +18,47 @@ extern "C" {
 // =====================================================================
 static VFXParams gP;
 static std::atomic<int> gCalls{0}, gProcessed{0}, gSR{0}, gIsFloat{0}, gCh{0};
+static std::atomic<long long> gFrames{0};
+
+// ---- vong dem 4 giay am thanh DA QUA XU LY, de nguoi dung tu nghe thu (chi may minh nghe, khong gui di) ----
+#define VFX_CAP_SEC 4
+static float* gCapBuf = nullptr; static int gCapCap = 0; static std::atomic<long long> gCapWrite{0}; static std::atomic<int> gCapSR{0};
+static os_unfair_lock gCapLock = OS_UNFAIR_LOCK_INIT;
+static void vfxCapInit(int sr) {
+    os_unfair_lock_lock(&gCapLock);
+    int cap = sr * VFX_CAP_SEC;
+    if (cap != gCapCap) { free(gCapBuf); gCapBuf = (float*)calloc(cap, sizeof(float)); gCapCap = cap; gCapWrite = 0; gCapSR = sr; }
+    os_unfair_lock_unlock(&gCapLock);
+}
+static void vfxCapWrite(const float* x, int n) {
+    if (!gCapBuf || gCapCap <= 0) return;
+    long long w = gCapWrite.load();
+    for (int i = 0; i < n; i++) { gCapBuf[w % gCapCap] = x[i]; w++; }
+    gCapWrite.store(w);
+}
+static NSData* vfxCapExportWAV(void) {
+    os_unfair_lock_lock(&gCapLock);
+    int sr = gCapSR.load(), cap = gCapCap; long long w = gCapWrite.load();
+    if (!gCapBuf || cap <= 0 || sr <= 0) { os_unfair_lock_unlock(&gCapLock); return nil; }
+    int n = (int)(w < (long long)cap ? w : (long long)cap);
+    std::vector<int16_t> pcm(n > 0 ? n : 0);
+    long long start = w - n;
+    for (int i = 0; i < n; i++) {
+        long long idx = (start + i) % cap; if (idx < 0) idx += cap;
+        float v = gCapBuf[idx] * 32768.f; v = v > 32767.f ? 32767.f : (v < -32768.f ? -32768.f : v);
+        pcm[i] = (int16_t)lrintf(v);
+    }
+    os_unfair_lock_unlock(&gCapLock);
+    if (n <= 0) return nil;
+    uint32_t dataSize = (uint32_t)(n * 2), sr32 = (uint32_t)sr, byteRate = sr32 * 2; uint16_t bits = 16, ch = 1, fmt = 1, blockAlign = 2;
+    NSMutableData* d = [NSMutableData data];
+    auto app = ^(const void* p, int len) { [d appendBytes:p length:len]; };
+    uint32_t riffSize = 36 + dataSize, fmtSize = 16;
+    app("RIFF", 4); app(&riffSize, 4); app("WAVE", 4);
+    app("fmt ", 4); app(&fmtSize, 4); app(&fmt, 2); app(&ch, 2); app(&sr32, 4); app(&byteRate, 4); app(&blockAlign, 2); app(&bits, 2);
+    app("data", 4); app(&dataSize, 4); app(pcm.data(), (int)dataSize);
+    return d;
+}
 
 // =====================================================================
 // 2) HOOK AudioUnitRender
@@ -56,6 +99,7 @@ static void vfxRefresh(VFXSlot* s) {
     }
     s->fmt = f; s->state = 1;
     gSR = (int)f.mSampleRate; gIsFloat = isF ? 1 : 0; gCh = (int)f.mChannelsPerFrame;
+    vfxCapInit((int)f.mSampleRate);
 }
 
 static void vfxHandle(AudioUnit u, AudioBufferList* io, UInt32 frames) {
@@ -72,6 +116,7 @@ static void vfxHandle(AudioUnit u, AudioBufferList* io, UInt32 frames) {
     if (io->mNumberBuffers < 1 || !io->mBuffers[0].mData) return;
     UInt32 avail = io->mBuffers[0].mDataByteSize / (bps * stride);
     UInt32 n = frames < avail ? frames : avail;
+    gFrames += n;
 
     VFXCfg cfg;
     cfg.autoPitch = gP.autoPitch.load(); cfg.st = gP.semitones.load(); cfg.fm = gP.formant.load(); cfg.gainDb = gP.gainDb.load();
@@ -87,6 +132,7 @@ static void vfxHandle(AudioUnit u, AudioBufferList* io, UInt32 frames) {
         if (isF) { const float* p = (const float*)io->mBuffers[0].mData + (size_t)pos * stride; for (int i = 0; i < c; i++) x[i] = p[(size_t)i * stride]; }
         else     { const int16_t* p = (const int16_t*)io->mBuffers[0].mData + (size_t)pos * stride; for (int i = 0; i < c; i++) x[i] = p[(size_t)i * stride] * (1.f / 32768.f); }
         s->proc->process(x, c, cfg);
+        vfxCapWrite(x, c);
         // ghi lai (nhan ra moi kenh)
         if (!ni) {
             if (isF) { float* p = (float*)io->mBuffers[0].mData + (size_t)pos * stride; for (int i = 0; i < c; i++) for (int k = 0; k < ch; k++) p[(size_t)i * stride + k] = x[i]; }
@@ -114,6 +160,12 @@ static OSStatus hook_AudioUnitRender(AudioUnit u, AudioUnitRenderActionFlags* fl
     return st;
 }
 
+static OSStatus (*orig_AudioOutputUnitStart)(AudioUnit) = NULL;
+static OSStatus hook_AudioOutputUnitStart(AudioUnit u) {
+    if (vfxIsIOUnit(u)) { VFXSlot* s = vfxGetSlot(u); if (s) vfxRefresh(s); }   // nap bo dem truoc tren luong chinh, tranh cap phat tren luong thu am thuc
+    return orig_AudioOutputUnitStart(u);
+}
+
 static OSStatus (*orig_AudioComponentInstanceDispose)(AudioComponentInstance) = NULL;
 static OSStatus hook_AudioComponentInstanceDispose(AudioComponentInstance inst) {
     os_unfair_lock_lock(&gLock);
@@ -132,8 +184,8 @@ typedef struct { float f0, fm, gain, gate, hpf, fixed; } VFXPreset;
 // f0 = cao do dich (Hz) khi bat "Tu can theo giong that"; fixed = so ban cung dich co dinh khi tat tu can
 // [giong that: 0 Nam, 1 Nu][muon co: 0 Nam chuan, 1 Nam tram, 2 Nu chuan, 3 Nu cao, 4 Em be]
 static const VFXPreset kPresets[2][5] = {
-    { {120.f, 1.00f, 0.f, 0.30f,  80.f,  0.f}, { 98.f, 0.92f, 0.f, 0.30f,  70.f, -3.f}, {215.f, 1.17f, 0.f, 0.30f, 120.f,  8.5f}, {260.f, 1.24f, 0.f, 0.30f, 140.f, 12.f}, {380.f, 1.38f, 0.f, 0.30f, 180.f, 17.f} },
-    { {120.f, 0.86f, 0.f, 0.30f,  80.f, -10.f}, { 98.f, 0.80f, 0.f, 0.30f,  70.f, -13.5f}, {215.f, 1.00f, 0.f, 0.30f, 110.f,  0.f}, {260.f, 1.07f, 0.f, 0.30f, 130.f,  3.5f}, {380.f, 1.20f, 0.f, 0.30f, 180.f, 10.f} },
+    { {120.f, 1.00f, 0.f, 0.30f,  80.f,  -0.6f}, {  98.f, 0.92f, 0.f, 0.30f,  65.f, -3.3f}, {215.f, 1.20f, 1.f, 0.30f, 125.f,  9.4f}, {270.f, 1.30f, 1.f, 0.30f, 145.f, 12.9f}, {400.f, 1.48f, 2.f, 0.30f, 190.f, 20.1f} },
+    { {120.f, 0.84f, 0.f, 0.30f,  80.f, -10.6f}, {  98.f, 0.78f, 0.f, 0.30f,  65.f, -13.9f}, {215.f, 1.00f, 0.f, 0.30f, 110.f,  0.f}, {270.f, 1.12f, 1.f, 0.30f, 135.f,  3.8f}, {400.f, 1.32f, 2.f, 0.30f, 190.f, 10.8f} },
 };
 static const float kSrcF0[2] = { 125.f, 215.f };   // tam cao do giong that (khoi dau; ung dung tu hoc theo ban)
 
@@ -157,6 +209,7 @@ static const float kSrcF0[2] = { 125.f, 215.f };   // tam cao do giong that (kho
 @property (nonatomic, strong) NSArray<UISlider*>* sliders;
 @property (nonatomic, strong) NSArray<UILabel*>* valLabels;
 @property (nonatomic, strong) UILabel* status;
+@property (nonatomic, strong) AVAudioPlayer* player;
 @property (nonatomic, strong) NSTimer* timer;
 @end
 
@@ -276,6 +329,13 @@ static UILabel* vfxLabel(NSString* t, UIFont* f, UIColor* c) { UILabel* l = [UIL
     self.status = vfxLabel(@"", [UIFont systemFontOfSize:12], UIColor.secondaryLabelColor); self.status.numberOfLines = 0;
     [st addArrangedSubview:self.status];
 
+    UILabel* hint = vfxLabel(@"Không ai (kể cả bạn) tự nghe được giọng mình qua loa khi đang chat. Bấm nút dưới để tự kiểm tra giọng đã đổi, chỉ máy bạn nghe thấy.", [UIFont systemFontOfSize:11], UIColor.tertiaryLabelColor);
+    hint.numberOfLines = 0; [st addArrangedSubview:hint];
+    UIButton* test = [UIButton buttonWithType:UIButtonTypeSystem];
+    [test setTitle:@"🔊 Nghe thử giọng vừa đổi" forState:UIControlStateNormal]; test.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    [test addTarget:self action:@selector(playTest) forControlEvents:UIControlEventTouchUpInside];
+    [st addArrangedSubview:test];
+
     UIButton* reset = [UIButton buttonWithType:UIButtonTypeSystem];
     [reset setTitle:@"Đặt lại" forState:UIControlStateNormal]; reset.titleLabel.font = [UIFont systemFontOfSize:15];
     [reset addTarget:self action:@selector(resetAll) forControlEvents:UIControlEventTouchUpInside];
@@ -311,13 +371,28 @@ static UILabel* vfxLabel(NSString* t, UIFont* f, UIColor* c) { UILabel* l = [UIL
 
 // ---- trang thai ----
 - (void)updateStatus {
-    int calls = gCalls.load(), proc = gProcessed.load();
+    int calls = gCalls.load(); long long frames = gFrames.load(); int sr = gSR.load();
     NSString* s;
     if (calls == 0) s = @"Mic: chưa thấy luồng thu âm. Hãy bật mic trong trận rồi mở lại menu.";
-    else if (gSR.load() == 0) s = @"Mic: có luồng thu âm nhưng định dạng chưa hỗ trợ.";
-    else s = [NSString stringWithFormat:@"Mic: đã bắt • %d Hz • %@ • %d kênh%@", gSR.load(), gIsFloat.load() ? @"Float32" : @"Int16", gCh.load(),
-              self.swOn.isOn ? [NSString stringWithFormat:@" • đã xử lý %d", proc] : @" • đang tắt"];
+    else if (sr == 0) s = @"Mic: có luồng thu âm nhưng định dạng chưa hỗ trợ.";
+    else {
+        double secs = frames / (double)sr;
+        s = [NSString stringWithFormat:@"Mic: đã bắt • %d Hz • %@ • %d kênh%@", sr, gIsFloat.load() ? @"Float32" : @"Int16", gCh.load(),
+             self.swOn.isOn ? [NSString stringWithFormat:@" • đã xử lý %.0fs", secs] : @" • đang tắt"];
+    }
     self.status.text = s;
+}
+
+- (void)playTest {
+    NSData* wav = vfxCapExportWAV();
+    if (!wav.length) { self.status.text = @"Chưa có gì để nghe thử — hãy bật Đổi giọng, nói vài giây rồi bấm lại."; return; }
+    NSString* path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"vfx_test.wav"];
+    [wav writeToFile:path atomically:YES];
+    NSError* err = nil;
+    AVAudioPlayer* p = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:&err];
+    if (!p) { self.status.text = @"Không phát lại được bản ghi thử."; return; }
+    self.player = p; self.player.volume = 1.0;
+    [self.player play];
 }
 
 // ---- dong bo UI <-> tham so ----
@@ -374,10 +449,11 @@ static UILabel* vfxLabel(NSString* t, UIFont* f, UIColor* c) { UILabel* l = [UIL
 // 5) KHOI TAO
 // =====================================================================
 __attribute__((constructor)) static void vfxInit(void) {
-    struct rebinding rs[2] = {
+    struct rebinding rs[3] = {
         { "AudioUnitRender", (void*)hook_AudioUnitRender, (void**)&orig_AudioUnitRender },
-        { "AudioComponentInstanceDispose", (void*)hook_AudioComponentInstanceDispose, (void**)&orig_AudioComponentInstanceDispose } };
-    rebind_symbols(rs, 2);
+        { "AudioComponentInstanceDispose", (void*)hook_AudioComponentInstanceDispose, (void**)&orig_AudioComponentInstanceDispose },
+        { "AudioOutputUnitStart", (void*)hook_AudioOutputUnitStart, (void**)&orig_AudioOutputUnitStart } };
+    rebind_symbols(rs, 3);
     [[VFXUI shared] start];
     NSLog(@"[VoiceFX] loaded");
 }
