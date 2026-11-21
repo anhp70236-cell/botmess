@@ -27,7 +27,7 @@ struct VFXParams {
     std::atomic<float> targetF0{215.f};    // cao do dich (Hz)
     std::atomic<float> srcF0{125.f};       // cao do trung binh giong that (Hz) - khoi dau, se tu hoc
     std::atomic<float> fixedSemis{0.f};    // dich co dinh khi tat tu can
-    std::atomic<float> intonation{0.75f};  // giu bao nhieu ngu dieu goc (0..1)
+    std::atomic<float> intonation{0.35f};  // giu bao nhieu ngu dieu goc (0..1) - thap de bam chac vao giong dich
     std::atomic<float> postHpf{110.f};     // cat tram sau khi doi (Hz)
 };
 
@@ -311,7 +311,7 @@ private:
             if (m.voiced) {
                 float f0in = sr / m.per, f0out;
                 float tgt = c.target * powf(2.f, c.st / 12.f);
-                if (c.autoPitch) { float dl = vfxClampf(logf(f0in) - centerLog, -0.7f, 0.7f); f0out = tgt * expf(c.k * dl); }
+                if (c.autoPitch) { float dl = vfxClampf(logf(f0in) - centerLog, -0.45f, 0.45f); f0out = tgt * expf(c.k * dl); }
                 else f0out = f0in * powf(2.f, (c.fixedSemis + c.st) / 12.f);
                 float beta = vfxClampf(f0out / f0in, 0.4f, 3.8f); f0out = vfxClampf(f0in * beta, 50.f, 0.45f * sr);
                 Ps = sr / f0out;
