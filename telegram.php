@@ -1556,6 +1556,9 @@ function tg_render($type, array $d)
                 '⚡ Loại tấn công: <b>' . tg_e(isset($d['detail']) ? $d['detail'] : 'HTTP Stream Flood') . '</b>',
                 '⏱ Khoá tự động: <b>' . $mins . ' phút</b>' . ($expAt !== '' ? ' (đến ' . tg_c($expAt) . ')' : '') . ' · 🧹 <b>Đã giải phóng sạch luồng</b>',
             ];
+            if (!empty($d['case_code'])) {
+                $rows[] = '🔐 Mã xác minh: ' . tg_c($d['case_code']);
+            }
             return [
                 'cat'      => 'ddos',
                 'title'    => '🚨 <b>AI CHẶN & GIẢI PHÓNG LUỒNG DDOS</b>',
@@ -1578,6 +1581,9 @@ function tg_render($type, array $d)
                 '🛡 Vi phạm: <b>' . tg_e(isset($d['detail']) ? $d['detail'] : 'Chạy Script / Xem mã nguồn / Bug-Buff') . '</b>',
                 '⏱ Phong toả đa lớp: <b>' . $mins . ' phút</b>' . ($evasions > 0 ? ' · ⚠️ Cố lách khoá: <b>' . $evasions . ' lần</b>' : ''),
             ];
+            if (!empty($d['case_code'])) {
+                $rows[] = '🔐 Mã xác minh: ' . tg_c($d['case_code']);
+            }
             return [
                 'cat'      => 'ddos',
                 'title'    => '🛡 <b>CHẶN SCRIPT / XEM MÃ NGUỒN / BUG WEB</b>',
@@ -1597,20 +1603,24 @@ function tg_render($type, array $d)
             ];
 
         case 'key_spam_ban':
-            $mins  = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 1800) / 60));
+            $mins  = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 300) / 60));
             $fails = (int) (isset($d['fails']) ? $d['fails'] : 0);
             $kb    = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
                 ['text' => '🔓 Gỡ ban ngay', 'callback_data' => 'qa|unban|' . $ip],
                 ['text' => '🚫 Chặn vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
             ]]) : null;
+            $kRows = [
+                '👤 ' . $uTag . ' · 🌐 ' . $ipTag,
+                '🛑 ' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : ('Spam thao tác / nhập sai ' . $fails . ' lần'), 150)),
+            ];
+            if (!empty($d['case_code'])) {
+                $kRows[] = '🔐 Mã xác minh: ' . tg_c($d['case_code']);
+            }
             return [
                 'cat'      => 'ddos',
-                'title'    => '☹️ <b>TẠM KHOÁ SPAM NHẬP KEY</b>',
-                'throttle' => ['kspam:' . $ip, 60],
-                'rows'     => [
-                    '👤 ' . $uTag . ' · 🌐 ' . $ipTag,
-                    '🛑 Nhập sai <b>' . $fails . '</b> lần → Đã chuyển sang trang Mặt buồn (tự mở sau <b>' . $mins . 'p</b>)',
-                ],
+                'title'    => '☹️ <b>TẠM KHOÁ SPAM HỆ THỐNG (' . $mins . ' PHÚT)</b>',
+                'throttle' => ['kspam:' . $ip, 45],
+                'rows'     => $kRows,
                 'kb'       => $kb,
             ];
 

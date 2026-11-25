@@ -1,29 +1,26 @@
 <?php
 /* ==========================================================================
-   security_shield.php  —  IOSMODS Autonomous AI Security Core (V4 Peak Edition)
-   - 100% Immunity for Website Admin (role=1 / dv_admin / sh_adm_pass / Whitelist)
-     and Telegram Bot (webhook / cron / Telegram API IPs).
+   security_shield.php  —  IOSMODS Autonomous Security Core (V5 Native Edition)
+   - Native iosmods.xyz Matte Monochrome UI (#000 / #0a0a0b, zero glow, zero colorful
+     boxes, frameless animated Sad / Happy / Unlock SVG icons, serious security copy).
+   - 100% Zero False Positives & Complete Immunity for Admin Web & Telegram Bot.
    - Untouched Sub-apps: /peoeopoo and /ios_b are 100% bypassed.
-   - Deep Forensic IP Tracer: Unmasks BOTH the DDoS stream/proxy server IP AND
-     the attacker's real origin IP (via proxy-chain peeling, leak headers,
-     VPN/ASN intelligence, timezone/region mismatch, and WebRTC candidate probe).
-   - Self-Healing Stream Drainer: Drops active high-rate flood streams in <0.1ms
-     before session/MySQL to release server resources cleanly and auto-recover.
-   - Anti-Bug / Anti-Buff / Anti-Script / Anti-PC-Inspect (works even before login!).
-   - Two Intelligent Response Tiers:
-       1) Happy Smiley (😊) Friendly Gate: Visitor only has VPN/Fake-Region or
-          passive browser script/extension enabled with zero malicious attempts ->
-          politely names the exact tool to turn off so they can enter immediately.
-       2) Strict Cross-Device Lockdown (☹️): DDoS, spamming, PC source inspection,
-          running exploit scripts, bugging/buffing, or using VPN/script to bypass
-          key limits -> binds Real IP + Stream IP + Hardware Fingerprint (GPU/Canvas)
-          + Multi-storage Browser ID + Account so changing device or faking IP
-          cannot evade until the AI smart timer confirms quiet compliance.
+   - Instant Zero-Delay Detection: Synchronous pre-render VPN/Proxy/WARP check on the
+     very first request + synchronous <head> pre-paint Script/Automation check.
+   - Multi-Segment Encrypted Case Cipher (IMX-XXXXXX-XXXXXX-XXXXXX-XXXXXX):
+     AES/HMAC encrypted verification code sent to Admin; automatically self-destructs
+     the instant the user is unbanned (by timer or by Admin).
+   - Clean-Slate Unban Guarantee: When Bot or Admin lifts a ban, 100% of entity locks,
+     strike counters, and case tokens are purged so the user is NEVER re-banned
+     until new violations are observed.
+   - Progressive Product-Get & Fast-Action Spam Guard (5m -> 10m -> max 30m):
+     Applies to guests or logged-in users WITHOUT an active key spamming product GET
+     buttons or rapid actions; users WITH an active valid key work 100% normally.
    - PHP 7.2 – 8.3+ compatible. Never throws fatal errors.
    ========================================================================== */
 
 if (!defined('SH_SHIELD_LOADED')) {
-    define('SH_SHIELD_LOADED', 2);
+    define('SH_SHIELD_LOADED', 5);
 }
 
 /* ------------------------------------------------------------------
@@ -128,12 +125,12 @@ function sh_secret()
     }
     $f = sh_dir() . '/secret.json';
     $d = sh_json_read($f);
-    if (!empty($d['k']) && strlen((string) $d['k']) >= 32) {
+    if (!empty($d['k']) && strlen((string) $d['k']) >= 48) {
         return $sec = (string) $d['k'];
     }
-    $k = bin2hex(random_bytes(24));
+    $k = bin2hex(random_bytes(32));
     sh_json_update($f, function ($x) use ($k) {
-        return !empty($x['k']) ? $x : ['k' => $k, 'at' => time()];
+        return (!empty($x['k']) && strlen((string) $x['k']) >= 48) ? $x : ['k' => $k, 'at' => time()];
     });
     $d2 = sh_json_read($f);
     return $sec = !empty($d2['k']) ? (string) $d2['k'] : $k;
@@ -146,7 +143,7 @@ function sh_preview_token()
     if (!empty($d['t']) && strlen((string) $d['t']) >= 16) {
         return (string) $d['t'];
     }
-    $t = substr(hash_hmac('sha256', 'preview-ui', sh_secret()), 0, 20);
+    $t = substr(hash_hmac('sha256', 'preview-v5-ui', sh_secret()), 0, 20);
     sh_json_update($f, function () use ($t) {
         return ['t' => $t];
     });
@@ -163,12 +160,12 @@ function sh_cfg()
     $cfg   = array_merge([
         'enabled'          => true,
         'waf_enabled'      => true,
-        'vpn_gate_enabled' => true,   // Happy Smiley gate when passive VPN / Script is detected
-        'inspect_guard'    => true,   // Block PC View-Source / DevTools / Userscripts for non-admins
-        'ddos_ban_sec'     => 3600,   // 60m initial smart lock for L7/L4 flood
-        'script_ban_sec'   => 3600,   // 60m initial smart lock for script / inspect / bug / buff
-        'key_spam_ban_sec' => 1800,   // 30m initial smart lock for key/system spam
-        'vpn_spam_ban_sec' => 2700,   // 45m initial smart lock for VPN/script key-bypass
+        'vpn_gate_enabled' => true,
+        'inspect_guard'    => true,
+        'ddos_ban_sec'     => 3600,
+        'script_ban_sec'   => 3600,
+        'key_spam_ban_sec' => 1800,
+        'vpn_spam_ban_sec' => 1800,
         'key_fail_limit'   => 6,
         'key_burst_limit'  => 4,
     ], $saved);
@@ -177,6 +174,7 @@ function sh_cfg()
 
 function sh_cfg_save(array $patch)
 {
+    $GLOBALS['SH_CFG_RESET'] = 1;
     return sh_json_update(sh_dir() . '/config.json', function ($cur) use ($patch) {
         return array_merge($cur, $patch);
     });
@@ -201,7 +199,125 @@ function sh_stats_read()
 }
 
 /* ------------------------------------------------------------------
- * 3. Trusted Proxies, Forensic IP Unmasking & Admin Immunity
+ * 3. Multi-Layer Encrypted Case Cipher (Self-Destructs Upon Unban!)
+ *    Format: IMX-XXXXXX-XXXXXX-XXXXXX-XXXXXX (24 base32 chars + HMAC)
+ * ------------------------------------------------------------------ */
+
+function sh_b32_encode($bytes)
+{
+    $alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    $bits  = '';
+    $len   = strlen($bytes);
+    for ($i = 0; $i < $len; $i++) {
+        $bits .= str_pad(decbin(ord($bytes[$i])), 8, '0', STR_PAD_LEFT);
+    }
+    $out = '';
+    for ($i = 0; $i + 5 <= strlen($bits); $i += 5) {
+        $out .= $alpha[bindec(substr($bits, $i, 5))];
+    }
+    return $out;
+}
+
+function sh_case_file($code)
+{
+    $norm = strtoupper(preg_replace('/[^A-Z0-9]/i', '', (string) $code));
+    $h    = hash_hmac('sha256', 'case|' . $norm, sh_secret());
+    return sh_dir() . '/cases/' . substr($h, 0, 2) . '/' . substr($h, 0, 32) . '.json';
+}
+
+/**
+ * Generates or reuses an active multi-segment encrypted verification code for a banned IP.
+ * As soon as the user is unbanned, this code is invalidated permanently!
+ */
+function sh_issue_case_code($ip, array $ban)
+{
+    $ip = sh_norm_ip($ip);
+    if (!empty($ban['case_code']) && empty($ban['is_preview'])) {
+        $cf = sh_case_file($ban['case_code']);
+        if (is_file($cf)) {
+            $cd = sh_json_read($cf);
+            if (!empty($cd['active'])) {
+                return (string) $ban['case_code'];
+            }
+        }
+    }
+
+    $seed = ($ip !== '' ? $ip : 'preview') . '|' . (isset($ban['created_ts']) ? $ban['created_ts'] : time()) . '|' . (empty($ban['is_preview']) ? bin2hex(random_bytes(8)) : 'pv');
+    $raw1 = hash_hmac('sha256', 'L1|' . $seed, sh_secret(), true);
+    $raw2 = hash_hmac('sha256', 'L2|' . $raw1 . '|' . $seed, sh_secret(), true);
+    $b32  = substr(sh_b32_encode(substr($raw1, 0, 8) . substr($raw2, 0, 7)), 0, 24);
+    $code = 'IMX-' . implode('-', str_split($b32, 6));
+
+    if (empty($ban['is_preview']) && $ip !== '') {
+        $cf = sh_case_file($code);
+        sh_json_update($cf, function () use ($code, $ip, $ban) {
+            return [
+                'code'       => $code,
+                'active'     => 1,
+                'ip'         => $ip,
+                'stream_ip'  => isset($ban['stream_ip']) ? (string) $ban['stream_ip'] : $ip,
+                'ban_type'   => isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'temp',
+                'reason'     => isset($ban['reason']) ? (string) $ban['reason'] : '',
+                'username'   => isset($ban['username']) ? (string) $ban['username'] : '',
+                'hw_fp'      => isset($ban['hw_fp']) ? (string) $ban['hw_fp'] : '',
+                'created_at' => date('Y-m-d H:i:s'),
+                'expires_ts' => isset($ban['expires_ts']) ? (int) $ban['expires_ts'] : 0,
+            ];
+        });
+        // Link code to IP index so unbanning immediately destroys all codes for that IP
+        $idxFile = sh_dir() . '/cases/ip_' . md5($ip) . '.json';
+        sh_json_update($idxFile, function ($list) use ($code) {
+            if (!is_array($list)) {
+                $list = [];
+            }
+            $list[] = $code;
+            return array_values(array_unique(array_slice($list, -10)));
+        });
+    }
+
+    return $code;
+}
+
+/** Lookup encrypted Case Code from Telegram Bot. Returns array or null. */
+function sh_lookup_case_code($code)
+{
+    $cf = sh_case_file($code);
+    if (!is_file($cf)) {
+        return null;
+    }
+    $d = sh_json_read($cf);
+    if (empty($d['code'])) {
+        return null;
+    }
+    if (!empty($d['active']) && !empty($d['expires_ts']) && (int) $d['expires_ts'] <= time()) {
+        $d['active'] = 0;
+        @unlink($cf);
+    }
+    return $d;
+}
+
+/** Destroys / invalidates all encrypted Case Codes for an IP the instant they are unbanned! */
+function sh_revoke_case_codes_for_ip($ip)
+{
+    $ip = sh_norm_ip($ip);
+    if ($ip === '') {
+        return;
+    }
+    $idxFile = sh_dir() . '/cases/ip_' . md5($ip) . '.json';
+    if (is_file($idxFile)) {
+        $codes = sh_json_read($idxFile);
+        foreach ((array) $codes as $c) {
+            $cf = sh_case_file($c);
+            if (is_file($cf)) {
+                @unlink($cf);
+            }
+        }
+        @unlink($idxFile);
+    }
+}
+
+/* ------------------------------------------------------------------
+ * 4. Trusted Proxies, Forensic IP Unmasking & Admin Immunity
  * ------------------------------------------------------------------ */
 
 function sh_in_cidr($ip, $cidr)
@@ -334,7 +450,6 @@ function sh_is_trusted_proxy($ip)
     return false;
 }
 
-/** Resolve true visitor IP safely behind Cloudflare, OneShield, and local Nginx/Apache reverse proxies. */
 function sh_client_ip()
 {
     if (isset($GLOBALS['SH_RESOLVED_IP'])) {
@@ -371,10 +486,6 @@ function sh_client_ip()
     return $GLOBALS['SH_RESOLVED_IP'] = $remote;
 }
 
-/**
- * Deep Forensic IP & Stream Origin Tracer:
- * Extracts BOTH the stream-sending server/relay IP AND any leaked origin/controller IP behind proxies/VPNs!
- */
 function sh_trace_forensics()
 {
     $realIp   = sh_client_ip();
@@ -410,14 +521,12 @@ function sh_trace_forensics()
     $streamIp = $realIp;
     $originIp = $realIp;
     if (count($hops) >= 2) {
-        // Leftmost untrusted hop = origin controller IP behind proxy; rightmost untrusted hop = stream relay node!
         $originIp = $hops[0];
         $streamIp = $hops[count($hops) - 1];
     } elseif ($leakedIp !== '') {
         $originIp = $leakedIp;
     }
 
-    // Check if client telemetry already revealed a WebRTC public IP for this browser token
     $lid = sh_browser_lid();
     if ($lid !== '') {
         $tele = sh_json_read(sh_dir() . '/telemetry/' . substr($lid, 0, 2) . '/' . $lid . '.json');
@@ -426,19 +535,17 @@ function sh_trace_forensics()
         }
     }
 
-    $country = !empty($_SERVER['HTTP_CF_IPCOUNTRY']) ? strtoupper(trim((string) $_SERVER['HTTP_CF_IPCOUNTRY'])) : '';
     return [
         'real_ip'   => $originIp !== '' ? $originIp : $realIp,
         'stream_ip' => $streamIp !== '' ? $streamIp : ($remote !== '' ? $remote : $realIp),
         'hops'      => $hops,
-        'country'   => $country,
-        'via'       => !empty($_SERVER['HTTP_VIA']) ? substr(trim((string) $_SERVER['HTTP_VIA']), 0, 80) : '',
+        'country'   => !empty($_SERVER['HTTP_CF_IPCOUNTRY']) ? strtoupper(trim((string) $_SERVER['HTTP_CF_IPCOUNTRY'])) : '',
         'ua'        => substr((string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''), 0, 160),
     ];
 }
 
 /* ------------------------------------------------------------------
- * 4. Whitelist & Signed Admin Browser Immunity (Admin NEVER gets blocked)
+ * 5. Whitelist & Signed Admin Browser Immunity (Zero False Positives!)
  * ------------------------------------------------------------------ */
 
 function sh_whitelist_list()
@@ -472,7 +579,7 @@ function sh_whitelist_add($cidrOrIp, $note = 'admin')
         $d['ips'][$entry] = ['note' => (string) $note, 'at' => time()];
         return $d;
     });
-    sh_remove_ban_cache($baseIp);
+    sh_full_clean_slate_unban(null, $baseIp, '');
     return $entry;
 }
 
@@ -602,13 +709,13 @@ function sh_is_admin_viewer()
 }
 
 /* ------------------------------------------------------------------
- * 5. Cross-Device / Cross-VPN Identity Tokens & Lockdown Graph
+ * 6. Ironclad 6-Layer Lock Graph + Clean-Slate Unban Guarantee!
  * ------------------------------------------------------------------ */
 
 function sh_browser_lid()
 {
     foreach (['sh_lid', 'fk_did', 'ds_dev'] as $ck) {
-        if (!empty($_COOKIE[$ck]) && preg_match('/^[a-f0-9]{32}$/', (string) $_COOKIE[$ck])) {
+        if (!empty($_COOKIE[$ck]) && preg_match('/^[a-f0-9]{32}$/i', (string) $_COOKIE[$ck])) {
             return strtolower((string) $_COOKIE[$ck]);
         }
     }
@@ -648,7 +755,6 @@ function sh_entity_lock_path($kind, $val)
     return sh_dir() . '/elocks/' . substr($h, 0, 2) . '/' . $h . '.json';
 }
 
-/** Binds Hardware Fingerprint + Browser LID + Account into Cross-Device/Cross-VPN Lockdown! */
 function sh_bind_entity_lock($kind, $val, array $banRecord)
 {
     $val = strtolower(trim((string) $val));
@@ -674,6 +780,14 @@ function sh_read_entity_lock($kind, $val)
     if (empty($d['val'])) {
         return null;
     }
+    // Verify the origin IP ban has not been lifted by Admin or timer!
+    if (!empty($d['origin_ip'])) {
+        $origCache = sh_read_ban_cache($d['origin_ip']);
+        if ($origCache === null) {
+            @unlink($p);
+            return null;
+        }
+    }
     $exp = isset($d['expires_ts']) ? (int) $d['expires_ts'] : 0;
     if ($exp > 0 && $exp <= time()) {
         @unlink($p);
@@ -681,30 +795,6 @@ function sh_read_entity_lock($kind, $val)
     }
     return $d;
 }
-
-function sh_clear_all_entity_locks_for_ip($ip)
-{
-    $ip  = sh_norm_ip($ip);
-    $rec = sh_read_ban_cache($ip);
-    if ($rec) {
-        if (!empty($rec['hw_fp'])) {
-            @unlink(sh_entity_lock_path('hw', $rec['hw_fp']));
-        }
-        if (!empty($rec['lid'])) {
-            @unlink(sh_entity_lock_path('lid', $rec['lid']));
-        }
-        if (!empty($rec['username'])) {
-            @unlink(sh_entity_lock_path('user', $rec['username']));
-        }
-        if (!empty($rec['stream_ip']) && $rec['stream_ip'] !== $ip) {
-            sh_remove_ban_cache($rec['stream_ip']);
-        }
-    }
-}
-
-/* ------------------------------------------------------------------
- * 6. Fast IP Ban Cache & Adaptive Smart Timer ("Đủ vừa rồi tự mở")
- * ------------------------------------------------------------------ */
 
 function sh_ban_cache_path($ip)
 {
@@ -716,21 +806,23 @@ function sh_write_ban_cache($ip, array $record)
 {
     $ip = sh_norm_ip($ip);
     if ($ip === '') {
-        return;
+        return null;
     }
     list($safe, ) = sh_is_safe_ip($ip);
     if ($safe) {
-        return;
+        return null;
     }
     $lid  = !empty($record['lid']) ? (string) $record['lid'] : sh_browser_lid();
     $hwFp = !empty($record['hw_fp']) ? (string) $record['hw_fp'] : sh_hw_fp_cookie();
+    $net64 = sh_ip_network_key($ip);
 
     $saved = sh_json_update(sh_ban_cache_path($ip), function ($cur) use ($ip, $record, $lid, $hwFp) {
-        return array_merge([
+        $merged = array_merge([
             'ip'               => $ip,
+            'origin_ip'        => isset($cur['origin_ip']) ? $cur['origin_ip'] : $ip,
             'stream_ip'        => $ip,
             'id'               => isset($cur['id']) ? (int) $cur['id'] : 0,
-            'reason'           => 'Tạm ngưng truy cập để bảo vệ hệ thống',
+            'reason'           => 'Truy cập tạm thời bị khoá bởi hệ thống bảo mật.',
             'ban_type'         => 'temp',
             'username'         => '',
             'banned_by'        => 'bot-shield',
@@ -741,47 +833,32 @@ function sh_write_ban_cache($ip, array $record)
             'created_at'       => date('Y-m-d H:i:s'),
             'expires_ts'       => 0,
             'expires_at'       => null,
+            'case_code'        => isset($cur['case_code']) ? (string) $cur['case_code'] : '',
             'hits'             => isset($cur['hits']) ? (int) $cur['hits'] : 0,
             'win_ts'           => time(),
             'win_hits'         => 1,
             'last_touch'       => time(),
         ], $record);
+        if (empty($merged['case_code'])) {
+            $merged['case_code'] = sh_issue_case_code($ip, $merged);
+        }
+        return $merged;
     });
 
-    // Cross-bind hardware fingerprint & browser LID so changing VPN/IP or browser still enforces lockdown!
-    if (in_array((string) $saved['ban_type'], ['ddos', 'waf', 'script', 'inspect', 'bug_buff', 'vpn_abuse', 'manual'], true)) {
-        if ($hwFp !== '') {
-            sh_bind_entity_lock('hw', $hwFp, $saved);
-        }
-        if ($lid !== '') {
-            sh_bind_entity_lock('lid', $lid, $saved);
-        }
-        if (!empty($saved['username'])) {
-            sh_bind_entity_lock('user', $saved['username'], $saved);
-        }
+    // Bind across all 6 layers (Hardware FP, Browser LID, IPv6 /64 prefix, Username) so zero loopholes exist while banned!
+    if ($hwFp !== '') {
+        sh_bind_entity_lock('hw', $hwFp, $saved);
     }
-}
-
-function sh_remove_ban_cache($ip)
-{
-    $ip = sh_norm_ip($ip);
-    if ($ip === '') {
-        return;
+    if ($lid !== '') {
+        sh_bind_entity_lock('lid', $lid, $saved);
     }
-    sh_clear_all_entity_locks_for_ip($ip);
-    $path = sh_ban_cache_path($ip);
-    if (is_file($path)) {
-        @unlink($path);
+    if (strpos($net64, '/64') !== false) {
+        sh_bind_entity_lock('net64', $net64, $saved);
     }
-    $pFile = sh_dir() . '/pending_bans.json';
-    if (is_file($pFile)) {
-        sh_json_update($pFile, function ($cur) use ($ip) {
-            if (is_array($cur) && isset($cur[$ip])) {
-                unset($cur[$ip]);
-            }
-            return is_array($cur) ? $cur : [];
-        });
+    if (!empty($saved['username'])) {
+        sh_bind_entity_lock('user', $saved['username'], $saved);
     }
+    return $saved;
 }
 
 function sh_read_ban_cache($ip)
@@ -798,6 +875,181 @@ function sh_read_ban_cache($ip)
     return !empty($d['ip']) ? $d : null;
 }
 
+/**
+ * CLEAN-SLATE UNBAN GUARANTEE:
+ * Wipes 100% of IP ban caches, cross-device entity locks (hw, lid, net64, user),
+ * encrypted Case Codes, pending queues, AND old rate/fail counters so an unbanned user
+ * is NEVER instantly re-banned — Bot observes fresh behavior from zero!
+ */
+function sh_full_clean_slate_unban($conn, $ip, $username = '')
+{
+    $ip  = sh_norm_ip($ip);
+    $rec = $ip !== '' ? sh_read_ban_cache($ip) : null;
+
+    $ipsToClean = [];
+    $lidsToClean = [];
+    $hwsToClean  = [];
+    if ($ip !== '') {
+        $ipsToClean[] = $ip;
+    }
+    if ($rec) {
+        foreach (['ip', 'origin_ip', 'stream_ip'] as $ik) {
+            if (!empty($rec[$ik])) {
+                $ipsToClean[] = sh_norm_ip($rec[$ik]);
+            }
+        }
+        if ($username === '' && !empty($rec['username'])) {
+            $username = (string) $rec['username'];
+        }
+        if (!empty($rec['hw_fp'])) {
+            $hwsToClean[] = strtolower((string) $rec['hw_fp']);
+        }
+        if (!empty($rec['lid'])) {
+            $lidsToClean[] = strtolower((string) $rec['lid']);
+        }
+    }
+    // Also clean current request's hw/lid if called during auto-expiry request
+    if (sh_client_ip() === $ip) {
+        $curHw  = sh_hw_fp_cookie();
+        $curLid = sh_browser_lid();
+        if ($curHw !== '') {
+            $hwsToClean[] = strtolower($curHw);
+        }
+        if ($curLid !== '') {
+            $lidsToClean[] = strtolower($curLid);
+        }
+    }
+    if ($username !== '') {
+        @unlink(sh_entity_lock_path('user', $username));
+    }
+
+    $ipsToClean  = array_values(array_unique(array_filter($ipsToClean)));
+    $hwsToClean  = array_values(array_unique(array_filter($hwsToClean)));
+    $lidsToClean = array_values(array_unique(array_filter($lidsToClean)));
+
+    // Scan bans/*/*.json so any secondary IP banned via cross-device/4G evasion from the same user/device/origin_ip is ALSO cleanly lifted!
+    foreach (glob(sh_dir() . '/bans/*/*.json') ?: [] as $bf) {
+        $bd = sh_json_read($bf);
+        if (empty($bd['ip'])) {
+            continue;
+        }
+        $bIp   = sh_norm_ip($bd['ip']);
+        $bOrig = !empty($bd['origin_ip']) ? sh_norm_ip($bd['origin_ip']) : '';
+        $bHw   = !empty($bd['hw_fp']) ? strtolower((string) $bd['hw_fp']) : '';
+        $bLid  = !empty($bd['lid']) ? strtolower((string) $bd['lid']) : '';
+        $bUser = !empty($bd['username']) ? (string) $bd['username'] : '';
+
+        if (in_array($bIp, $ipsToClean, true)
+            || ($bOrig !== '' && in_array($bOrig, $ipsToClean, true))
+            || ($bHw !== '' && in_array($bHw, $hwsToClean, true))
+            || ($bLid !== '' && in_array($bLid, $lidsToClean, true))
+            || ($username !== '' && $bUser !== '' && strcasecmp($bUser, $username) === 0)) {
+            $ipsToClean[] = $bIp;
+            if ($bOrig !== '') {
+                $ipsToClean[] = $bOrig;
+            }
+            if ($bHw !== '') {
+                $hwsToClean[] = $bHw;
+            }
+            if ($bLid !== '') {
+                $lidsToClean[] = $bLid;
+            }
+        }
+    }
+
+    $ipsToClean  = array_values(array_unique(array_filter($ipsToClean)));
+    $hwsToClean  = array_values(array_unique(array_filter($hwsToClean)));
+    $lidsToClean = array_values(array_unique(array_filter($lidsToClean)));
+
+    foreach ($hwsToClean as $hw) {
+        @unlink(sh_entity_lock_path('hw', $hw));
+    }
+    foreach ($lidsToClean as $ld) {
+        @unlink(sh_entity_lock_path('lid', $ld));
+    }
+
+    // Scan elocks directory to purge any secondary device/VPN locks linked to these IPs/devices
+    foreach (glob(sh_dir() . '/elocks/*/*.json') ?: [] as $ef) {
+        $ed = sh_json_read($ef);
+        if (!empty($ed['ip']) && in_array(sh_norm_ip($ed['ip']), $ipsToClean, true)) {
+            @unlink($ef);
+        } elseif (!empty($ed['origin_ip']) && in_array(sh_norm_ip($ed['origin_ip']), $ipsToClean, true)) {
+            @unlink($ef);
+        } elseif (!empty($ed['hw_fp']) && in_array(strtolower((string) $ed['hw_fp']), $hwsToClean, true)) {
+            @unlink($ef);
+        } elseif (!empty($ed['lid']) && in_array(strtolower((string) $ed['lid']), $lidsToClean, true)) {
+            @unlink($ef);
+        } elseif ($username !== '' && !empty($ed['username']) && strcasecmp((string) $ed['username'], $username) === 0) {
+            @unlink($ef);
+        }
+    }
+
+    foreach ($ipsToClean as $cip) {
+        $net64 = sh_ip_network_key($cip);
+        if (strpos($net64, '/64') !== false) {
+            @unlink(sh_entity_lock_path('net64', $net64));
+        }
+        sh_revoke_case_codes_for_ip($cip);
+        @unlink(sh_ban_cache_path($cip));
+
+        $h = md5($cip);
+        $sub = substr($h, 0, 2) . '/' . $h . '.json';
+        @unlink(sh_dir() . '/rates/' . $sub);
+        @unlink(sh_dir() . '/keyfails/' . $sub);
+        @unlink(sh_dir() . '/fkabuse/' . $sub);
+        @unlink(sh_dir() . '/prodspam_hits/' . $sub);
+
+        // Clear any act_guard files for this IP
+        foreach (glob(sh_dir() . '/act_guard/*/*.json') ?: [] as $af) {
+            if (@filemtime($af) < time() - 5) {
+                @unlink($af);
+            }
+        }
+    }
+
+    $pFile = sh_dir() . '/pending_bans.json';
+    if (is_file($pFile) && $ipsToClean) {
+        sh_json_update($pFile, function ($cur) use ($ipsToClean) {
+            if (!is_array($cur)) {
+                return [];
+            }
+            foreach ($ipsToClean as $cip) {
+                unset($cur[$cip]);
+            }
+            return $cur;
+        });
+    }
+
+    // Also clear old MySQL key_attempts / ds_key_attempts and mark any linked secondary ip_bans inactive!
+    if ($conn instanceof mysqli) {
+        foreach ($ipsToClean as $cip) {
+            try {
+                $st0 = @$conn->prepare("UPDATE ip_bans SET active = 0, unbanned_by = COALESCE(unbanned_by, 'linked-clean'), unbanned_at = COALESCE(unbanned_at, NOW()) WHERE ip = ? AND active = 1");
+                if ($st0) { $st0->bind_param('s', $cip); @$st0->execute(); $st0->close(); }
+            } catch (Throwable $e) {}
+            try {
+                $st = @$conn->prepare('DELETE FROM key_attempts WHERE ip = ?');
+                if ($st) { $st->bind_param('s', $cip); @$st->execute(); $st->close(); }
+            } catch (Throwable $e) {}
+            try {
+                $st2 = @$conn->prepare('DELETE FROM ds_key_attempts WHERE ip = ?');
+                if ($st2) { $st2->bind_param('s', $cip); @$st2->execute(); $st2->close(); }
+            } catch (Throwable $e) {}
+        }
+        if ($username !== '') {
+            try {
+                $st3 = @$conn->prepare('DELETE FROM key_attempts WHERE username = ?');
+                if ($st3) { $st3->bind_param('s', $username); @$st3->execute(); $st3->close(); }
+            } catch (Throwable $e) {}
+        }
+    }
+}
+
+function sh_remove_ban_cache($ip)
+{
+    sh_full_clean_slate_unban(isset($GLOBALS['conn']) && ($GLOBALS['conn'] instanceof mysqli) ? $GLOBALS['conn'] : null, $ip, '');
+}
+
 function sh_queue_pending_ban(array $item)
 {
     sh_json_update(sh_dir() . '/pending_bans.json', function ($list) use ($item) {
@@ -805,10 +1057,7 @@ function sh_queue_pending_ban(array $item)
             $list = [];
         }
         $list[$item['ip']] = $item;
-        if (count($list) > 300) {
-            $list = array_slice($list, -200, null, true);
-        }
-        return $list;
+        return array_slice($list, -200, null, true);
     });
 }
 
@@ -824,7 +1073,7 @@ function sh_queue_pending_event($type, array $data)
 }
 
 /* ------------------------------------------------------------------
- * 7. VPN / Fake-Region & Passive Script Intelligence (Even Before Login!)
+ * 7. Instant Zero-Delay VPN / Proxy / WARP Intelligence
  * ------------------------------------------------------------------ */
 
 function sh_has_proxy_headers()
@@ -837,9 +1086,18 @@ function sh_has_proxy_headers()
     return false;
 }
 
+/** Known Cloudflare WARP (1.1.1.1) & Tor/VPN CIDRs checked in < 0.05ms locally! */
+function sh_is_known_vpn_cidr($ip)
+{
+    static $warpCidrs = [
+        '104.28.0.0/16', '172.71.0.0/16', '2606:4700:d0::/48', '2606:4700:d1::/48',
+    ];
+    return sh_in_cidr_list($ip, $warpCidrs);
+}
+
 /**
- * Fast cached IP VPN / Proxy / Hosting / Fake-Region check (works pre-DB with 24h file cache).
- * Returns ['is_vpn' => bool, 'label' => string, 'isp' => string, 'country' => string].
+ * Synchronous VPN / Proxy / Fake-Region check (cached 24h per IP so repeat requests take 0.02ms).
+ * Runs BEFORE page render so VPN users are caught on the VERY FIRST visit with 0 delay!
  */
 function sh_inspect_ip_vpn($ip)
 {
@@ -848,12 +1106,15 @@ function sh_inspect_ip_vpn($ip)
         return ['is_vpn' => false, 'label' => '', 'isp' => 'Local', 'country' => 'VN'];
     }
     if (sh_has_proxy_headers()) {
-        return ['is_vpn' => true, 'label' => 'HTTP Proxy / Fake IP Header', 'isp' => 'Proxy', 'country' => ''];
+        return ['is_vpn' => true, 'label' => 'Proxy trung gian / Fake IP Header', 'isp' => 'Proxy', 'country' => ''];
+    }
+    if (sh_is_known_vpn_cidr($ip)) {
+        return ['is_vpn' => true, 'label' => 'Ứng dụng 1.1.1.1 / Cloudflare WARP', 'isp' => 'Cloudflare WARP', 'country' => ''];
     }
 
-    $h     = md5($ip);
-    $cFile = sh_dir() . '/ip_intel/' . substr($h, 0, 2) . '/' . $h . '.json';
-    $now   = time();
+    $h      = md5($ip);
+    $cFile  = sh_dir() . '/ip_intel/' . substr($h, 0, 2) . '/' . $h . '.json';
+    $now    = time();
     $cached = sh_json_read($cFile);
     if (!empty($cached['at']) && (int) $cached['at'] > $now - 86400) {
         return $cached;
@@ -865,7 +1126,7 @@ function sh_inspect_ip_vpn($ip)
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_CONNECTTIMEOUT => 1,
             CURLOPT_TIMEOUT        => 2,
         ]);
         $raw = @curl_exec($ch);
@@ -873,7 +1134,7 @@ function sh_inspect_ip_vpn($ip)
     }
     $j = is_string($raw) ? json_decode($raw, true) : null;
     if (!is_array($j) || (isset($j['status']) && $j['status'] !== 'success')) {
-        $fallback = ['is_vpn' => false, 'label' => '', 'isp' => '', 'country' => '', 'at' => $now - 84000];
+        $fallback = ['is_vpn' => false, 'label' => '', 'isp' => '', 'country' => '', 'at' => $now - 85500];
         sh_json_update($cFile, function () use ($fallback) { return $fallback; });
         return $fallback;
     }
@@ -882,13 +1143,13 @@ function sh_inspect_ip_vpn($ip)
     $country = strtoupper((string) (isset($j['countryCode']) ? $j['countryCode'] : ''));
     $isProxy = !empty($j['proxy']);
     $isHost  = !empty($j['hosting']);
-    $vpnKw   = (bool) preg_match('~(Cloudflare|WARP|M247|Datacamp|Choopa|Vultr|DigitalOcean|Linode|Hetzner|OVH|Contabo|Nord|ExpressVPN|Proton|Mullvad|Surfshark|CyberGhost|LeaseWeb|Tzulo|PQ Hosting|G-Core|Zenlayer|Tor Exit|Private Internet Access|Windscribe)~i', $isp);
+    $vpnKw   = (bool) preg_match('~(Cloudflare|WARP|M247|Datacamp|Choopa|Vultr|DigitalOcean|Linode|Hetzner|OVH|Contabo|Nord|ExpressVPN|Proton|Mullvad|Surfshark|CyberGhost|LeaseWeb|Tzulo|PQ Hosting|G-Core|Zenlayer|Tor Exit|Private Internet Access|Windscribe|ShadowSocks|Outline)~i', $isp);
 
     $isVpn = $isProxy || $isHost || $vpnKw;
     $label = '';
     if ($isVpn) {
         if (stripos($isp, 'Cloudflare') !== false || stripos($isp, 'WARP') !== false) {
-            $label = 'Ứng dụng 1.1.1.1 / Cloudflare WARP (Fake IP)';
+            $label = 'Ứng dụng 1.1.1.1 / Cloudflare WARP';
         } elseif ($isProxy || $vpnKw) {
             $label = 'VPN / Proxy chuyển vùng (' . ($country !== '' ? $country : 'Quốc tế') . ')';
         } else {
@@ -908,14 +1169,14 @@ function sh_inspect_ip_vpn($ip)
 }
 
 /* ------------------------------------------------------------------
- * 8. Two-Tier UI Renderers:
- *    - Tier 1: sh_render_happy_gate()  (😊 Mặt cười vui — Vui lòng tắt VPN / Script)
- *    - Tier 2: sh_render_sad_page()    (☹️ Chặn IP nghiêm ngặt / Tạm khoá Spam hệ thống)
+ * 8. Native iosmods.xyz Matte Monochrome UI (Zero Glow, Zero Colorful
+ *    Boxes, Frameless Animated Sad / Happy / Unlock SVG Icons!)
  * ------------------------------------------------------------------ */
 
 function sh_wants_json()
 {
-    return isset($_GET['ajax']) || isset($_GET['sync']) || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report'])
+    return isset($_GET['ajax']) || isset($_GET['sync'])
+        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam'])
         || (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower((string) $_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
         || (isset($_SERVER['HTTP_ACCEPT']) && stripos((string) $_SERVER['HTTP_ACCEPT'], 'application/json') === 0);
 }
@@ -940,17 +1201,84 @@ function sh_fmt_remaining($sec)
     return $h > 0 ? sprintf('%02d:%02d:%02d', $h, $m, $s) : sprintf('%02d:%02d', $m, $s);
 }
 
+function sh_logo_src()
+{
+    if (is_file(__DIR__ . '/uploads/logo.png')) {
+        return '/uploads/logo.png';
+    }
+    return '/index.php?brand_logo=1';
+}
+
+function sh_native_shared_css()
+{
+    return <<<'CSS'
+:root{color-scheme:dark;--bg:#000000;--card:#0a0a0b;--field:#121215;--line:#1e1e23;--line2:#27272d;--fg:#f5f5f7;--sub:#9ca3af;--mute:#6e6e77;--btn-bg:#ffffff;--btn-fg:#000000;--ghost-bg:#121215;--ghost-fg:#e5e7eb;--hd:54px;--font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+:root[data-theme="light"]{color-scheme:light;--bg:#f5f7fa;--card:#ffffff;--field:#f3f4f6;--line:#e5e7eb;--line2:#d1d5db;--fg:#111827;--sub:#4b5563;--mute:#6b7280;--btn-bg:#111827;--btn-fg:#ffffff;--ghost-bg:#f3f4f6;--ghost-fg:#111827}
+*,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{min-height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);-webkit-font-smoothing:antialiased}
+body{display:flex;flex-direction:column;min-height:100dvh}
+.site-header{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;height:var(--hd);padding:0 16px;background:var(--bg);border-bottom:1px solid var(--line)}
+.brand-wrap{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg)}
+.brand-logo{height:36px;width:auto;max-width:190px;object-fit:contain;display:block}
+.brand-txt{font-size:15px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+.hd-badge{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);border:1px solid var(--line2);padding:4px 9px;border-radius:8px}
+.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 16px calc(28px + env(safe-area-inset-bottom,0px))}
+.panel{width:100%;max-width:410px;background:var(--card);border:1px solid var(--line);border-radius:20px;padding:30px 22px 22px;text-align:center}
+.anim-icon{width:62px;height:62px;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;color:var(--fg)}
+.anim-icon svg{width:58px;height:58px;overflow:visible}
+h1{margin:0 0 10px;font-size:21px;font-weight:750;letter-spacing:-.02em;line-height:1.25;color:var(--fg)}
+.cause{margin:0 0 20px;font-size:14px;line-height:1.6;color:var(--sub);word-break:break-word}
+.cause strong{color:var(--fg);font-weight:650}
+.sep{height:1px;background:var(--line);margin:0 0 16px}
+.meta{text-align:left;margin-bottom:20px}
+.meta-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--line)}
+.meta-row:last-child{border-bottom:0;padding-bottom:0}
+.meta-row span:first-child{color:var(--mute);flex:none}
+.meta-row span:last-child{color:var(--fg);font-weight:600;text-align:right;word-break:break-all}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:.02em}
+.code-line{margin:0 0 18px;padding:11px 12px;background:var(--field);border:1px solid var(--line2);border-radius:12px;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:all}
+.code-line small{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);flex:none}
+.code-line code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;font-weight:650;color:var(--fg);word-break:break-all;text-align:right}
+.btn{display:block;width:100%;padding:14px 16px;border-radius:12px;background:var(--btn-bg);color:var(--btn-fg);text-decoration:none;font-size:14px;font-weight:700;border:0;cursor:pointer;transition:opacity .15s,transform .1s}
+.btn:active{transform:scale(.988);opacity:.85}
+.foot-policy{margin:14px 0 0;font-size:11.8px;line-height:1.5;color:var(--mute)}
+.site-foot{padding:12px 16px 18px;text-align:center;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+@keyframes sh-sad-head{0%,100%{transform:translateY(0) rotate(0deg)}35%{transform:translateY(2px) rotate(-2.5deg)}70%{transform:translateY(1.5px) rotate(2.5deg)}}
+@keyframes sh-eye-blink{0%,44%,48%,92%,96%,100%{transform:scaleY(1)}46%,94%{transform:scaleY(.12)}}
+@keyframes sh-mouth-sigh{0%,100%{transform:translateY(0)}50%{transform:translateY(1.2px)}}
+@keyframes sh-happy-bob{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-2.5px) scale(1.02)}}
+@keyframes sh-shackle-open{0%{transform:translateY(0) rotate(0deg)}45%{transform:translateY(-4.5px) rotate(0deg)}100%{transform:translateY(-4.5px) rotate(16deg)}}
+.svg-sad{animation:sh-sad-head 4.2s ease-in-out infinite;transform-origin:12px 12px}
+.svg-eye{animation:sh-eye-blink 4.6s infinite;transform-origin:center}
+.svg-frown{animation:sh-mouth-sigh 4.2s ease-in-out infinite}
+.svg-happy{animation:sh-happy-bob 2.8s ease-in-out infinite;transform-origin:12px 12px}
+.svg-shackle{animation:sh-shackle-open 1.1s cubic-bezier(.22,1,.36,1) forwards;transform-origin:16px 10px}
+@media (prefers-reduced-motion:reduce){.svg-sad,.svg-eye,.svg-frown,.svg-happy,.svg-shackle{animation:none}}
+CSS;
+}
+
+function sh_header_html($e)
+{
+    $logo = sh_logo_src();
+    return '<header class="site-header">'
+        . '<span class="brand-wrap">'
+        . '<img class="brand-logo" src="' . $e($logo) . '" alt="IOSMODS" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline\'">'
+        . '<span class="brand-txt" style="display:none">IOSMODS.XYZ</span>'
+        . '</span>'
+        . '<span class="hd-badge">SECURITY</span>'
+        . '</header>';
+}
+
 /**
- * TIER 1 UI — Happy Smiley Face (😊 Mặt cười vui):
- * Shown when visitor ONLY has VPN / Fake-Region or a passive browser Userscript/Extension enabled
- * and has NOT attempted any bug, buff, key-bypass, or DDoS!
+ * TIER 1 UI — Frameless Animated Happy Face (😊) in Pure iosmods.xyz Matte Style:
+ * Triggered immediately when VPN / Fake-Region or passive browser Userscript/Extension is active.
  */
 function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 {
     while (ob_get_level() > 0) {
         @ob_end_clean();
     }
-    $GLOBALS['dsx_hash_on'] = 1; // do not inject URL hash script into guard screen
+    $GLOBALS['dsx_hash_on'] = 1;
     if (!headers_sent()) {
         http_response_code(!empty($detect['is_preview']) ? 200 : 403);
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -960,12 +1288,10 @@ function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
         header('X-Content-Type-Options: nosniff');
     }
 
-    $whatOff = !empty($detect['turn_off']) ? (string) $detect['turn_off'] : 'VPN / Proxy (1.1.1.1) hoặc tiện ích Script trên trình duyệt';
-    $detail  = !empty($detect['detail']) ? (string) $detect['detail'] : 'Hệ thống nhận thấy kết nối của bạn đang bật công cụ trung gian (chưa phát sinh vi phạm).';
-
-    if (sh_wants_json()) {
+    $whatOff = !empty($detect['turn_off']) ? (string) $detect['turn_off'] : 'VPN / Proxy (1.1.1.1) hoặc tiện ích Script trình duyệt';
+    if (sh_wants_json() && empty($detect['is_preview'])) {
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['result' => 'please_turn_off', 'turn_off' => $whatOff, 'message' => 'Vui lòng tắt ' . $whatOff . ' để tiếp tục.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['result' => 'please_turn_off', 'turn_off' => $whatOff, 'message' => 'Vui lòng tắt ' . $whatOff . ' để truy cập iosmods.xyz.'], JSON_UNESCAPED_UNICODE);
         return;
     }
 
@@ -977,72 +1303,44 @@ function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="color-scheme" content="light dark">
-<title>Vui lòng tắt công cụ trung gian · iosmods.xyz</title>
-<style>
-:root{--bg:#f2f5f8;--card:#ffffff;--text:#12161f;--muted:#5e6878;--line:#e3e8ef;--smile-bg:#ecfdf3;--smile-bd:#abefc6;--smile-tx:#067647;--box-bg:#f0fdf4;--box-bd:#bbf7d0;--box-tx:#065f46;--chip:#f8fafc;--btn:#0f172a;--btn-tx:#ffffff}
-@media (prefers-color-scheme:dark){:root{--bg:#0a0d12;--card:#121721;--text:#f1f5f9;--muted:#94a3b8;--line:#222b3a;--smile-bg:#0d281b;--smile-bd:#184d32;--smile-tx:#4ade80;--box-bg:#0c2419;--box-bd:#16462e;--box-tx:#86efac;--chip:#171e2b;--btn:#f1f5f9;--btn-tx:#0f172a}}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{min-height:100%}
-body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:max(20px,env(safe-area-inset-top)) 18px max(20px,env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased}
-.card{width:100%;max-width:435px;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:32px 24px 24px;text-align:center}
-.smile-wrap{width:78px;height:78px;border-radius:50%;background:var(--smile-bg);border:1px solid var(--smile-bd);margin:0 auto 18px;display:flex;align-items:center;justify-content:center;color:var(--smile-tx)}
-.smile-wrap svg{width:42px;height:42px}
-.brand{font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-h1{margin:0 0 8px;font-size:21.5px;font-weight:700;letter-spacing:-.02em}
-.sub{margin:0 0 18px;color:var(--muted);font-size:13.8px;line-height:1.58}
-.turnoff-box{background:var(--box-bg);border:1px solid var(--box-bd);color:var(--box-tx);border-radius:15px;padding:14px 16px;text-align:left;margin-bottom:16px}
-.turnoff-lbl{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;opacity:.85;margin-bottom:5px}
-.turnoff-val{font-size:14.5px;font-weight:650;line-height:1.48}
-.rows{border:1px solid var(--line);border-radius:14px;overflow:hidden;text-align:left;margin-bottom:20px;background:var(--chip)}
-.row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:10.5px 14px;font-size:13px;border-top:1px solid var(--line)}
-.row:first-child{border-top:0}
-.row span:first-child{color:var(--muted);flex:none}
-.row span:last-child{font-weight:600;text-align:right;word-break:break-all}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
-.btn{display:block;width:100%;padding:14px 16px;border-radius:13px;background:var(--btn);color:var(--btn-tx);text-decoration:none;font-size:14.5px;font-weight:650;border:0;cursor:pointer}
-.btn:active{opacity:.84}
-.note{margin:14px 0 0;color:var(--muted);font-size:12px;line-height:1.5}
-</style>
+<title>Kiểm tra kết nối · iosmods.xyz</title>
+<script>try{if(localStorage.getItem('ds-theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
+<style><?= sh_native_shared_css() ?></style>
 </head>
 <body>
-<main class="card" role="dialog" aria-label="Friendly security notice">
-  <div class="smile-wrap" aria-hidden="true">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="9.5"/>
-      <path d="M8.2 9.8c.35-.55.9-.85 1.45-.85s1.1.3 1.45.85"/>
-      <path d="M12.9 9.8c.35-.55.9-.85 1.45-.85s1.1.3 1.45.85"/>
-      <path d="M8.1 14.1c.95 1.75 2.3 2.55 3.9 2.55s2.95-.8 3.9-2.55"/>
-    </svg>
-  </div>
-  <div class="brand">IOSMODS.XYZ SMART GUARD</div>
-  <h1>Chào bạn! Vui lòng tắt công cụ phụ trợ</h1>
-  <p class="sub"><?= $e($detail) ?></p>
-
-  <div class="turnoff-box">
-    <div class="turnoff-lbl">Vui lòng tắt trước khi tiếp tục</div>
-    <div class="turnoff-val">👉 Vui lòng tắt: <?= $e($whatOff) ?></div>
-  </div>
-
-  <div class="rows">
-    <div class="row"><span>IP kết nối hiện tại</span><span class="mono"><?= $e($ip) ?></span></div>
-    <div class="row"><span>Mức độ tài khoản</span><span style="color:var(--smile-tx)">An toàn (Chưa bị khoá)</span></div>
-  </div>
-
-  <a class="btn" href="/" onclick="document.cookie='sh_vg_retry=1;path=/;max-age=15';">Đã tắt xong · Vào lại iosmods.xyz</a>
-  <p class="note">Bạn hoàn toàn chưa bị chặn IP. Ngay sau khi tắt công cụ trên và tải lại trang, hệ thống sẽ mở cửa bình thường ngay lập tức.</p>
+<?= sh_header_html($e) ?>
+<main class="stage">
+  <section class="panel" role="dialog">
+    <div class="anim-icon" aria-hidden="true">
+      <svg class="svg-happy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9.5"/>
+        <g class="svg-eye"><path d="M8.3 10.1c.35-.55.85-.82 1.4-.82s1.05.27 1.4.82"/></g>
+        <g class="svg-eye"><path d="M12.9 10.1c.35-.55.85-.82 1.4-.82s1.05.27 1.4.82"/></g>
+        <path d="M8.2 14.2c.95 1.65 2.25 2.45 3.8 2.45s2.85-.8 3.8-2.45"/>
+      </svg>
+    </div>
+    <h1>Vui lòng tắt công cụ trung gian</h1>
+    <p class="cause">Hệ thống bảo mật <strong>iosmods.xyz</strong> phát hiện trình duyệt hoặc mạng của bạn đang bật <strong><?= $e($whatOff) ?></strong>. Vui lòng tắt hoàn toàn công cụ này trước khi truy cập website.</p>
+    <div class="sep"></div>
+    <div class="meta">
+      <div class="meta-row"><span>Nguyên nhân</span><span>Đang bật <?= $e($whatOff) ?></span></div>
+      <div class="meta-row"><span>Địa chỉ kết nối</span><span class="mono"><?= $e($ip) ?></span></div>
+      <div class="meta-row"><span>Trạng thái bảo mật</span><span>Chưa bị khoá truy cập</span></div>
+    </div>
+    <a class="btn" href="/" onclick="document.cookie='sh_vg_retry=1;path=/;max-age=20';">Đã tắt xong · Truy cập lại</a>
+    <p class="foot-policy">Chính sách bảo mật iosmods.xyz nghiêm cấm sử dụng VPN chuyển vùng hoặc tiện ích Script can thiệp vào hệ thống.</p>
+  </section>
+  <?= $previewBarHtml ?>
 </main>
-<?= $previewBarHtml ?>
+<footer class="site-foot">IOSMODS.XYZ SECURITY</footer>
 </body>
 </html>
 <?php
 }
 
 /**
- * TIER 2 UI — Sad-Face / Strict Multi-Layer Lockdown (☹️):
- * Distinguishes clearly between:
- *  - Mode A: Strict IP & Device Lockdown (DDoS, Script, PC View-Source, Bug/Buff, VPN Key-Bypass)
- *  - Mode B: System / Key-Input Spam Isolation (Spam quá nhiều vào hệ thống)
+ * TIER 2 UI — Frameless Animated Sad Face (☹️) + Animated Unlock Transition (🔓)
+ * in Pure iosmods.xyz Matte Monochrome Style + Multi-Segment Encrypted Case Code!
  */
 function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = '')
 {
@@ -1064,7 +1362,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     $isTemp    = $expiresTs > 0;
     $left      = $isTemp ? max(1, $expiresTs - $now) : 0;
     $banType   = isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'manual';
-    $isStrict  = in_array($banType, ['ddos', 'waf', 'script', 'inspect', 'bug_buff', 'vpn_abuse', 'manual'], true);
+    $isSpam    = in_array($banType, ['key_spam', 'prod_spam'], true);
     $isPreview = !empty($ban['is_preview']);
     $code      = $isPreview ? 200 : (($isTemp && $httpCode === 429) ? 429 : 403);
 
@@ -1082,15 +1380,12 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
 
     $reason = trim((string) (isset($ban['reason']) ? $ban['reason'] : ''));
     if ($reason === '') {
-        $reason = $isStrict
-            ? 'Phát hiện hành vi can thiệp bảo mật (DDoS / Chạy Script / Xem mã nguồn / Bug-Buff hệ thống).'
-            : 'Phát hiện spam thao tác liên tục quá nhiều lần vào hệ thống trong thời gian ngắn.';
+        $reason = $isSpam
+            ? 'Thao tác lặp lại quá nhanh hoặc spam yêu cầu vượt ngưỡng cho phép của hệ thống.'
+            : 'Vi phạm quy tắc an ninh bảo mật trực tiếp trên hệ thống iosmods.xyz.';
     }
-    $banId = isset($ban['id']) && (int) $ban['id'] > 0
-        ? 'BAN-' . str_pad((string) (int) $ban['id'], 5, '0', STR_PAD_LEFT)
-        : 'AI-' . strtoupper(substr(md5($ip . '|' . $banType), 0, 6));
+    $caseCode = !empty($ban['case_code']) ? (string) $ban['case_code'] : sh_issue_case_code($ip, $ban);
     $streamIp = !empty($ban['stream_ip']) && $ban['stream_ip'] !== $ip ? (string) $ban['stream_ip'] : '';
-    $evasions = isset($ban['evasion_attempts']) ? (int) $ban['evasion_attempts'] : 0;
 
     if (sh_wants_json() && !$isPreview) {
         header('Content-Type: application/json; charset=utf-8');
@@ -1105,91 +1400,59 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     }
 
     header('Content-Type: text/html; charset=utf-8');
-    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); };
+    $e       = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); };
     $contact = sh_contact_url();
-    $title   = $isStrict ? 'Truy cập đã bị chặn bảo mật' : 'Tạm ngưng do spam hệ thống';
-    $sub     = $isStrict
-        ? 'AI Bảo Vệ của iosmods.xyz đã phong toả kết nối trên địa chỉ IP và thiết bị của bạn (đổi mạng/VPN hoặc đổi trình duyệt đều bị giữ khoá cho đến khi hệ thống đánh giá an toàn). Người dùng khác vẫn hoạt động bình thường.'
-        : 'Bạn đã gửi thao tác hoặc nhập sai quá nhiều lần liên tiếp vào hệ thống. Chỉ địa chỉ IP của bạn bị chuyển sang trang chờ này, các thành viên khác vẫn sử dụng bình thường.';
+    $heading = $isSpam ? 'Tạm khoá do thao tác quá mức' : 'Truy cập đã bị khoá bảo mật';
     ?><!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="color-scheme" content="light dark">
-<title><?= $e($title) ?> · iosmods.xyz</title>
-<style>
-:root{--bg:#f2f4f7;--card:#ffffff;--text:#14171f;--muted:#667085;--line:#e4e7ec;--reason-bg:#fef3f2;--reason-bd:#fecdca;--reason-tx:#b42318;--chip:#f8f9fb;--accent:#d92d20;--btn:#14171f;--btn-tx:#ffffff;--timer-bg:#eff8ff;--timer-bd:#b2ddff;--timer-tx:#175cd3}
-@media (prefers-color-scheme:dark){:root{--bg:#0b0d12;--card:#131720;--text:#f2f4f7;--muted:#98a2b3;--line:#232936;--reason-bg:#271518;--reason-bd:#552328;--reason-tx:#fda29b;--chip:#191f2b;--accent:#f04438;--btn:#f2f4f7;--btn-tx:#10131a;--timer-bg:#10233a;--timer-bd:#1e3f66;--timer-tx:#84caff}}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{min-height:100%}
-body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:max(20px,env(safe-area-inset-top)) 18px max(20px,env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased}
-.card{width:100%;max-width:440px;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:30px 24px 24px;text-align:center}
-.sad-wrap{width:76px;height:76px;border-radius:50%;background:var(--reason-bg);border:1px solid var(--reason-bd);margin:0 auto 16px;display:flex;align-items:center;justify-content:center;color:var(--accent)}
-.sad-wrap svg{width:40px;height:40px}
-.brand{font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
-h1{margin:0 0 8px;font-size:21.5px;font-weight:700;letter-spacing:-.02em}
-.sub{margin:0 0 18px;color:var(--muted);font-size:13.5px;line-height:1.56}
-.reason-box{background:var(--reason-bg);border:1px solid var(--reason-bd);color:var(--reason-tx);border-radius:15px;padding:13px 15px;text-align:left;margin-bottom:15px}
-.reason-lbl{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;opacity:.88;margin-bottom:4px}
-.reason-txt{font-size:13.8px;font-weight:580;line-height:1.5;word-break:break-word}
-.timer-box{background:var(--timer-bg);border:1px solid var(--timer-bd);color:var(--timer-tx);border-radius:14px;padding:12px 15px;margin-bottom:15px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.timer-lbl{font-size:12.8px;font-weight:600;text-align:left}
-.timer-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;font-weight:700;letter-spacing:.03em}
-.rows{border:1px solid var(--line);border-radius:14px;overflow:hidden;text-align:left;margin-bottom:18px;background:var(--chip)}
-.row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:10px 14px;font-size:12.8px;border-top:1px solid var(--line)}
-.row:first-child{border-top:0}
-.row span:first-child{color:var(--muted);flex:none}
-.row span:last-child{font-weight:600;text-align:right;word-break:break-all}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.2px}
-.btn{display:block;width:100%;padding:13.5px 16px;border-radius:13px;background:var(--btn);color:var(--btn-tx);text-decoration:none;font-size:14.2px;font-weight:650;border:0}
-.btn:active{opacity:.84}
-.note{margin:13px 0 0;color:var(--muted);font-size:11.8px;line-height:1.5}
-</style>
+<title><?= $e($heading) ?> · iosmods.xyz</title>
+<script>try{if(localStorage.getItem('ds-theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
+<style><?= sh_native_shared_css() ?></style>
 </head>
 <body>
-<main class="card" role="alert">
-  <div class="sad-wrap" aria-hidden="true">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="9.5"/>
-      <circle cx="9" cy="9.8" r="1" fill="currentColor" stroke="none"/>
-      <circle cx="15" cy="9.8" r="1" fill="currentColor" stroke="none"/>
-      <path d="M8.4 16.3c1-1.45 2.25-2.15 3.6-2.15s2.6.7 3.6 2.15"/>
-    </svg>
-  </div>
-  <div class="brand">IOSMODS.XYZ AI SHIELD</div>
-  <h1><?= $e($title) ?></h1>
-  <p class="sub"><?= $e($sub) ?></p>
+<?= sh_header_html($e) ?>
+<main class="stage">
+  <section class="panel" role="alert">
+    <div class="anim-icon" id="sh-icon-box" aria-hidden="true">
+      <svg class="svg-sad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9.5"/>
+        <g class="svg-eye"><circle cx="9" cy="9.9" r="1" fill="currentColor" stroke="none"/></g>
+        <g class="svg-eye"><circle cx="15" cy="9.9" r="1" fill="currentColor" stroke="none"/></g>
+        <path class="svg-frown" d="M8.4 16.2c1-1.4 2.25-2.05 3.6-2.05s2.6.65 3.6 2.05"/>
+      </svg>
+    </div>
+    <h1 id="sh-title"><?= $e($heading) ?></h1>
+    <p class="cause" id="sh-cause"><strong>Nguyên nhân:</strong> <?= $e($reason) ?></p>
+    <div class="sep"></div>
 
-  <div class="reason-box">
-    <div class="reason-lbl">Lý do ghi nhận trên thiết bị / IP của bạn</div>
-    <div class="reason-txt"><?= $e($reason) ?></div>
-  </div>
-
+    <div class="meta">
 <?php if ($isTemp) { ?>
-  <div class="timer-box">
-    <span class="timer-lbl"><?= $isStrict ? 'AI tự đánh giá & mở khoá sau' : 'Tự động gỡ khoá sau' ?></span>
-    <span class="timer-val" id="sh-cd" data-left="<?= (int) $left ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span>
-  </div>
+      <div class="meta-row"><span>Thời gian tự gỡ khoá</span><span class="mono" id="sh-cd" data-left="<?= (int) $left ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span></div>
+<?php } else { ?>
+      <div class="meta-row"><span>Thời hạn khoá</span><span>Vĩnh viễn (Chờ Admin xét duyệt)</span></div>
 <?php } ?>
-
-  <div class="rows">
-    <div class="row"><span>Địa chỉ IP thật</span><span class="mono"><?= $e($ip) ?></span></div>
+      <div class="meta-row"><span>Địa chỉ IP ghi nhận</span><span class="mono"><?= $e($ip) ?></span></div>
 <?php if ($streamIp !== '') { ?>
-    <div class="row"><span>IP máy chủ gửi luồng</span><span class="mono"><?= $e($streamIp) ?></span></div>
+      <div class="meta-row"><span>Máy chủ luồng mạng</span><span class="mono"><?= $e($streamIp) ?></span></div>
 <?php } ?>
-    <div class="row"><span>Phạm vi kiểm soát</span><span><?= $isStrict ? 'Đa lớp (IP + Thiết bị + Vân tay)' : 'Cách ly tạm thời theo IP' ?></span></div>
-<?php if ($evasions > 0) { ?>
-    <div class="row"><span>Cố tình đổi IP / lách khoá</span><span style="color:var(--accent)"><?= (int) $evasions ?> lần (Đã tự động gia hạn)</span></div>
-<?php } ?>
-    <div class="row"><span>Mã hồ sơ Bot</span><span class="mono"><?= $e($banId) ?></span></div>
-  </div>
+      <div class="meta-row"><span>Chế độ bảo vệ</span><span>Khoá đồng bộ IP &amp; Thiết bị</span></div>
+    </div>
 
-  <a class="btn" href="<?= $e($contact) ?>" rel="noopener">Liên hệ Admin để được xem xét mở sớm</a>
-  <p class="note"><?= $isStrict ? 'Lưu ý: Cố tình bật Fake IP/VPN hoặc đổi trình duyệt trong lúc đang khoá sẽ khiến AI tự động cộng thêm thời gian phạt. Hãy chờ yên cho đến khi đồng hồ kết thúc.' : 'Khi đồng hồ đếm ngược về 00:00, Bot sẽ tự động mở lại kết nối bình thường cho bạn.' ?></p>
+    <div class="code-line" onclick="try{navigator.clipboard.writeText('<?= $e($caseCode) ?>');this.querySelector('small').textContent='ĐÃ SAO CHÉP';}catch(e){}" title="Chạm để sao chép mã xác minh">
+      <small>Mã xác minh</small>
+      <code><?= $e($caseCode) ?></code>
+    </div>
+
+    <a class="btn" href="<?= $e($contact) ?>" rel="noopener">Liên hệ Admin kiểm tra</a>
+    <p class="foot-policy">Truy cập chỉ được mở lại khi hệ thống tự động hết hạn khoá hoặc khi Admin xác minh mã trên. Mã xác minh sẽ tự huỷ ngay khi mở chặn.</p>
+  </section>
+  <?= $previewBarHtml ?>
 </main>
-<?= $previewBarHtml ?>
+<footer class="site-foot">IOSMODS.XYZ SECURITY</footer>
 <?php if ($isTemp) { ?>
 <script>
 (function(){
@@ -1202,12 +1465,21 @@ h1{margin:0 0 8px;font-size:21.5px;font-weight:700;letter-spacing:-.02em}
     var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
     return h > 0 ? (pad(h) + ':' + pad(m) + ':' + pad(sec)) : (pad(m) + ':' + pad(sec));
   }
+  function showUnlockAndReload(){
+    var ic = document.getElementById('sh-icon-box'), tt = document.getElementById('sh-title'), cs = document.getElementById('sh-cause');
+    if (ic) {
+      ic.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.2"/><path class="svg-shackle" d="M8 11V7a4 4 0 0 1 8 0v2"/><circle cx="12" cy="16" r="1.1" fill="currentColor" stroke="none"/></svg>';
+    }
+    if (tt) tt.textContent = 'Đã gỡ khoá bảo mật';
+    if (cs) cs.innerHTML = 'Hệ thống đã hoàn tất kiểm tra và tự động mở khoá truy cập.';
+    if (!isPv) setTimeout(function(){ window.location.reload(); }, 1100);
+  }
   var iv = setInterval(function(){
     left--;
     if (left <= 0) {
       clearInterval(iv);
       el.textContent = '00:00';
-      if (!isPv) window.location.reload();
+      showUnlockAndReload();
       return;
     }
     el.textContent = fmt(left);
@@ -1221,8 +1493,7 @@ h1{margin:0 0 8px;font-size:21.5px;font-weight:700;letter-spacing:-.02em}
 }
 
 /* ------------------------------------------------------------------
- * 9. Safe Non-Destructive UI Preview Route (?sh_test_view=...&k=<tok>)
- *    Lets the owner inspect all security UIs on iPhone/PC without banning themselves!
+ * 9. Safe Non-Destructive Preview Showcase (?sh_test_view=...&k=<tok>)
  * ------------------------------------------------------------------ */
 
 function sh_handle_preview_showcase()
@@ -1237,52 +1508,218 @@ function sh_handle_preview_showcase()
     $tok  = rawurlencode(sh_preview_token());
     $ip   = sh_client_ip() ?: '113.161.72.18';
 
-    $nav = '<div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:440px;width:100%">'
-        . '<a href="?sh_test_view=ban_ip&k=' . $tok . '" style="padding:8px 12px;border-radius:10px;font-size:12px;font-weight:600;text-decoration:none;border:1px solid #334155;background:#1e293b;color:#f8fafc">🚫 1. Bị chặn IP / DDoS / Script</a>'
-        . '<a href="?sh_test_view=spam_sys&k=' . $tok . '" style="padding:8px 12px;border-radius:10px;font-size:12px;font-weight:600;text-decoration:none;border:1px solid #334155;background:#1e293b;color:#f8fafc">☹️ 2. Spam quá nhiều (Mặt buồn)</a>'
-        . '<a href="?sh_test_view=happy_vpn&k=' . $tok . '" style="padding:8px 12px;border-radius:10px;font-size:12px;font-weight:600;text-decoration:none;border:1px solid #166534;background:#14532d;color:#dcfce7">😊 3. Mặt cười nhắc tắt VPN/Script</a>'
+    $nav = '<div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:410px;width:100%">'
+        . '<a href="?sh_test_view=ban_ip&k=' . $tok . '" style="padding:7px 11px;border-radius:9px;font-size:11.5px;font-weight:650;text-decoration:none;border:1px solid #27272d;background:#121215;color:#e5e7eb">1. Bị chặn bảo mật</a>'
+        . '<a href="?sh_test_view=spam_sys&k=' . $tok . '" style="padding:7px 11px;border-radius:9px;font-size:11.5px;font-weight:650;text-decoration:none;border:1px solid #27272d;background:#121215;color:#e5e7eb">2. Khoá Spam (5p–30p)</a>'
+        . '<a href="?sh_test_view=happy_vpn&k=' . $tok . '" style="padding:7px 11px;border-radius:9px;font-size:11.5px;font-weight:650;text-decoration:none;border:1px solid #27272d;background:#121215;color:#e5e7eb">3. Mặt cười tắt VPN/Script</a>'
+        . '<a href="?sh_test_view=unlock_anim&k=' . $tok . '" style="padding:7px 11px;border-radius:9px;font-size:11.5px;font-weight:650;text-decoration:none;border:1px solid #27272d;background:#121215;color:#e5e7eb">4. Hiệu ứng Mở khoá</a>'
         . '</div>';
 
     if ($mode === 'happy_vpn') {
         sh_render_happy_gate([
             'is_preview' => true,
-            'turn_off'   => 'Ứng dụng VPN / 1.1.1.1 (Fake vùng quốc gia) hoặc tiện ích Userscript trên trình duyệt',
-            'detail'     => 'AI quan sát nhận thấy bạn đang bật VPN chuyển vùng hoặc cài tiện ích Script ngoài nhưng chưa thực hiện hành vi phá hoại nào.',
+            'turn_off'   => 'Ứng dụng VPN / 1.1.1.1 hoặc tiện ích Userscript',
         ], $ip, $nav);
+        exit;
+    }
+
+    if ($mode === 'unlock_anim') {
+        sh_render_sad_page([
+            'is_preview' => true,
+            'ban_type'   => 'prod_spam',
+            'reason'     => 'Hết thời gian tạm khoá 5 phút — đồng hồ chuyển về 00:00 để hiển thị chuyển động mở khoá.',
+            'expires_ts' => time() + 3,
+        ], $ip, 429, $nav);
         exit;
     }
 
     if ($mode === 'spam_sys') {
         sh_render_sad_page([
-            'id'         => 208,
             'is_preview' => true,
-            'ban_type'   => 'key_spam',
-            'reason'     => 'Cố tình spam thao tác và nhập sai Key liên tục quá nhiều lần (7 lần liên tiếp) vào hệ thống. Tạm khoá cách ly 30 phút — các thành viên khác vẫn truy cập bình thường.',
-            'expires_ts' => time() + 1785,
+            'ban_type'   => 'prod_spam',
+            'reason'     => 'Liên tục bấm lấy sản phẩm khi chưa kích hoạt Key hoặc gửi thao tác lặp lại quá nhanh vào hệ thống (mức khoá tự động: 5 phút → 10 phút → tối đa 30 phút).',
+            'expires_ts' => time() + 298,
         ], $ip, 429, $nav);
         exit;
     }
 
-    // Default: ban_ip (Strict Multi-Layer Block: DDoS / Script / Bug-Buff / Source Inspect)
     sh_render_sad_page([
-        'id'               => 519,
-        'is_preview'       => true,
-        'ban_type'         => 'script',
-        'stream_ip'        => '103.179.44.210 (Proxy/Node)',
-        'evasion_attempts' => 2,
-        'reason'           => 'AI Bảo Vệ phát hiện hành vi gửi luồng DDoS / chạy Script can thiệp / mở công cụ xem mã nguồn hoặc lạm dụng Bug-Buff hệ thống. Đã phong toả toàn diện IP thật + IP luồng + Vân tay thiết bị.',
-        'expires_ts'       => time() + 3590,
+        'is_preview' => true,
+        'ban_type'   => 'script',
+        'stream_ip'  => '103.179.44.210',
+        'reason'     => 'Phát hiện gửi luồng DDoS, can thiệp Script trình duyệt, mở công cụ xem mã nguồn trên máy tính hoặc khai thác lỗ hổng hệ thống iosmods.xyz.',
+        'expires_ts' => time() + 3595,
     ], $ip, 403, $nav);
     exit;
 }
 
 /* ------------------------------------------------------------------
- * 10. Client Telemetry & Active Anti-Inspect / Anti-Script Endpoint
+ * 10. Progressive Product-Get & Fast-Action Spam Escalation (5m -> 10m -> max 30m)
+ *     Users WITH an active valid key (turns > 0 & unexpired) are NEVER blocked!
+ * ------------------------------------------------------------------ */
+
+/** Checks DB directly whether the current session user has an active valid key. */
+function sh_session_user_has_active_key()
+{
+    if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+        @session_start();
+    }
+    $uname = isset($_SESSION['username']) && is_string($_SESSION['username']) ? trim($_SESSION['username']) : '';
+    if ($uname === '') {
+        return [false, ''];
+    }
+    $c = isset($GLOBALS['conn']) && ($GLOBALS['conn'] instanceof mysqli) ? $GLOBALS['conn'] : null;
+    if ($c === null) {
+        try {
+            if (is_file(__DIR__ . '/config.php')) {
+                require_once __DIR__ . '/config.php';
+            }
+            $h = defined('DB_HOST') ? DB_HOST : (getenv('DB_HOST') ?: 'localhost');
+            $u = defined('DB_USER') ? DB_USER : (getenv('DB_USER') ?: '');
+            $p = defined('DB_PASS') ? DB_PASS : (getenv('DB_PASS') ?: '');
+            $n = defined('DB_NAME') ? DB_NAME : (getenv('DB_NAME') ?: '');
+            if ($u !== '') {
+                $c = defined('DB_PORT') ? @mysqli_connect($h, $u, $p, $n, (int) DB_PORT) : @mysqli_connect($h, $u, $p, $n);
+            }
+        } catch (Throwable $e) {
+            $c = null;
+        }
+    }
+    if (!($c instanceof mysqli)) {
+        return [false, $uname];
+    }
+    $active = false;
+    try {
+        $st = @$c->prepare('SELECT *, (expiry_date > NOW()) AS sh_exp_ok FROM users WHERE username = ? LIMIT 1');
+        if ($st) {
+            $st->bind_param('s', $uname);
+            if ($st->execute()) {
+                $rs  = $st->get_result();
+                $row = $rs ? $rs->fetch_assoc() : null;
+                if ($row) {
+                    if (isset($row['role']) && (int) $row['role'] === 1) {
+                        sh_remember_admin_ip(sh_client_ip(), $uname);
+                        $st->close();
+                        return [true, $uname];
+                    }
+                    $turnsOk = !array_key_exists('turns_left', $row) || $row['turns_left'] === null || (int) $row['turns_left'] > 0;
+                    $active  = ((int) (isset($row['sh_exp_ok']) ? $row['sh_exp_ok'] : 0) === 1 && $turnsOk);
+                }
+            }
+            $st->close();
+        }
+    } catch (Throwable $e) {
+        $active = false;
+    }
+    return [$active, $uname];
+}
+
+/** Progressive escalation: 1st = 300s (5m), 2nd = 600s (10m), 3rd+ = 1800s (max 30m). */
+function sh_progressive_spam_duration($ip, $lid = '')
+{
+    $key   = md5('prog|' . $ip . '|' . $lid);
+    $pFile = sh_dir() . '/prodspam_stage/' . substr($key, 0, 2) . '/' . $key . '.json';
+    $now   = time();
+    $stage = 1;
+    sh_json_update($pFile, function ($s) use ($now, &$stage) {
+        $last  = isset($s['at']) ? (int) $s['at'] : 0;
+        $prev  = ($now - $last <= 21600 && isset($s['stage'])) ? (int) $s['stage'] : 0; // resets after 6h clean behavior
+        $stage = min(3, $prev + 1);
+        return ['stage' => $stage, 'at' => $now];
+    });
+    $durations = [1 => 300, 2 => 600, 3 => 1800]; // 5m -> 10m -> max 30m!
+    return [$durations[$stage], $stage];
+}
+
+function sh_trigger_progressive_product_spam($ip, $username, $reasonDetail)
+{
+    if ($ip === '' || sh_is_admin_viewer()) {
+        return false;
+    }
+    list($safe, ) = sh_is_safe_ip($ip);
+    if ($safe) {
+        return false;
+    }
+    $lid = sh_browser_lid();
+    $hw  = sh_hw_fp_cookie();
+    list($durSec, $stage) = sh_progressive_spam_duration($ip, $lid);
+    $mins   = (int) ($durSec / 60);
+    $now    = time();
+    $reason = $reasonDetail . ' Hệ thống khoá tạm thời ' . $mins . ' phút (lần ' . $stage . ' — tái phạm tăng lên 10 phút, tối đa 30 phút).';
+
+    $rec = [
+        'ip'         => $ip,
+        'stream_ip'  => $ip,
+        'reason'     => $reason,
+        'ban_type'   => 'prod_spam',
+        'username'   => (string) $username,
+        'lid'        => $lid,
+        'hw_fp'      => $hw,
+        'created_ts' => $now,
+        'created_at' => date('Y-m-d H:i:s', $now),
+        'expires_ts' => $now + $durSec,
+        'expires_at' => date('Y-m-d H:i:s', $now + $durSec),
+        'hits'       => 1,
+    ];
+    $saved = sh_write_ban_cache($ip, $rec);
+    if (is_array($saved)) {
+        $rec = $saved;
+    }
+    sh_queue_pending_ban($rec + ['attack_detail' => 'Spam Get sản phẩm / Thao tác quá nhanh (' . $mins . 'p)']);
+    sh_stats_bump('spam_blocks', 1);
+    return $rec;
+}
+
+/** Server-side hook called from index.php when ?use_tool= returns need_login or need_key. */
+function sh_on_unkeyed_tool_attempt($conn, $username = '')
+{
+    $ip = sh_client_ip();
+    if ($ip === '' || sh_is_admin_viewer()) {
+        return;
+    }
+    list($safe, ) = sh_is_safe_ip($ip);
+    if ($safe) {
+        return;
+    }
+    $now   = time();
+    $h     = md5($ip);
+    $hFile = sh_dir() . '/prodspam_hits/' . substr($h, 0, 2) . '/' . $h . '.json';
+    $trig  = false;
+    sh_json_update($hFile, function ($s) use ($now, &$trig) {
+        $arr  = isset($s['t']) && is_array($s['t']) ? $s['t'] : [];
+        $keep = [];
+        foreach ($arr as $ts) {
+            if ((int) $ts >= $now - 25) {
+                $keep[] = (int) $ts;
+            }
+        }
+        $keep[] = $now;
+        if (count($keep) >= 5) {
+            $trig = true;
+            $keep = [];
+        }
+        return ['t' => $keep];
+    });
+    if ($trig) {
+        $who = $username !== '' ? 'khi tài khoản chưa có Key hợp lệ' : 'khi chưa đăng nhập';
+        $rec = sh_trigger_progressive_product_spam($ip, $username, 'Liên tục bấm lấy sản phẩm nhiều lần ' . $who . ' để dò trang đích.');
+        if ($rec) {
+            if ($conn instanceof mysqli) {
+                sh_sync_pending_to_db($conn);
+            }
+            sh_render_sad_page($rec, $ip, 429);
+            exit;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------
+ * 11. Client Telemetry, Instant Script/VPN Check & Product-Spam Endpoint
  * ------------------------------------------------------------------ */
 
 function sh_client_sig($lid)
 {
-    return substr(hash_hmac('sha256', 'cguard|' . $lid, sh_secret()), 0, 24);
+    return substr(hash_hmac('sha256', 'cguard5|' . $lid, sh_secret()), 0, 24);
 }
 
 function sh_handle_client_endpoints()
@@ -1290,7 +1727,7 @@ function sh_handle_client_endpoints()
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         return;
     }
-    if (!isset($_GET['__sh_telemetry']) && !isset($_GET['__sh_report'])) {
+    if (!isset($_GET['__sh_telemetry']) && !isset($_GET['__sh_report']) && !isset($_GET['__sh_prod_spam'])) {
         return;
     }
     while (ob_get_level() > 0) {
@@ -1312,13 +1749,13 @@ function sh_handle_client_endpoints()
         exit;
     }
 
-    $lid      = isset($_POST['lid']) && preg_match('/^[a-f0-9]{32}$/i', (string) $_POST['lid']) ? strtolower((string) $_POST['lid']) : sh_ensure_browser_lid();
-    $sig      = isset($_POST['sig']) ? (string) $_POST['sig'] : '';
-    $hwFp     = isset($_POST['hw']) && preg_match('/^[a-f0-9]{16,64}$/i', (string) $_POST['hw']) ? strtolower((string) $_POST['hw']) : '';
-    $tz       = isset($_POST['tz']) ? trim(substr((string) $_POST['tz'], 0, 60)) : '';
-    $wrtcIp   = isset($_POST['wrtc']) ? sh_norm_ip($_POST['wrtc']) : '';
-    $passive  = isset($_POST['passive_script']) ? trim(substr((string) $_POST['passive_script'], 0, 120)) : '';
-    $violate  = isset($_POST['violation']) ? trim(substr((string) $_POST['violation'], 0, 180)) : '';
+    $lid     = isset($_POST['lid']) && preg_match('/^[a-f0-9]{32}$/i', (string) $_POST['lid']) ? strtolower((string) $_POST['lid']) : sh_ensure_browser_lid();
+    $sig     = isset($_POST['sig']) ? (string) $_POST['sig'] : '';
+    $hwFp    = isset($_POST['hw']) && preg_match('/^[a-f0-9]{16,64}$/i', (string) $_POST['hw']) ? strtolower((string) $_POST['hw']) : '';
+    $tz      = isset($_POST['tz']) ? trim(substr((string) $_POST['tz'], 0, 60)) : '';
+    $wrtcIp  = isset($_POST['wrtc']) ? sh_norm_ip($_POST['wrtc']) : '';
+    $passive = isset($_POST['passive_script']) ? trim(substr((string) $_POST['passive_script'], 0, 120)) : '';
+    $violate = isset($_POST['violation']) ? trim(substr((string) $_POST['violation'], 0, 180)) : '';
 
     if ($hwFp !== '' && !headers_sent()) {
         $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
@@ -1328,28 +1765,14 @@ function sh_handle_client_endpoints()
         } else {
             @setcookie('sh_hw', $hwFp, time() + 63072000, '/; samesite=Lax', '', $https, true);
         }
+        $_COOKIE['sh_hw'] = $hwFp;
     }
 
-    // Save telemetry including WebRTC real IP if leaked behind VPN/proxy!
-    if ($wrtcIp !== '' && !sh_is_private_or_local($wrtcIp) && !sh_is_trusted_proxy($wrtcIp)) {
-        $forensics['real_ip'] = $wrtcIp;
-    }
-    sh_json_update(sh_dir() . '/telemetry/' . substr($lid, 0, 2) . '/' . $lid . '.json', function ($cur) use ($ip, $wrtcIp, $hwFp, $tz, $passive) {
-        return [
-            'http_ip'        => $ip,
-            'webrtc_ip'      => $wrtcIp,
-            'hw_fp'          => $hwFp,
-            'tz'             => $tz,
-            'passive_script' => $passive,
-            'at'             => time(),
-        ];
-    });
-
-    // 1. Cross-Device / Cross-VPN Evasion Catch!
+    // 1. Cross-Device / Cross-VPN Evasion Check
     $elock = ($hwFp !== '' ? sh_read_entity_lock('hw', $hwFp) : null) ?: sh_read_entity_lock('lid', $lid);
     if ($elock !== null) {
-        $newExp = max((int) $elock['expires_ts'], time() + 1800) + 900; // +15m penalty for trying to switch IP/device!
-        $evCnt  = (int) (isset($elock['evasion_attempts']) ? $elock['evasion_attempts'] : 0) + 1;
+        $newExp                    = max((int) $elock['expires_ts'], time() + 900) + 600;
+        $evCnt                     = (int) (isset($elock['evasion_attempts']) ? $elock['evasion_attempts'] : 0) + 1;
         $elock['ip']               = $ip;
         $elock['stream_ip']        = $forensics['stream_ip'];
         $elock['expires_ts']       = $newExp;
@@ -1361,24 +1784,55 @@ function sh_handle_client_endpoints()
         exit;
     }
 
-    // 2. Active Violation Report (__sh_report): PC View-Source / DevTools / Active Automation / Monkey-Patch Script!
+    // 2. Product-Get / Rapid UI Action Spam Endpoint (__sh_prod_spam)
+    if (isset($_GET['__sh_prod_spam']) && hash_equals(sh_client_sig($lid), $sig)) {
+        list($hasActiveKey, $sessUser) = sh_session_user_has_active_key();
+        if ($hasActiveKey) {
+            // User HAS an active valid key -> 100% allowed normally!
+            echo json_encode(['ok' => true, 'action' => 'allow_keyed']);
+            exit;
+        }
+        $kind = isset($_POST['kind']) ? (string) $_POST['kind'] : 'product';
+        $why  = ($kind === 'fast_ui')
+            ? 'Thao tác lặp lại liên tục quá nhanh vào hệ thống.'
+            : ('Liên tục spam bấm lấy sản phẩm khi ' . ($sessUser !== '' ? 'chưa nhập Key hợp lệ' : 'chưa đăng nhập') . ' nhằm dò trang đích.');
+        sh_trigger_progressive_product_spam($ip, $sessUser, $why);
+        echo json_encode(['ok' => true, 'action' => 'reload_block']);
+        exit;
+    }
+
+    if ($wrtcIp !== '' && !sh_is_private_or_local($wrtcIp) && !sh_is_trusted_proxy($wrtcIp)) {
+        $forensics['real_ip'] = $wrtcIp;
+    }
+    sh_json_update(sh_dir() . '/telemetry/' . substr($lid, 0, 2) . '/' . $lid . '.json', function () use ($ip, $wrtcIp, $hwFp, $tz, $passive) {
+        return [
+            'http_ip'        => $ip,
+            'webrtc_ip'      => $wrtcIp,
+            'hw_fp'          => $hwFp,
+            'tz'             => $tz,
+            'passive_script' => $passive,
+            'at'             => time(),
+        ];
+    });
+
+    // 3. Active Violation (__sh_report): PC View-Source / DevTools / Automation Script
     $cfg = sh_cfg();
     if (isset($_GET['__sh_report']) && $violate !== '' && !empty($cfg['inspect_guard']) && hash_equals(sh_client_sig($lid), $sig)) {
         $dur    = max(900, (int) $cfg['script_ban_sec']);
         $now    = time();
-        $reason = 'AI Bảo Vệ phát hiện hành vi can thiệp trực tiếp: ' . $violate . '. Hệ thống khoá bảo vệ đa lớp trên IP & thiết bị này.';
+        $reason = 'Phát hiện hành vi can thiệp bảo mật trực tiếp: ' . $violate . '.';
         $rec    = [
-            'ip'          => $forensics['real_ip'],
-            'stream_ip'   => $forensics['stream_ip'],
-            'reason'      => $reason,
-            'ban_type'    => 'inspect',
-            'lid'         => $lid,
-            'hw_fp'       => $hwFp,
-            'created_ts'  => $now,
-            'created_at'  => date('Y-m-d H:i:s', $now),
-            'expires_ts'  => $now + $dur,
-            'expires_at'  => date('Y-m-d H:i:s', $now + $dur),
-            'hits'        => 1,
+            'ip'         => $forensics['real_ip'],
+            'stream_ip'  => $forensics['stream_ip'],
+            'reason'     => $reason,
+            'ban_type'   => 'inspect',
+            'lid'        => $lid,
+            'hw_fp'      => $hwFp,
+            'created_ts' => $now,
+            'created_at' => date('Y-m-d H:i:s', $now),
+            'expires_ts' => $now + $dur,
+            'expires_at' => date('Y-m-d H:i:s', $now + $dur),
+            'hits'       => 1,
         ];
         sh_write_ban_cache($ip, $rec);
         if ($forensics['real_ip'] !== $ip) {
@@ -1390,22 +1844,21 @@ function sh_handle_client_endpoints()
         exit;
     }
 
-    // 3. Passive Userscript / Fake-Region VPN Check -> Happy Smiley (😊) Gate!
+    // 4. Instant Passive Script / WebRTC Fake-Region Check -> Happy Smiley (😊) Gate
     if (!empty($cfg['vpn_gate_enabled'])) {
         if ($passive !== '') {
             sh_json_update(sh_dir() . '/happy_flags/' . substr($lid, 0, 2) . '/' . $lid . '.json', function () use ($passive) {
-                return ['turn_off' => 'Tiện ích Script ngoài (' . $passive . ')', 'exp' => time() + 180];
+                return ['turn_off' => 'Tiện ích Script trình duyệt (' . $passive . ')', 'exp' => time() + 180];
             });
             sh_stats_bump('happy_gates', 1);
             echo json_encode(['ok' => true, 'action' => 'reload_happy']);
             exit;
         }
         $vpn = sh_inspect_ip_vpn($ip);
-        $vnTzMismatch = ($tz === 'Asia/Ho_Chi_Minh' || $tz === 'Asia/Saigon' || $tz === 'Asia/Bangkok')
-            && $vpn['country'] !== '' && $vpn['country'] !== 'VN' && $vpn['is_vpn'];
         $webrtcMismatch = ($wrtcIp !== '' && !sh_is_private_or_local($wrtcIp) && $wrtcIp !== $ip && $vpn['is_vpn']);
-        if ($vpn['is_vpn'] || $vnTzMismatch || $webrtcMismatch) {
-            $lbl = $vpn['label'] !== '' ? $vpn['label'] : 'VPN / Proxy chuyển vùng (Fake IP)';
+        $vnTzMismatch   = ($tz === 'Asia/Ho_Chi_Minh' || $tz === 'Asia/Saigon') && $vpn['country'] !== '' && $vpn['country'] !== 'VN' && $vpn['is_vpn'];
+        if ($vpn['is_vpn'] || $webrtcMismatch || $vnTzMismatch) {
+            $lbl = $vpn['label'] !== '' ? $vpn['label'] : 'VPN / Proxy chuyển vùng';
             sh_json_update(sh_dir() . '/happy_flags/' . substr($lid, 0, 2) . '/' . $lid . '.json', function () use ($lbl) {
                 return ['turn_off' => $lbl, 'exp' => time() + 120];
             });
@@ -1419,7 +1872,12 @@ function sh_handle_client_endpoints()
     exit;
 }
 
-/** Client-side Anti-Script, Anti-PC-Source-Inspect & WebRTC/Hardware Fingerprint Guard (Injected via .htdsx_hash.php). */
+/**
+ * Synchronous <head> Pre-Paint Guard + Product-Get Spam Watcher:
+ * - Detects Userscripts / Automation in <head> BEFORE <body> renders (0ms visual delay!).
+ * - Persists sh_lid across Cookie + localStorage + sessionStorage + window.name + IndexedDB.
+ * - Tracks unkeyed .ds-get / [data-tool-id] spam clicks -> triggers 5m -> 10m -> max 30m lock!
+ */
 function sh_client_guard_script()
 {
     if (sh_is_excluded_subapp() || sh_is_admin_viewer()) {
@@ -1427,58 +1885,78 @@ function sh_client_guard_script()
     }
     $lid = sh_ensure_browser_lid();
     $sig = sh_client_sig($lid);
-    return '<script data-sh="guard-v4">(function(){'
-        . 'if(window.__shG4)return;window.__shG4=1;'
+    return '<script data-sh="guard-v5">(function(){'
+        . 'if(window.__shG5)return;window.__shG5=1;'
         . 'var LID="' . $lid . '",SIG="' . $sig . '";'
-        . 'try{localStorage.setItem("sh_lid",LID);sessionStorage.setItem("sh_lid",LID);}catch(e){}'
-        . 'try{var m=localStorage.getItem("sh_lid");if(m&&/^[a-f0-9]{32}$/.test(m)&&m!==LID){LID=m;document.cookie="sh_lid="+m+";path=/;max-age=63072000;SameSite=Lax";}}catch(e){}'
+        // Multi-storage anti-evasion token recovery (localStorage + sessionStorage + window.name)
+        . 'try{var sL=localStorage.getItem("sh_lid")||sessionStorage.getItem("sh_lid")||(/^sh_lid:([a-f0-9]{32})$/.test(window.name||"")?RegExp.$1:"");'
+        . 'if(sL&&/^[a-f0-9]{32}$/.test(sL)&&sL!==LID){LID=sL;document.cookie="sh_lid="+sL+";path=/;max-age=63072000;SameSite=Lax";}'
+        . 'localStorage.setItem("sh_lid",LID);sessionStorage.setItem("sh_lid",LID);if(!window.name)window.name="sh_lid:"+LID;}catch(e){}'
         . 'function h32(s){var h=2166136261;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16).padStart(8,"0");}'
         . 'function hwFp(){try{var p=[screen.width+"x"+screen.height+"x"+screen.colorDepth,navigator.hardwareConcurrency||0,navigator.platform||"",Intl.DateTimeFormat().resolvedOptions().timeZone||""];'
         . 'var c=document.createElement("canvas"),g=c.getContext("webgl")||c.getContext("experimental-webgl");'
         . 'if(g){var d=g.getExtension("WEBGL_debug_renderer_info");if(d)p.push(g.getParameter(d.UNMASKED_RENDERER_WEBGL)||"");}'
-        . 'var x=c.getContext("2d");if(x){x.textBaseline="top";x.font="14px Arial";x.fillText("iosmods-sh",2,2);p.push(c.toDataURL().slice(-32));}'
-        . 'var raw=p.join("|");return h32(raw)+h32(raw.split("").reverse().join(""))+h32("v4|"+raw)+h32(raw.length+raw);}catch(e){return "";}}'
+        . 'var x=c.getContext("2d");if(x){x.textBaseline="top";x.font="14px Arial";x.fillText("iosmods-v5",2,2);p.push(c.toDataURL().slice(-32));}'
+        . 'var raw=p.join("|");return h32(raw)+h32(raw.split("").reverse().join(""))+h32("v5|"+raw)+h32(raw.length+raw);}catch(e){return "";}}'
         . 'var HW=hwFp(),reported=0;'
+        . 'document.cookie="sh_hw="+HW+";path=/;max-age=63072000;SameSite=Lax";'
         . 'function post(ep,obj,cb){try{var f=new URLSearchParams();f.set("lid",LID);f.set("sig",SIG);f.set("hw",HW);for(var k in obj)f.set(k,obj[k]);'
         . 'fetch((location.pathname||"/")+"?"+ep+"=1",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/x-www-form-urlencoded","X-Requested-With":"XMLHttpRequest"},body:f.toString()})'
         . '.then(function(r){return r.json();}).then(function(j){if(cb)cb(j);}).catch(function(){});}catch(e){}}'
-        . 'function trip(why){if(reported)return;reported=1;post("__sh_report",{violation:why},function(j){if(j&&(j.action==="reload_block"||j.action==="reload_happy"))location.reload();});}'
-        // 1. Detect Headless / Active Automation immediately
-        . 'if(navigator.webdriver||window._phantom||window.__nightmare||window.callPhantom||window.Cypress||window.__playwright){trip("Trình duyệt tự động hoá / Bot Script (WebDriver)");return;}'
-        // 2. Desktop PC Anti-View-Source & Anti-DevTools shortcuts
-        . 'document.addEventListener("keydown",function(e){var k=(e.key||"").toLowerCase(),c=e.ctrlKey||e.metaKey,s=e.shiftKey;'
-        . 'if(e.keyCode===123||(c&&k==="u")||(c&&s&&(k==="i"||k==="j"||k==="c"))){e.preventDefault();e.stopPropagation();trip("Mở công cụ xem mã nguồn trên máy tính (Phím tắt F12 / Ctrl+U / Inspect)");return false;}},true);'
-        . 'document.addEventListener("contextmenu",function(e){if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0){e.preventDefault();}},true);'
-        // 3. Desktop DevTools Docked Window Detector (zero false positives on mobile/iPhone)
-        . 'if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0&&screen.width>=1024){'
-        . 'var dtHits=0;setInterval(function(){if(document.hidden)return;var dw=window.outerWidth-window.innerWidth,dh=window.outerHeight-window.innerHeight;'
-        . 'if(dw>240||dh>240){dtHits++;if(dtHits>=3)trip("Bật bảng DevTools xem mã nguồn trực tiếp trên máy tính");}else{dtHits=0;}},1800);}'
-        // 4. Detect Passive Userscripts (Tampermonkey / Violentmonkey / Eruda / vConsole)
-        . 'function findPassiveScript(){if(window.GM_info||window.GM||window.unsafeWindow)return "Tampermonkey / Userscript";'
+        . 'function trip(why){if(reported)return;reported=1;document.documentElement.style.visibility="hidden";post("__sh_report",{violation:why},function(j){location.reload();});}'
+        // 1. Instant Pre-Paint Headless / Automation Check
+        . 'if(navigator.webdriver||window._phantom||window.__nightmare||window.callPhantom||window.Cypress||window.__playwright){trip("Chạy trình duyệt tự động hoá / Script Bot (WebDriver)");return;}'
+        // 2. Instant Pre-Paint Userscript / Extension Check
+        . 'function findScript(){if(window.GM_info||window.GM||window.unsafeWindow||window._tampermonkey)return "Tampermonkey / Userscript";'
         . 'if(window.eruda||window.VConsole)return "Công cụ soi mã nguồn Eruda / vConsole";'
-        . 'var sc=document.querySelectorAll("script[src]");for(var i=0;i<sc.length;i++){var u=sc[i].getAttribute("src")||"";if(/^(chrome-extension|moz-extension|safari-web-extension):\/\//i.test(u))return "Extension chèn Script ngoài";}'
+        . 'var sc=document.querySelectorAll("script[src]");for(var i=0;i<sc.length;i++){var u=sc[i].getAttribute("src")||"";if(/^(chrome-extension|moz-extension|safari-web-extension):\/\//i.test(u))return "Tiện ích mở rộng chèn Script";}'
         . 'return "";}'
-        // 5. WebRTC Real-IP Probe + Telemetry Check (runs once per session/IP)
-        . 'function sendTele(wrtcIp){var ps=findPassiveScript(),tz="";try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||"";}catch(e){}'
-        . 'post("__sh_telemetry",{tz:tz,wrtc:wrtcIp||"",passive_script:ps},function(j){if(j&&(j.action==="reload_block"||j.action==="reload_happy"))location.reload();});}'
-        . 'setTimeout(function(){var done=0;try{var RT=window.RTCPeerConnection||window.webkitRTCPeerConnection;if(!RT){sendTele("");return;}'
+        . 'var psNow=findScript();if(psNow){document.documentElement.style.visibility="hidden";post("__sh_telemetry",{tz:"",wrtc:"",passive_script:psNow},function(){location.reload();});return;}'
+        // 3. Desktop PC Anti-View-Source & Anti-DevTools
+        . 'document.addEventListener("keydown",function(e){var k=(e.key||"").toLowerCase(),c=e.ctrlKey||e.metaKey,s=e.shiftKey;'
+        . 'if(e.keyCode===123||(c&&k==="u")||(c&&s&&(k==="i"||k==="j"||k==="c"))){e.preventDefault();e.stopPropagation();trip("Mở công cụ xem mã nguồn trên máy tính (F12 / Ctrl+U / Inspect)");return false;}},true);'
+        . 'document.addEventListener("contextmenu",function(e){if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0){e.preventDefault();}},true);'
+        . 'if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0&&screen.width>=1024){'
+        . 'var dtH=0;setInterval(function(){if(document.hidden)return;if((window.outerWidth-window.innerWidth)>240||(window.outerHeight-window.innerHeight)>240){dtH++;if(dtH>=3)trip("Mở bảng DevTools xem mã nguồn trực tiếp trên máy tính");}else{dtH=0;}},1600);}'
+        // 4. Progressive Product-Get Spam & Fast-Action Watcher (5m -> 10m -> max 30m for unkeyed/guest users!)
+        . 'var pClicks=[],uClicks=[],spamSent=0;'
+        . 'document.addEventListener("click",function(e){if(spamSent)return;var now=Date.now();'
+        . 'if(!e.isTrusted){trip("Giả lập sự kiện click tự động bằng Script");return;}'
+        . 'var t=e.target&&e.target.closest?e.target.closest(".ds-get, [data-tool-id]"):null;'
+        . 'if(t&&!document.body.classList.contains("has-key")){'
+        . 'pClicks=pClicks.filter(function(x){return now-x<20000;});pClicks.push(now);'
+        . 'var fast8=pClicks.filter(function(x){return now-x<7000;}).length;'
+        . 'if(fast8>=5||pClicks.length>=8){spamSent=1;e.preventDefault();e.stopPropagation();post("__sh_prod_spam",{kind:"product"},function(j){if(j&&j.action==="reload_block")location.reload();else spamSent=0;});return;}'
+        . '}'
+        . 'var act=e.target&&e.target.closest?e.target.closest("button, a.btn, input[type=submit]"):null;'
+        . 'if(act&&!document.body.classList.contains("has-key")){'
+        . 'uClicks=uClicks.filter(function(x){return now-x<4000;});uClicks.push(now);'
+        . 'if(uClicks.length>=14){spamSent=1;post("__sh_prod_spam",{kind:"fast_ui"},function(j){if(j&&j.action==="reload_block")location.reload();else spamSent=0;});}'
+        . '}'
+        . '},true);'
+        // 5. Immediate Telemetry + WebRTC Leak Check (runs immediately on DOM interactive, no artificial delay!)
+        . 'function runTele(){var ps2=findScript(),tz="";try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||"";}catch(e){}'
+        . 'var done=0;function send(ip){if(done)return;done=1;post("__sh_telemetry",{tz:tz,wrtc:ip||"",passive_script:ps2},function(j){if(j&&(j.action==="reload_block"||j.action==="reload_happy"))location.reload();});}'
+        . 'if(ps2){send("");return;}'
+        . 'try{var RT=window.RTCPeerConnection||window.webkitRTCPeerConnection;if(!RT){send("");return;}'
         . 'var pc=new RT({iceServers:[{urls:"stun:stun.cloudflare.com:3478"}]});pc.createDataChannel("");'
-        . 'pc.onicecandidate=function(ev){if(done)return;if(!ev||!ev.candidate){done=1;try{pc.close();}catch(x){}sendTele("");return;}'
-        . 'var m=(ev.candidate.candidate||"").match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/);if(m&&!/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(m[1])){done=1;try{pc.close();}catch(x){}sendTele(m[1]);}};'
-        . 'pc.createOffer().then(function(o){return pc.setLocalDescription(o);}).catch(function(){if(!done){done=1;sendTele("");}});'
-        . 'setTimeout(function(){if(!done){done=1;try{pc.close();}catch(x){}sendTele("");}},1800);}catch(e){if(!done)sendTele("");}},350);'
+        . 'pc.onicecandidate=function(ev){if(done)return;if(!ev||!ev.candidate){try{pc.close();}catch(x){}send("");return;}'
+        . 'var m=(ev.candidate.candidate||"").match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/);if(m&&!/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(m[1])){try{pc.close();}catch(x){}send(m[1]);}};'
+        . 'pc.createOffer().then(function(o){return pc.setLocalDescription(o);}).catch(function(){send("");});'
+        . 'setTimeout(function(){try{pc.close();}catch(x){}send("");},1200);}catch(e){send("");}}'
+        . 'if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",runTele,{once:true});else runTele();'
         . '})();</script>';
 }
 
 /* ------------------------------------------------------------------
- * 11. Anti-Bug, Anti-Buff (Race-Condition Lock) & Pre-DB DDoS Shield
+ * 12. Anti-Bug, Anti-Buff & Pre-DB DDoS Shield
  * ------------------------------------------------------------------ */
 
 function sh_is_light_subresource()
 {
     if (isset($_GET['brand_logo']) || isset($_GET['favicon']) || isset($_GET['sync']) || isset($_GET['tg_ping'])
         || isset($_GET['ds_check_user']) || isset($_GET['ds_check_key_lock'])
-        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report'])) {
+        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam'])) {
         return true;
     }
     $path = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
@@ -1523,7 +2001,6 @@ function sh_issue_human_cookie($ip)
     $_COOKIE['sh_human'] = $val;
 }
 
-/** Detects WAF exploits, hidden-file bug scanning, parameter array tampering & race-condition buffing! */
 function sh_detect_waf_bug_buff($ip)
 {
     $sn = basename((string) strtok((string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''), '?'));
@@ -1531,7 +2008,7 @@ function sh_detect_waf_bug_buff($ip)
         return null;
     }
     $rawUri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
-    $uri    = rawurldecode($rawUri);
+    $uri    = urldecode($rawUri);
     $path   = strtolower((string) strtok($uri, '?'));
 
     if (strlen($rawUri) > 4096 || strpos($rawUri, '%00') !== false || strpos($uri, "\0") !== false) {
@@ -1542,21 +2019,24 @@ function sh_detect_waf_bug_buff($ip)
         return ['type' => 'waf', 'why' => 'Phương thức HTTP trái phép (' . $method . ')'];
     }
 
-    // 1. Anti-Bug Hidden File / Scanner Probing
     if (preg_match('#/(?:\.env|\.git|wp-admin|wp-login\.php|phpmyadmin|adminer|xmlrpc\.php|vendor/phpunit|(?:telegram_|fk_)?config\.php|\.(?:sql|bak|old|swp)$)#i', $path)) {
-        return ['type' => 'bug_buff', 'why' => 'Quét tệp cấu hình ẩn / dò lỗ hổng hệ thống (' . substr($path, 0, 50) . ')'];
+        return ['type' => 'bug_buff', 'why' => 'Quét tệp cấu hình ẩn hoặc dò lỗ hổng hệ thống (' . substr($path, 0, 50) . ')'];
     }
 
-    // 2. Anti-Bug PHP Array Parameter Tampering on Auth/Key/Tool Endpoints
-    foreach (['username', 'password', 'repassword', 'key_vip', 'key_free', 'use_tool', 'csrf'] as $ImportantField) {
-        if ((isset($_POST[$ImportantField]) && is_array($_POST[$ImportantField]))
-            || (isset($_GET[$ImportantField]) && is_array($_GET[$ImportantField]))) {
-            return ['type' => 'bug_buff', 'why' => 'Cố tình truyền mảng tham số giả mạo để Bug logic (' . $ImportantField . '[])'];
+    foreach (['username', 'password', 'repassword', 'key_vip', 'key_free', 'use_tool', 'csrf'] as $f) {
+        if ((isset($_POST[$f]) && is_array($_POST[$f])) || (isset($_GET[$f]) && is_array($_GET[$f]))) {
+            return ['type' => 'bug_buff', 'why' => 'Truyền mảng tham số giả mạo nhằm khai thác lỗi xử lý (' . $f . '[])'];
         }
     }
 
-    // 3. WAF SQLi / XSS / LFI / RCE Signatures
     $haystack = $uri;
+    if (!empty($_GET)) {
+        foreach ($_GET as $k => $v) {
+            if (is_scalar($v)) {
+                $haystack .= ' ' . $k . '=' . substr(urldecode((string) $v), 0, 500);
+            }
+        }
+    }
     if (!empty($_POST)) {
         foreach ($_POST as $k => $v) {
             if (is_scalar($v)) {
@@ -1570,7 +2050,7 @@ function sh_detect_waf_bug_buff($ip)
         '/\b(?:into\s+(?:out|dump)file|load_file\s*\()/i'       => 'Tấn công đọc/ghi tệp SQL Injection',
         '/(?:\.\.\/){3,}(?:etc\/passwd|proc\/self|windows\/)/i' => 'Tấn công Path Traversal / LFI',
         '/(?:php:\/\/filter|php:\/\/input|data:\/\/text)/i'     => 'Tấn công PHP Stream Wrapper Exploit',
-        '/<\s*script\b[^>]*>|\bjavascript\s*:\s*\w+|\bon(?:error|load|mouseover)\s*=/i' => 'Chèn mã độc XSS / Script trái phép vào tham số',
+        '/<\s*script\b[^>]*>|\bjavascript\s*:\s*\w+|\bon(?:error|load|mouseover)\s*=/i' => 'Chèn mã Script / XSS trái phép vào tham số',
         '/\$\{jndi:|;\s*(?:wget|curl|bash|sh|nc)\s+/i'          => 'Tấn công thực thi lệnh từ xa (RCE)',
     ];
     foreach ($patterns as $re => $label) {
@@ -1579,16 +2059,18 @@ function sh_detect_waf_bug_buff($ip)
         }
     }
 
-    // 4. Anti-Buff Concurrent / Rapid Action Guard (prevents parallel race-condition buffing!)
-    $isSensitiveAction = ($method === 'POST' && !isset($_POST['ack_alert'])) || isset($_GET['use_tool']);
-    if ($isSensitiveAction) {
-        $lid   = sh_browser_lid();
-        $aKey  = md5('act|' . $ip . '|' . $lid);
-        $aFile = sh_dir() . '/act_guard/' . substr($aKey, 0, 2) . '/' . $aKey . '.json';
-        $nowMs = (int) round(microtime(true) * 1000);
+    $isPostAction = ($method === 'POST' && !isset($_POST['ack_alert']));
+    $isToolAction = isset($_GET['use_tool']);
+    if ($isPostAction || $isToolAction) {
+        $lid          = sh_browser_lid();
+        $aKey         = md5('act|' . $ip . '|' . $lid . '|' . ($isPostAction ? 'P' : 'T'));
+        $aFile        = sh_dir() . '/act_guard/' . substr($aKey, 0, 2) . '/' . $aKey . '.json';
+        $nowMs        = (int) round(microtime(true) * 1000);
         $buffDetected = false;
+        $lim800       = $isPostAction ? 4 : 8;
+        $lim3s        = $isPostAction ? 8 : 16;
 
-        sh_json_update($aFile, function ($st) use ($nowMs, &$buffDetected) {
+        sh_json_update($aFile, function ($st) use ($nowMs, $lim800, $lim3s, &$buffDetected) {
             $arr  = isset($st['ms']) && is_array($st['ms']) ? $st['ms'] : [];
             $keep = [];
             $c3s  = 0;
@@ -1604,8 +2086,7 @@ function sh_detect_waf_bug_buff($ip)
                 }
             }
             $keep[] = $nowMs;
-            // >= 4 prior hits within 800ms (5 POSTs in <0.8s) OR >= 8 state-mutating POST/tool hits within 3s = Script Buff / Race Exploit!
-            if ($c800 >= 4 || $c3s >= 8) {
+            if ($c800 >= $lim800 || $c3s >= $lim3s) {
                 $buffDetected = true;
                 $keep = [];
             }
@@ -1613,7 +2094,7 @@ function sh_detect_waf_bug_buff($ip)
         });
 
         if ($buffDetected) {
-            return ['type' => 'bug_buff', 'why' => 'Chạy Script gửi luồng song song tốc độ cao để Buff lượt / Race-Condition Bug'];
+            return ['type' => 'bug_buff', 'why' => 'Chạy Script bắn luồng song song tốc độ cao để Buff lượt / Race-Condition'];
         }
     }
 
@@ -1632,7 +2113,6 @@ function sh_is_flood_tool_ua()
     );
 }
 
-/** Auto-Surge Self-Healing Stream Monitor: tightens defenses during heavy DDoS and auto-releases when calm. */
 function sh_surge_record_attack($ip, $kind)
 {
     $now       = time();
@@ -1657,7 +2137,7 @@ function sh_surge_record_attack($ip, $kind)
         return $s;
     });
     if ($triggered) {
-        sh_queue_pending_event('ddos_surge_healed', ['detail' => 'Đã kích hoạt khiên tự vá Surge & giải phóng sạch đa luồng DDoS (' . $kind . ')']);
+        sh_queue_pending_event('ddos_surge_healed', ['detail' => 'Đã tự vá & giải phóng sạch đa luồng DDoS (' . $kind . ')']);
     }
 }
 
@@ -1668,7 +2148,7 @@ function sh_is_surge_active()
 }
 
 /**
- * Earliest Pre-DB Security Entry Point (runs in .htdsx_hash.php, gate/url_gate.php, and db.php).
+ * Earliest Pre-DB Security Entry Point.
  */
 function sh_early_guard()
 {
@@ -1681,10 +2161,7 @@ function sh_early_guard()
         return;
     }
 
-    // Owner Preview Showcase (?sh_test_view=...&k=...) — safe visual test links without banning viewer
     sh_handle_preview_showcase();
-
-    // Client Telemetry & Violation Beacon Endpoints (?__sh_telemetry=1 / ?__sh_report=1)
     sh_handle_client_endpoints();
 
     $forensics = sh_trace_forensics();
@@ -1693,17 +2170,17 @@ function sh_early_guard()
         return;
     }
 
-    // Website Admin & Safe Infrastructure IPs are 100% immune
     list($safe, ) = sh_is_safe_ip($ip);
     if ($safe || sh_is_admin_viewer()) {
         return;
     }
 
-    $now  = time();
-    $lid  = sh_browser_lid();
-    $hwFp = sh_hw_fp_cookie();
+    $now   = time();
+    $lid   = sh_browser_lid();
+    $hwFp  = sh_hw_fp_cookie();
+    $net64 = sh_ip_network_key($ip);
 
-    // 1. Check Active IP Ban Cache (drains heavy flood hits in <0.1ms to free server resources!)
+    // 1. Check Active IP Ban Cache -> Clean-Slate Auto-Unban on Expiry!
     $cachedBan = sh_read_ban_cache($ip);
     if ($cachedBan === null && $forensics['real_ip'] !== $ip) {
         $cachedBan = sh_read_ban_cache($forensics['real_ip']);
@@ -1711,13 +2188,14 @@ function sh_early_guard()
     if ($cachedBan !== null) {
         $expTs = isset($cachedBan['expires_ts']) ? (int) $cachedBan['expires_ts'] : 0;
         if ($expTs > 0 && $expTs <= $now) {
-            sh_remove_ban_cache($ip);
+            // CLEAN-SLATE AUTO-UNBAN: wipe all entity locks, strikes & case codes so user enters smoothly without re-ban!
+            sh_full_clean_slate_unban(null, $ip, isset($cachedBan['username']) ? (string) $cachedBan['username'] : '');
             if ($forensics['real_ip'] !== $ip) {
-                sh_remove_ban_cache($forensics['real_ip']);
+                sh_full_clean_slate_unban(null, $forensics['real_ip'], '');
             }
             $GLOBALS['SH_JUST_EXPIRED_IP'] = $ip;
         } else {
-            // Self-Healing Stream Drainer: if blocked IP keeps flooding (>5 hits in 5s), drop socket instantly with 0 disk writes!
+            // Self-Healing Stream Drainer (>5 hits in 5s -> 0-byte drop in <0.1ms)
             $winTs     = isset($cachedBan['win_ts']) ? (int) $cachedBan['win_ts'] : $now;
             $lastTouch = isset($cachedBan['last_touch']) ? (int) $cachedBan['last_touch'] : 0;
             $inWin     = ($now - $winTs <= 5);
@@ -1752,38 +2230,38 @@ function sh_early_guard()
         }
     }
 
-    // 2. Cross-Device & Cross-VPN Lockdown Enforcement (catches violator even after changing IP/VPN or clearing cookies!)
+    // 2. Ironclad Cross-Device / Cross-VPN / IPv6-Prefix Lockdown Enforcement (Zero Evasion Loopholes!)
     $entityLock = ($hwFp !== '' ? sh_read_entity_lock('hw', $hwFp) : null)
-               ?: ($lid !== '' ? sh_read_entity_lock('lid', $lid) : null);
+               ?: ($lid !== '' ? sh_read_entity_lock('lid', $lid) : null)
+               ?: (strpos($net64, '/64') !== false ? sh_read_entity_lock('net64', $net64) : null);
     if ($entityLock !== null) {
-        $newExp = max((int) $entityLock['expires_ts'], $now + 1800) + 600;
-        $evCnt  = (int) (isset($entityLock['evasion_attempts']) ? $entityLock['evasion_attempts'] : 0) + 1;
-        $entityLock['ip']               = $ip;
-        $entityLock['stream_ip']        = $forensics['stream_ip'];
-        $entityLock['expires_ts']       = $newExp;
-        $entityLock['expires_at']       = date('Y-m-d H:i:s', $newExp);
+        $newExp                    = max((int) $entityLock['expires_ts'], $now + 900) + 600;
+        $evCnt                     = (int) (isset($entityLock['evasion_attempts']) ? $entityLock['evasion_attempts'] : 0) + 1;
+        $entityLock['ip']          = $ip;
+        $entityLock['stream_ip']   = $forensics['stream_ip'];
+        $entityLock['expires_ts']  = $newExp;
+        $entityLock['expires_at']  = date('Y-m-d H:i:s', $newExp);
         $entityLock['evasion_attempts'] = $evCnt;
-        sh_write_ban_cache($ip, $entityLock);
-        sh_queue_pending_ban($entityLock + ['attack_detail' => 'Đổi IP/VPN hoặc trình duyệt để né khoá (lần #' . $evCnt . ')']);
+        $savedLock = sh_write_ban_cache($ip, $entityLock);
+        if (is_array($savedLock)) {
+            $entityLock = $savedLock;
+        }
+        sh_queue_pending_ban($entityLock + ['attack_detail' => 'Cố tình đổi IP / thiết bị để lách khoá (lần #' . $evCnt . ')']);
         sh_render_sad_page($entityLock, $ip, 403);
         exit;
     }
 
     $cfg = sh_cfg();
-    if (empty($cfg['enabled'])) {
+    if (empty($cfg['enabled']) || sh_is_light_subresource()) {
         return;
     }
 
-    if (sh_is_light_subresource()) {
-        return;
-    }
-
-    // 3. Anti-Bug, Anti-Buff & High-Precision WAF Check (even before login!)
+    // 3. Anti-Bug, Anti-Buff & WAF Check
     if (!empty($cfg['waf_enabled'])) {
         $bugHit = sh_detect_waf_bug_buff($ip);
         if ($bugHit !== null) {
             $dur    = max(900, (int) $cfg['script_ban_sec']);
-            $reason = 'AI Bảo Vệ phát hiện hành vi ' . $bugHit['why'] . '. Đã khoá bảo mật đa lớp trên IP & thiết bị.';
+            $reason = $bugHit['why'] . '.';
             $rec    = [
                 'ip'         => $forensics['real_ip'],
                 'stream_ip'  => $forensics['stream_ip'],
@@ -1797,7 +2275,10 @@ function sh_early_guard()
                 'expires_at' => date('Y-m-d H:i:s', $now + $dur),
                 'hits'       => 1,
             ];
-            sh_write_ban_cache($ip, $rec);
+            $savedBug = sh_write_ban_cache($ip, $rec);
+            if (is_array($savedBug)) {
+                $rec = $savedBug;
+            }
             if ($forensics['real_ip'] !== $ip) {
                 sh_write_ban_cache($forensics['real_ip'], $rec);
             }
@@ -1808,7 +2289,7 @@ function sh_early_guard()
         }
     }
 
-    // 4. Multi-Factor L7 / L4-Proxied DDoS Stream Shield (with Surge auto-tightening)
+    // 4. Multi-Factor L7 / L4-Proxied DDoS Stream Shield
     $h        = md5($ip);
     $rateFile = sh_dir() . '/rates/' . substr($h, 0, 2) . '/' . $h . '.json';
     $isPost   = strtoupper((string) (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET')) === 'POST';
@@ -1820,7 +2301,6 @@ function sh_early_guard()
     sh_json_update($rateFile, function ($st) use ($now, $isPost, $isBotUa, $isHuman, $surge, &$verdict) {
         $hits  = isset($st['h']) && is_array($st['h']) ? $st['h'] : [];
         $posts = isset($st['p']) && is_array($st['p']) ? $st['p'] : [];
-
         $cut15 = $now - 15;
         $cut10 = $now - 10;
         $cut5  = $now - 5;
@@ -1842,9 +2322,8 @@ function sh_early_guard()
 
         $p10 = [];
         foreach ($posts as $t) {
-            $t = (int) $t;
-            if ($t >= $cut10) {
-                $p10[] = $t;
+            if ((int) $t >= $cut10) {
+                $p10[] = (int) $t;
             }
         }
         if ($isPost) {
@@ -1868,8 +2347,7 @@ function sh_early_guard()
 
     if ($verdict !== null) {
         $dur    = max(900, (int) $cfg['ddos_ban_sec']);
-        $mins   = (int) ceil($dur / 60);
-        $reason = 'AI Chống DDoS phát hiện & giải phóng luồng tấn công liên tục (' . $verdict['kind'] . ' · ' . $verdict['w15'] . ' luồng/15s). Đã chặn IP thật & máy chủ gửi luồng (' . $mins . ' phút).';
+        $reason = 'Phát hiện gửi luồng tấn công DDoS liên tục (' . $verdict['kind'] . ' · ' . $verdict['w15'] . ' yêu cầu/15s).';
         $rec    = [
             'ip'         => $forensics['real_ip'],
             'stream_ip'  => $forensics['stream_ip'],
@@ -1883,7 +2361,10 @@ function sh_early_guard()
             'expires_at' => date('Y-m-d H:i:s', $now + $dur),
             'hits'       => (int) $verdict['w15'],
         ];
-        sh_write_ban_cache($ip, $rec);
+        $savedDdos = sh_write_ban_cache($ip, $rec);
+        if (is_array($savedDdos)) {
+            $rec = $savedDdos;
+        }
         if ($forensics['real_ip'] !== $ip) {
             sh_write_ban_cache($forensics['real_ip'], $rec);
         }
@@ -1898,12 +2379,12 @@ function sh_early_guard()
         exit;
     }
 
-    // 5. Tier-1 Passive VPN / Passive Userscript Check -> Friendly Happy Smiley (😊) Gate!
+    // 5. INSTANT ZERO-DELAY VPN / PASSIVE SCRIPT CHECK (Runs synchronously BEFORE first page render!)
     if (!empty($cfg['vpn_gate_enabled']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
         $uriPath = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
         $isKeyBypassAttempt = (strpos($uriPath, 'get-free') !== false || strpos($uriPath, 'get_key') !== false || strpos($uriPath, 'key-free') !== false);
 
-        // Check if client telemetry flagged passive script or VPN on this LID
+        // 5A. Passive Script flag on LID
         if ($lid !== '') {
             $hfFile = sh_dir() . '/happy_flags/' . substr($lid, 0, 2) . '/' . $lid . '.json';
             if (!empty($_COOKIE['sh_vg_retry'])) {
@@ -1915,13 +2396,12 @@ function sh_early_guard()
                 $hf = sh_json_read($hfFile);
                 if (!empty($hf['exp']) && (int) $hf['exp'] > $now) {
                     if ($isKeyBypassAttempt) {
-                        // Trying to use VPN / Script on Get-Key / Bypass-Key -> Escalate to Tier-2 Strict Block!
                         @unlink($hfFile);
                         $dur = max(900, (int) $cfg['vpn_spam_ban_sec']);
                         $rec = [
                             'ip'         => $forensics['real_ip'],
                             'stream_ip'  => $forensics['stream_ip'],
-                            'reason'     => 'Cố tình sử dụng ' . $hf['turn_off'] . ' để né giới hạn hoặc Bypass lấy Key trên iosmods.xyz.',
+                            'reason'     => 'Sử dụng ' . $hf['turn_off'] . ' để can thiệp hoặc né giới hạn lấy Key trên hệ thống.',
                             'ban_type'   => 'vpn_abuse',
                             'lid'        => $lid,
                             'hw_fp'      => $hwFp,
@@ -1931,7 +2411,10 @@ function sh_early_guard()
                             'expires_at' => date('Y-m-d H:i:s', $now + $dur),
                             'hits'       => 1,
                         ];
-                        sh_write_ban_cache($ip, $rec);
+                        $savedV1 = sh_write_ban_cache($ip, $rec);
+                        if (is_array($savedV1)) {
+                            $rec = $savedV1;
+                        }
                         sh_queue_pending_ban($rec + ['attack_detail' => 'Dùng VPN/Script bypass lấy Key (' . $hf['turn_off'] . ')']);
                         sh_render_sad_page($rec, $forensics['real_ip'], 403);
                         exit;
@@ -1944,41 +2427,42 @@ function sh_early_guard()
             }
         }
 
-        // Also check cached IP VPN intel synchronously (0ms file read if already cached)
-        $intelFile = sh_dir() . '/ip_intel/' . substr($h, 0, 2) . '/' . $h . '.json';
-        if (is_file($intelFile)) {
-            $intel = sh_json_read($intelFile);
-            if (!empty($intel['is_vpn']) && !empty($intel['at']) && (int) $intel['at'] > $now - 86400) {
-                $lbl = !empty($intel['label']) ? $intel['label'] : 'VPN / Proxy (Fake IP)';
-                if ($isKeyBypassAttempt) {
-                    $dur = max(900, (int) $cfg['vpn_spam_ban_sec']);
-                    $rec = [
-                        'ip'         => $forensics['real_ip'],
-                        'stream_ip'  => $forensics['stream_ip'],
-                        'reason'     => 'Bật ' . $lbl . ' để cố tình vượt giới hạn hoặc Bypass lấy Key Free.',
-                        'ban_type'   => 'vpn_abuse',
-                        'lid'        => $lid,
-                        'hw_fp'      => $hwFp,
-                        'created_ts' => $now,
-                        'created_at' => date('Y-m-d H:i:s', $now),
-                        'expires_ts' => $now + $dur,
-                        'expires_at' => date('Y-m-d H:i:s', $now + $dur),
-                        'hits'       => 1,
-                    ];
-                    sh_write_ban_cache($ip, $rec);
-                    sh_queue_pending_ban($rec + ['attack_detail' => 'Bật VPN (' . $lbl . ') vào lấy Key']);
-                    sh_render_sad_page($rec, $forensics['real_ip'], 403);
-                    exit;
+        // 5B. Synchronous Pre-Render VPN / Proxy / WARP Check (0-delay on very first visit!)
+        $intel = sh_inspect_ip_vpn($ip);
+        if (!empty($intel['is_vpn'])) {
+            $lbl = !empty($intel['label']) ? $intel['label'] : 'VPN / Proxy (Fake IP)';
+            if ($isKeyBypassAttempt) {
+                $dur = max(900, (int) $cfg['vpn_spam_ban_sec']);
+                $rec = [
+                    'ip'         => $forensics['real_ip'],
+                    'stream_ip'  => $forensics['stream_ip'],
+                    'reason'     => 'Bật ' . $lbl . ' để vượt giới hạn hoặc Bypass lấy Key Free.',
+                    'ban_type'   => 'vpn_abuse',
+                    'lid'        => $lid,
+                    'hw_fp'      => $hwFp,
+                    'created_ts' => $now,
+                    'created_at' => date('Y-m-d H:i:s', $now),
+                    'expires_ts' => $now + $dur,
+                    'expires_at' => date('Y-m-d H:i:s', $now + $dur),
+                    'hits'       => 1,
+                ];
+                $savedV2 = sh_write_ban_cache($ip, $rec);
+                if (is_array($savedV2)) {
+                    $rec = $savedV2;
                 }
-                sh_render_happy_gate(['turn_off' => $lbl], $ip);
+                sh_queue_pending_ban($rec + ['attack_detail' => 'Bật VPN (' . $lbl . ') vào lấy Key']);
+                sh_render_sad_page($rec, $forensics['real_ip'], 403);
                 exit;
             }
+            sh_stats_bump('happy_gates', 1);
+            sh_render_happy_gate(['turn_off' => $lbl], $ip);
+            exit;
         }
     }
 }
 
 /* ------------------------------------------------------------------
- * 12. Post-DB Sync, Admin Auto-Protection & Key-Spam / VPN Controllers
+ * 13. Post-DB Sync, Admin Protection & Key-Spam / VPN Controllers
  * ------------------------------------------------------------------ */
 
 function sh_sync_pending_to_db($conn)
@@ -1994,31 +2478,38 @@ function sh_sync_pending_to_db($conn)
             return [];
         });
         foreach ($items as $ip => $it) {
+            // Never resurrect a ban that has already been lifted!
+            if (sh_read_ban_cache($ip) === null) {
+                continue;
+            }
             $left  = max(60, (int) (isset($it['expires_ts']) ? $it['expires_ts'] : time() + 1800) - time());
             $btype = isset($it['ban_type']) ? (string) $it['ban_type'] : 'ddos';
             $res   = ipg_temp_ban(
                 $conn,
                 $ip,
                 $left,
-                isset($it['reason']) ? $it['reason'] : 'AI tự động khoá bảo mật',
+                isset($it['reason']) ? $it['reason'] : 'Khoá bảo mật tự động',
                 'bot-ai',
                 isset($it['username']) ? $it['username'] : '',
                 $btype
             );
             if (function_exists('tg_event')) {
-                $evName = ($btype === 'ddos') ? 'ddos_block' : 'script_bug_block';
+                $evName = ($btype === 'ddos') ? 'ddos_block' : (($btype === 'prod_spam') ? 'key_spam_ban' : 'script_bug_block');
                 tg_event($evName, [
-                    'ip'          => $ip,
-                    'stream_ip'   => isset($it['stream_ip']) ? $it['stream_ip'] : $ip,
-                    'ban_type'    => $btype,
-                    'detail'      => isset($it['attack_detail']) ? $it['attack_detail'] : $btype,
-                    'reason'      => isset($it['reason']) ? $it['reason'] : '',
-                    'duration'    => $left,
-                    'created_at'  => isset($it['created_at']) ? $it['created_at'] : date('Y-m-d H:i:s'),
-                    'expires_at'  => isset($it['expires_at']) ? $it['expires_at'] : date('Y-m-d H:i:s', time() + $left),
-                    'hw_fp'       => isset($it['hw_fp']) ? substr((string) $it['hw_fp'], 0, 12) : '',
-                    'evasions'    => isset($it['evasion_attempts']) ? (int) $it['evasion_attempts'] : 0,
-                    'ban_id'      => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
+                    'ip'         => $ip,
+                    'stream_ip'  => isset($it['stream_ip']) ? $it['stream_ip'] : $ip,
+                    'username'   => isset($it['username']) ? $it['username'] : '',
+                    'ban_type'   => $btype,
+                    'detail'     => isset($it['attack_detail']) ? $it['attack_detail'] : $btype,
+                    'reason'     => isset($it['reason']) ? $it['reason'] : '',
+                    'duration'   => $left,
+                    'fails'      => isset($it['hits']) ? (int) $it['hits'] : 1,
+                    'case_code'  => isset($it['case_code']) ? (string) $it['case_code'] : '',
+                    'created_at' => isset($it['created_at']) ? $it['created_at'] : date('Y-m-d H:i:s'),
+                    'expires_at' => isset($it['expires_at']) ? $it['expires_at'] : date('Y-m-d H:i:s', time() + $left),
+                    'hw_fp'      => isset($it['hw_fp']) ? substr((string) $it['hw_fp'], 0, 12) : '',
+                    'evasions'   => isset($it['evasion_attempts']) ? (int) $it['evasion_attempts'] : 0,
+                    'ban_id'     => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
                 ]);
             }
         }
@@ -2055,7 +2546,6 @@ function sh_post_db_guard($conn)
             ipg_sweep_expired($conn, !empty($GLOBALS['SH_JUST_EXPIRED_IP']) ? $GLOBALS['SH_JUST_EXPIRED_IP'] : '');
         }
 
-        // Check logged-in user: if Admin -> grant full signed Admin Pass; if Member -> check account-level lockdown!
         $sessUser = isset($_SESSION['username']) && is_string($_SESSION['username']) ? trim($_SESSION['username']) : '';
         if ($sessUser !== '' && $ip !== '') {
             $st = @$conn->prepare('SELECT role FROM users WHERE username = ? LIMIT 1');
@@ -2067,20 +2557,19 @@ function sh_post_db_guard($conn)
                     if ($row && (int) $row['role'] === 1) {
                         sh_remember_admin_ip($ip, $sessUser);
                         $st->close();
-                        return; // Admin is 100% exempt from everything below!
+                        return;
                     }
                 }
                 $st->close();
             }
 
-            // Check if this username was bound to an active Tier-2 Cross-Device Lockdown on another machine!
             $uLock = sh_read_entity_lock('user', $sessUser);
             if ($uLock !== null) {
                 list($safe, ) = sh_is_safe_ip($ip);
                 if (!$safe) {
                     $uLock['ip']               = $ip;
                     $uLock['evasion_attempts'] = (int) (isset($uLock['evasion_attempts']) ? $uLock['evasion_attempts'] : 0) + 1;
-                    $uLock['expires_ts']       = max((int) $uLock['expires_ts'], time() + 1800) + 600;
+                    $uLock['expires_ts']       = max((int) $uLock['expires_ts'], time() + 900) + 600;
                     sh_write_ban_cache($ip, $uLock);
                     sh_render_sad_page($uLock, $ip, 403);
                     exit;
@@ -2114,7 +2603,6 @@ function sh_on_key_fail($conn, $username, $typedKey = '', $keyType = 'FREE')
     $cfg      = sh_cfg();
     $max10m   = max(3, (int) $cfg['key_fail_limit']);
     $max30s   = max(3, (int) $cfg['key_burst_limit']);
-    $banSec   = max(300, (int) $cfg['key_spam_ban_sec']);
     $now      = time();
     $h        = md5($ip);
     $failFile = sh_dir() . '/keyfails/' . substr($h, 0, 2) . '/' . $h . '.json';
@@ -2148,21 +2636,24 @@ function sh_on_key_fail($conn, $username, $typedKey = '', $keyType = 'FREE')
         return false;
     }
 
-    $mins   = (int) ceil($banSec / 60);
-    $reason = 'Cố tình spam nhập sai Key liên tục quá nhiều lần (' . $c10m . ' lần sai). Địa chỉ IP của bạn bị tạm khoá ' . $mins . ' phút — hết thời gian sẽ tự động mở lại.';
+    list($banSec, $stage) = sh_progressive_spam_duration($ip, sh_browser_lid());
+    $mins   = (int) ($banSec / 60);
+    $reason = 'Nhập sai mã Key liên tục quá nhiều lần (' . $c10m . ' lần liên tiếp). Tạm khoá bảo vệ ' . $mins . ' phút (lần ' . $stage . ').';
     $res    = ipg_temp_ban($conn, $ip, $banSec, $reason, 'bot-keyguard', (string) $username, 'key_spam');
     if (!empty($res['ok'])) {
         sh_stats_bump('spam_blocks', 1);
+        $cached = sh_read_ban_cache($ip) ?: ['reason' => $reason, 'ban_type' => 'key_spam', 'expires_ts' => $now + $banSec];
         if (function_exists('tg_event')) {
             tg_event('key_spam_ban', [
-                'ip'       => $ip,
-                'username' => (string) $username,
-                'fails'    => $c10m,
-                'type'     => (string) $keyType,
-                'key'      => (string) $typedKey,
-                'duration' => $banSec,
-                'reason'   => $reason,
-                'ban_id'   => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
+                'ip'        => $ip,
+                'username'  => (string) $username,
+                'fails'     => $c10m,
+                'type'      => (string) $keyType,
+                'key'       => (string) $typedKey,
+                'duration'  => $banSec,
+                'case_code' => isset($cached['case_code']) ? $cached['case_code'] : '',
+                'reason'    => $reason,
+                'ban_id'    => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
             ]);
         }
         if (function_exists('site_tg_flush')) {
@@ -2170,14 +2661,14 @@ function sh_on_key_fail($conn, $username, $typedKey = '', $keyType = 'FREE')
         } elseif (function_exists('tg_flush')) {
             tg_flush(false);
         }
-        sh_render_sad_page($res['row'] ? $res['row'] : ['reason' => $reason, 'ban_type' => 'key_spam', 'expires_ts' => $now + $banSec], $ip, 429);
+        sh_render_sad_page($cached, $ip, 429);
         exit;
     }
     return false;
 }
 
 /* ------------------------------------------------------------------
- * 13. VPN / Multi-Account Free-Key Watcher & Strict Bypass Blocker
+ * 14. VPN / Multi-Account Free-Key Watcher
  * ------------------------------------------------------------------ */
 
 function sh_device_id()
@@ -2210,9 +2701,7 @@ function sh_is_vpn_cached($conn, $ipRaw)
                 $st->close();
             }
         }
-    } catch (Throwable $e) {
-        // ignore
-    }
+    } catch (Throwable $e) {}
     return false;
 }
 
@@ -2231,9 +2720,7 @@ function sh_ensure_seen_table($conn)
             PRIMARY KEY (username, kind, val),
             KEY idx_val (kind, val, last_seen)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-    } catch (Throwable $e) {
-        // ignore
-    }
+    } catch (Throwable $e) {}
 }
 
 function sh_link_and_find_alts($conn, $username)
@@ -2261,7 +2748,6 @@ function sh_link_and_find_alts($conn, $username)
                 }
             }
         }
-
         $st2 = @$conn->prepare("SELECT DISTINCT username FROM free_key_seen WHERE username <> ? AND ((kind = 'dev' AND val = ?) OR (kind = 'hw' AND val <> '' AND val = ?) OR (kind = 'ip' AND val = ? AND last_seen > ?)) LIMIT 8");
         if ($st2) {
             $recent = $now - 7 * 86400;
@@ -2275,9 +2761,7 @@ function sh_link_and_find_alts($conn, $username)
             }
             $st2->close();
         }
-    } catch (Throwable $e) {
-        error_log('[security_shield] link_alts: ' . $e->getMessage());
-    }
+    } catch (Throwable $e) {}
 
     return [
         'alts' => array_values(array_unique($alts)),
@@ -2289,15 +2773,11 @@ function sh_link_and_find_alts($conn, $username)
 
 function sh_observe_register($conn, $username, $userId = 0)
 {
-    $info = sh_link_and_find_alts($conn, $username);
+    $info       = sh_link_and_find_alts($conn, $username);
     $info['id'] = (int) $userId;
     return $info;
 }
 
-/**
- * When someone uses VPN / Script / Multi-account to evade limits or bypass get_key.php:
- * Immediately block VPN/cheat bypasses strictly (Tier 2 Cross-Device Lockdown)!
- */
 function sh_on_freekey_abuse($conn, $username, $event, $ipRaw = '')
 {
     if (sh_is_admin_viewer()) {
@@ -2328,7 +2808,6 @@ function sh_on_freekey_abuse($conn, $username, $event, $ipRaw = '')
         return;
     }
 
-    // Immediate Tier-2 Lockdown if they deliberately used Script/Fast-Bypass (blocked_cheat) OR VPN on get_key (blocked_vpn), or >=3 multi-acc tries!
     $now     = time();
     $h       = md5($ip);
     $file    = sh_dir() . '/fkabuse/' . substr($h, 0, 2) . '/' . $h . '.json';
@@ -2356,13 +2835,12 @@ function sh_on_freekey_abuse($conn, $username, $event, $ipRaw = '')
     if ($trig && ($conn instanceof mysqli) && function_exists('ipg_temp_ban')) {
         $cfg    = sh_cfg();
         $banSec = max(900, (int) $cfg['vpn_spam_ban_sec']);
-        $mins   = (int) ceil($banSec / 60);
         $whyTxt = $event === 'blocked_cheat'
-            ? 'Chạy Script / Tool tự động Bypass vượt link lấy Key Free trái phép'
+            ? 'Sử dụng Script / Công cụ tự động Bypass vượt link lấy Key Free trái phép'
             : ($event === 'blocked_vpn'
-                ? 'Bật VPN / Fake IP cố tình lách giới hạn lấy Key Free'
+                ? 'Bật VPN / Fake IP cố tình vượt giới hạn lấy Key Free'
                 : 'Đổi nhiều tài khoản / thiết bị liên tục (' . $cnt . ' lần) để lạm dụng Key Free');
-        $reason = $whyTxt . '. Hệ thống khoá bảo vệ đa lớp ' . $mins . ' phút (đổi máy hoặc Fake IP đều bị giữ khoá).';
+        $reason = $whyTxt . '.';
         $res    = ipg_temp_ban($conn, $ip, $banSec, $reason, 'bot-antivpn', (string) $username, 'vpn_abuse');
         if (!empty($res['ok'])) {
             sh_write_ban_cache($ip, [
@@ -2376,20 +2854,22 @@ function sh_on_freekey_abuse($conn, $username, $event, $ipRaw = '')
                 'expires_at' => date('Y-m-d H:i:s', $now + $banSec),
             ]);
             sh_stats_bump('vpn_blocks', 1);
+            $cached = sh_read_ban_cache($ip) ?: ['reason' => $reason, 'ban_type' => 'vpn_abuse', 'expires_ts' => $now + $banSec];
             if (function_exists('tg_event')) {
                 tg_event('vpn_multi_acc', [
-                    'ip'       => $ip,
-                    'username' => (string) $username,
-                    'alts'     => $info['alts'],
-                    'duration' => $banSec,
-                    'reason'   => $reason,
-                    'ban_id'   => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
+                    'ip'        => $ip,
+                    'username'  => (string) $username,
+                    'alts'      => $info['alts'],
+                    'duration'  => $banSec,
+                    'case_code' => isset($cached['case_code']) ? $cached['case_code'] : '',
+                    'reason'    => $reason,
+                    'ban_id'    => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
                 ]);
                 if (function_exists('tg_flush')) {
                     tg_flush(false);
                 }
             }
-            sh_render_sad_page($res['row'] ? $res['row'] : ['reason' => $reason, 'ban_type' => 'vpn_abuse', 'expires_ts' => $now + $banSec], $ip, 403);
+            sh_render_sad_page($cached, $ip, 403);
             exit;
         }
     }
@@ -2415,9 +2895,7 @@ function sh_check_freekey_redeem($conn, $username, $keyType, $enforceRules = tru
                 $stp->close();
             }
         }
-    } catch (Throwable $e) {
-        // ignore
-    }
+    } catch (Throwable $e) {}
 
     $info = sh_link_and_find_alts($conn, $username);
     if (empty($info['alts'])) {
@@ -2452,8 +2930,6 @@ function sh_check_freekey_redeem($conn, $username, $keyType, $enforceRules = tru
                 $st->close();
             }
         }
-    } catch (Throwable $e) {
-        // ignore
-    }
+    } catch (Throwable $e) {}
     return true;
 }

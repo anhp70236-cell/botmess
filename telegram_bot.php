@@ -2595,10 +2595,39 @@ function bot_conv_input(array $conv, $text, array $m)
     return screen_home();
 }
 
+function screen_case_lookup($rawCode)
+{
+    if (!function_exists('sh_lookup_case_code')) {
+        return ui_error('Chưa nạp security_shield.php', 'home');
+    }
+    $info = sh_lookup_case_code($rawCode);
+    if (!$info || empty($info['active'])) {
+        return ui_send('🔒 <b>MÃ XÁC MINH KHÔNG TỒN TẠI HOẶC ĐÃ HẾT HIỆU LỰC</b>' . "\n"
+            . '<blockquote>Mã <code>' . tg_e(tg_clip($rawCode, 40)) . '</code> đã tự động huỷ sau khi người dùng được mở chặn (hoặc mã sai).</blockquote>',
+            kb([[btn('🛡 Quản lý IP', 'bn|0'), btn('🏠 Menu chính', 'home')]]));
+    }
+    $ip      = (string) $info['ip'];
+    $leftMin = !empty($info['expires_ts']) ? max(1, (int) ceil(((int) $info['expires_ts'] - time()) / 60)) : 0;
+    $t       = '🔐 <b>KẾT QUẢ GIẢI MÃ MÃ XÁC MINH</b>' . "\n"
+        . '<blockquote>'
+        . '🏷 Mã: <code>' . tg_e($info['code']) . "</code>\n"
+        . '🌐 IP thật: <code>' . tg_e($ip) . '</code>' . (!empty($info['stream_ip']) && $info['stream_ip'] !== $ip ? ' · Luồng: <code>' . tg_e($info['stream_ip']) . '</code>' : '') . "\n"
+        . (!empty($info['username']) ? '👤 Tài khoản: <code>' . tg_e($info['username']) . "</code>\n" : '')
+        . '📝 Nguyên nhân: ' . tg_e($info['reason']) . "\n"
+        . '⏱ Trạng thái: ' . ($leftMin > 0 ? 'Còn <b>' . $leftMin . ' phút</b> tự mở' : 'Khoá bảo mật')
+        . '</blockquote>';
+    return ui_send($t, kb([
+        [btn('🔓 Mở khoá ngay & Huỷ mã này', 'bx|' . $ip, 'success')],
+        [btn('🚫 Chuyển sang Cấm vĩnh viễn', cbd('bo', $ip, (string) $info['username']), 'danger')],
+        home_row(),
+    ]));
+}
+
 function bot_help()
 {
     ui_send('🤖 <b>DANH SÁCH LỆNH NHANH</b>' . "\n" . '<blockquote>'
         . "/menu · Bảng điều khiển Admin CP\n"
+        . "/check <code>IMX-...</code> · Kiểm tra mã xác minh khách gửi\n"
         . "/baotri · Quản lý bảo trì website\n"
         . "/mokhoa <code>user_hoặc_IP</code> · Mở khoá Get Key\n"
         . "/user <code>tên</code> · /key <code>MÃ</code> · /genkey <code>vip 5 720</code>\n"
@@ -2663,6 +2692,9 @@ function bot_on_message(array $m)
             case 'baotri':
                 conv_clear($from);
                 return bot_maintenance($arg === 'on' ? 'on' : ($arg === 'off' ? 'off' : 'menu'));
+            case 'check':
+                conv_clear($from);
+                return $arg !== '' ? screen_case_lookup($arg) : ui_send('🔐 Dán trực tiếp mã xác minh <code>IMX-...</code> của khách vào khung chat để kiểm tra.', kb([home_row()]));
             case 'mokhoa':
                 conv_clear($from);
                 return $arg !== '' ? bot_unlock_route('run', $arg) : screen_unlock(0);
@@ -2729,6 +2761,11 @@ function bot_on_message(array $m)
 
     if ($convNow) {
         return bot_conv_input($convNow, $text, $m);
+    }
+
+    // Direct paste of encrypted IMX-... case verification code!
+    if (preg_match('/^IMX-[A-Z0-9-]{16,36}$/i', $text)) {
+        return screen_case_lookup($text);
     }
 
     return screen_home();

@@ -1702,6 +1702,10 @@ if (isset($_GET['use_tool'])) {
         }
     }
 
+    if (in_array($outcome['result'] ?? '', ['need_login', 'need_key'], true) && function_exists('sh_on_unkeyed_tool_attempt')) {
+        sh_on_unkeyed_tool_attempt($conn, $isLoggedIn ? $username : '');
+    }
+
     if ($isLoggedIn) {
         // Telegram alert (turns left are read again only when a turn was really spent)
         $tgOutcome = (string) ($outcome['result'] ?? '');

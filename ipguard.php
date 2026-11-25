@@ -216,7 +216,9 @@ function ipg_sweep_expired($conn, $priorityIp = '')
             if ($st !== null) {
                 if ($st->affected_rows > 0) {
                     $lifted++;
-                    if (function_exists('sh_remove_ban_cache')) {
+                    if (function_exists('sh_full_clean_slate_unban')) {
+                        sh_full_clean_slate_unban($conn, $r['ip'], isset($r['username']) ? (string) $r['username'] : '');
+                    } elseif (function_exists('sh_remove_ban_cache')) {
                         sh_remove_ban_cache($r['ip']);
                     }
                     if (function_exists('tg_event')) {
@@ -379,12 +381,10 @@ function ipg_unban($conn, $ip, $by)
 {
     $ip  = ipg_norm($ip);
     $row = ipg_find($conn, $ip);
-    if (function_exists('sh_remove_ban_cache')) {
+    if (function_exists('sh_full_clean_slate_unban')) {
+        sh_full_clean_slate_unban($conn, $ip, $row && !empty($row['username']) ? (string) $row['username'] : '');
+    } elseif (function_exists('sh_remove_ban_cache')) {
         sh_remove_ban_cache($ip);
-        $h = md5($ip);
-        @unlink(sh_dir() . '/keyfails/' . substr($h, 0, 2) . '/' . $h . '.json');
-        @unlink(sh_dir() . '/fkabuse/' . substr($h, 0, 2) . '/' . $h . '.json');
-        @unlink(sh_dir() . '/rates/' . substr($h, 0, 2) . '/' . $h . '.json');
     }
     if (!$row || (int) $row['active'] !== 1) {
         return ['ok' => (bool) $row, 'msg' => $row ? 'IP này đã được gỡ chặn.' : 'IP này hiện không bị chặn.', 'row' => $row];

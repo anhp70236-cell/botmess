@@ -121,16 +121,16 @@ DSXJS;
         $guardTag = ($snGuard !== 'admin_cp.php' && $snGuard !== 'maintenance_access.php' && function_exists('sh_client_guard_script'))
             ? sh_client_guard_script()
             : '';
-        $tag = '<script data-dsx="hash-v1">' . $js . '</script>' . $guardTag;
+        $tag = '<script data-dsx="hash-v1">' . $js . '</script>';
         if (preg_match('/<head(?:\s[^>]*)?>/i', $buf, $mm, PREG_OFFSET_CAPTURE)) {
             $pos = $mm[0][1] + strlen($mm[0][0]);
             $win = substr($buf, $pos, 2048);
             if (preg_match('/<meta\s[^>]*charset[^>]*>/i', $win, $mc, PREG_OFFSET_CAPTURE)) {
                 $pos = $pos + $mc[0][1] + strlen($mc[0][0]);
             }
-            $buf = substr($buf, 0, $pos) . $tag . substr($buf, $pos);
+            $buf = substr($buf, 0, $pos) . $guardTag . $tag . substr($buf, $pos);
         } elseif (($p = strripos($buf, '</body>')) !== false) {
-            $buf = substr($buf, 0, $p) . $tag . substr($buf, $p);
+            $buf = substr($buf, 0, $p) . $guardTag . $tag . substr($buf, $p);
         } else {
             return $buf;
         }
