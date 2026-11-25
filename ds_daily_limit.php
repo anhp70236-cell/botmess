@@ -5,7 +5,8 @@
    CACH DUNG (trong code nhap key, tren server):
        require_once __DIR__ . '/ds_daily_limit.php';
        $g = ds_daily_claim($userId);              // goi TRUOC khi cong luot cho key
-       if (!$g['ok']) { /* hien $g['message'] bang thong bao loi (dau X) o phan Keys, roi dung lai */ }
+       if (!$g['ok']) { // hien $g['message'] bang thong bao loi (dau X) o phan Keys, roi dung lai
+       }
        ...kiem tra key...  neu key sai / cong luot that bai => ds_daily_refund($userId);
    Admin cong key trong trang admin: KHONG goi ham nay (khong bi gioi han).
    Tuy chon: define('DS_DAILY_LIMIT', 1);  define('DS_TRUST_PROXY_HEADER', true); (chi bat khi web nam sau Cloudflare / proxy) */

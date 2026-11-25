@@ -363,7 +363,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $config = load_site_config($conn);
 
-$siteTitle  = cfg($config, 'site_title', 'Devnvios'); if (stripos($_SERVER['HTTP_HOST'] ?? '', 'iosmods') !== false) { $siteTitle = 'iosmods'; }
+$isIosmods = (defined('IS_IOSMODS') && IS_IOSMODS) || stripos($_SERVER['HTTP_HOST'] ?? '', 'iosmods') !== false;
+$siteTitle  = cfg($config, 'site_title', 'Devnvios'); if ($isIosmods) { $siteTitle = 'iosmods'; }
 
 /* SEO: title and description of this page (Google / shared links).
    Edit in site_config: login_seo_title, login_seo_description (leave empty = use the defaults below). */
@@ -414,8 +415,7 @@ $termsUrl   = DOCS_URL . '?doc=terms';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
-    <?php $isIosmods = stripos($_SERVER['HTTP_HOST'] ?? '', 'iosmods') !== false;
-    if ($isIosmods) { $seoDesc = 'Log in to your Iosmods account to access iOS apps, modded IPA files, games and tools.'; } ?>
+    <?php if ($isIosmods) { $seoDesc = 'Log in to your Iosmods account to access iOS apps, modded IPA files, games and tools.'; } ?>
     <title><?= $isIosmods ? 'Iosmods Login' : 'devnvios login' ?></title>
     <meta name="description" content="<?= h($seoDesc) ?>">
     <meta name="application-name" content="<?= h($siteTitle) ?>">

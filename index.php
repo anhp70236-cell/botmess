@@ -1908,8 +1908,9 @@ if ($brandWarm && function_exists('fastcgi_finish_request')) {
 
 /* Page title (tab title, Google result). Edit in site_config: site_title.
    The tab icon comes from site_config.favicon_url (see DEFAULT_FAVICON at the top of the file) and is auto-converted into a compact square image. */
+$isIosmods = (defined('IS_IOSMODS') && IS_IOSMODS) || stripos($_SERVER['HTTP_HOST'] ?? '', 'iosmods') !== false;
 $siteTitle = cfg($config, 'site_title', 'Devnvios');
- if (stripos($_SERVER['HTTP_HOST'] ?? '', 'iosmods') !== false) { $siteTitle = 'iosmods'; }
+if ($isIosmods) { $siteTitle = 'iosmods'; }
 
 /* SEO: the title and description shown on Google / when the link is shared (Facebook, Telegram, Zalo...).
    Edit in site_config: seo_title, seo_description, site_url (leave empty = use the defaults below).
@@ -1923,7 +1924,6 @@ if (!preg_match('#^https?://[^/\s]#i', $siteUrl)) {
 $siteUrl = rtrim($siteUrl, '/') . '/';
 
 /* IOSMODS SEO override */
-$isIosmods = stripos($_SERVER['HTTP_HOST'] ?? '', 'iosmods') !== false;
 $iosTitle = 'Iosmods';
 $canonicalUrl = $siteUrl;
 if ($isIosmods) {
@@ -2063,7 +2063,7 @@ function eagle_feathers(array $feathers): string
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title><?= (stripos($_SERVER['HTTP_HOST'] ?? '', 'iosmods') !== false) ? h($iosTitle) : 'devnvios' ?></title>
+    <title><?= $isIosmods ? h($iosTitle) : 'devnvios' ?></title>
     <?php if (!$brandInline): ?>
     <!-- Header logo cannot be inlined into the page yet: load it as early as possible (before CSS/fonts/JS) -->
     <?php if ($brandOrigin !== ''): ?><link rel="preconnect" href="<?= h($brandOrigin) ?>"><?php endif; ?>

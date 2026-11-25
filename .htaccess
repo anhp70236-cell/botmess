@@ -6,7 +6,7 @@ RewriteBase /
 DirectoryIndex index.php
 
 # ==========================================
-# B?NG Ð?A CH? (dã mã hoá, tên trang b?ng ti?ng Anh)
+# B?NG ï¿½?A CH? (dï¿½ mï¿½ hoï¿½, tï¿½n trang b?ng ti?ng Anh)
 #   Home            /asadnsrdecsb/home
 #   Login           /lazrlshalvow/login
 #   Register        /ddbyevhmtepm/register
@@ -15,22 +15,22 @@ DirectoryIndex index.php
 #   Get free key    /gtjsdzxhflhv/get-free
 #   Maintenance     /lwhhrrrjuaoo/maintenance
 #   Admin panel     /vfjhdizchmgr/admin
-#   Các trang khác  /egoyesfdemnt/ten-trang
-# Mu?n d?i do?n mã nào thì Find/Replace do?n dó trong file này (d?i ? m?i ch?).
+#   Cï¿½c trang khï¿½c  /egoyesfdemnt/ten-trang
+# Mu?n d?i do?n mï¿½ nï¿½o thï¿½ Find/Replace do?n dï¿½ trong file nï¿½y (d?i ? m?i ch?).
 # ==========================================
 
 # ==========================================
 # PH?N A: CHUY?N HU?NG B?T BU?C (External Redirect)
-# Link ngu?i dùng nhìn th?y / sao chép luôn là d?ng /ma-hoa/ten-trang,
-# không bao gi? hi?n ch? "index" hay duôi ".php".
-# Ch? áp d?ng khi m? trang (GET/HEAD). Form g?i POST không b? chuy?n hu?ng nên không b? l?i.
+# Link ngu?i dï¿½ng nhï¿½n th?y / sao chï¿½p luï¿½n lï¿½ d?ng /ma-hoa/ten-trang,
+# khï¿½ng bao gi? hi?n ch? "index" hay duï¿½i ".php".
+# Ch? ï¿½p d?ng khi m? trang (GET/HEAD). Form g?i POST khï¿½ng b? chuy?n hu?ng nï¿½n khï¿½ng b? l?i.
 # ==========================================
 
-# Trang ch?  /  ->  /asadnsrdecsb/home   (302 d? d? d?i ý, ?n r?i thì d?i thành 301)
+# Trang ch?  /  ->  /asadnsrdecsb/home   (302 d? d? d?i ï¿½, ?n r?i thï¿½ d?i thï¿½nh 301)
 RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
 RewriteRule ^$ /asadnsrdecsb/home [R=302,L]
 
-# ?n index / index.php (? g?c ho?c trong các d?a ch? mã hoá) -> trang ch? mã hoá
+# ?n index / index.php (? g?c ho?c trong cï¿½c d?a ch? mï¿½ hoï¿½) -> trang ch? mï¿½ hoï¿½
 RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
 RewriteCond %{THE_REQUEST} \s/(?:(?:asadnsrdecsb|lazrlshalvow|ddbyevhmtepm|hkvpnmzyqfhw|zwpxnupvcnsk|gtjsdzxhflhv|lwhhrrrjuaoo|vfjhdizchmgr|egoyesfdemnt)/)?index(?:\.php|\.html?)?/?[\s?] [NC]
 RewriteRule ^(?:(?:asadnsrdecsb|lazrlshalvow|ddbyevhmtepm|hkvpnmzyqfhw|zwpxnupvcnsk|gtjsdzxhflhv|lwhhrrrjuaoo|vfjhdizchmgr|egoyesfdemnt)/)?index(?:\.php|\.html?)?/?$ /asadnsrdecsb/home [R=302,L,NC]
@@ -71,7 +71,7 @@ RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
 RewriteCond %{THE_REQUEST} \s/(?:(?:asadnsrdecsb|lazrlshalvow|ddbyevhmtepm|hkvpnmzyqfhw|zwpxnupvcnsk|gtjsdzxhflhv|lwhhrrrjuaoo|vfjhdizchmgr|egoyesfdemnt)/)?admin_cp(?:\.php)?/?[\s?] [NC]
 RewriteRule ^(?:(?:asadnsrdecsb|lazrlshalvow|ddbyevhmtepm|hkvpnmzyqfhw|zwpxnupvcnsk|gtjsdzxhflhv|lwhhrrrjuaoo|vfjhdizchmgr|egoyesfdemnt)/)?admin_cp(?:\.php)?/?$ /vfjhdizchmgr/admin [R=302,L,NC]
 
-# Ð?a ch? cu -> d?a ch? mã hoá
+# ï¿½?a ch? cu -> d?a ch? mï¿½ hoï¿½
 RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
 RewriteRule ^(?:dang-nhap|login)/?$ /lazrlshalvow/login [R=302,L,NC]
 
@@ -93,7 +93,7 @@ RewriteRule ^(?:menu|home)/?$ /asadnsrdecsb/home [R=302,L,NC]
 RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
 RewriteRule ^(?:baotri|maintenance)/?$ /lwhhrrrjuaoo/maintenance [R=302,L,NC]
 
-# Ð?a ch? /member/... c?a các b?n th? tru?c (trình duy?t có th? còn nh?) -> d?a ch? mã hoá
+# ï¿½?a ch? /member/... c?a cï¿½c b?n th? tru?c (trï¿½nh duy?t cï¿½ th? cï¿½n nh?) -> d?a ch? mï¿½ hoï¿½
 RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
 RewriteRule ^member/?$ /asadnsrdecsb/home [R=302,L,NC]
 
@@ -124,7 +124,7 @@ RewriteRule ^member/(?:baotri|maintenance|check_maintenance)(?:\.php)?/?$ /lwhhr
 RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
 RewriteRule ^member/(.+?)(?:\.php)?/?$ /egoyesfdemnt/$1 [R=302,L,NC]
 
-# M?i trang .php còn l?i (hi?n t?i và sau này) -> /egoyesfdemnt/ten-trang
+# M?i trang .php cï¿½n l?i (hi?n t?i vï¿½ sau nï¿½y) -> /egoyesfdemnt/ten-trang
 RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
 RewriteCond %{THE_REQUEST} \s/(?:(?:asadnsrdecsb|lazrlshalvow|ddbyevhmtepm|hkvpnmzyqfhw|zwpxnupvcnsk|gtjsdzxhflhv|lwhhrrrjuaoo|vfjhdizchmgr|egoyesfdemnt)/)?[^/\s?#]+\.php[\s?] [NC]
 RewriteRule ^(?:(?:asadnsrdecsb|lazrlshalvow|ddbyevhmtepm|hkvpnmzyqfhw|zwpxnupvcnsk|gtjsdzxhflhv|lwhhrrrjuaoo|vfjhdizchmgr|egoyesfdemnt)/)?([^/]+)\.php$ /egoyesfdemnt/$1 [R=302,L]
@@ -135,21 +135,24 @@ RewriteCond %{THE_REQUEST} \s/(.+/)index(?:\.php|\.html?)?[\s?] [NC]
 RewriteRule ^(.+/)index(?:\.php|\.html?)?$ /$1 [R=302,L]
 
 # ==========================================
-# PH?N B: Ð?C D? LI?U T? FILE ?N (Internal Rewrite)
+# PH?N B: ï¿½?C D? LI?U T? FILE ?N (Internal Rewrite)
 # ==========================================
 
-# ICON TAB: tr? logo C?A B?N cho /favicon.ico (d?i logo.png thành tên file logo c?a b?n).
-# N?u file không t?n t?i thì b? qua, không gây l?i.
+# ICON TAB: tr? logo C?A B?N cho /favicon.ico (d?i logo.png thï¿½nh tï¿½n file logo c?a b?n).
+# N?u file khï¿½ng t?n t?i thï¿½ b? qua, khï¿½ng gï¿½y l?i.
 RewriteCond %{DOCUMENT_ROOT}/logo.png -f
 RewriteRule ^favicon\.ico$ logo.png [NC,L]
 
-# --- Các trang chính ---
+# --- Cï¿½c trang chï¿½nh ---
 RewriteRule ^asadnsrdecsb/home/?$ index.php [NC,L]
 RewriteRule ^lazrlshalvow/login/?$ login.php [NC,L]
 RewriteRule ^ddbyevhmtepm/register/?$ register.php [NC,L]
 RewriteRule ^hkvpnmzyqfhw/key-free/?$ key.php [NC,L]
 RewriteRule ^zwpxnupvcnsk/shop/?$ shop.php [NC,L]
+RewriteRule ^gtjsdzxhflhv/get-free/[^/]+/(go|verify)/?$ get_key.php?a=$1 [NC,L,QSA]
+RewriteRule ^gtjsdzxhflhv/get-free/[^/]+/?$ get_key.php [NC,L,QSA]
 RewriteRule ^gtjsdzxhflhv/get-free/?$ get_key.php [NC,L]
+RewriteRule ^hkvpnmzyqfhw/key-free/[^/]+/?$ key.php [NC,L,QSA]
 RewriteRule ^lwhhrrrjuaoo/maintenance/?$ check_maintenance.php [NC,L]
 
 # --- Admin: file admin_cp.php ho?c thu m?c admin_cp ---
@@ -162,29 +165,29 @@ RewriteRule ^vfjhdizchmgr/admin/?$ admin_cp/ [NC,L]
 RewriteCond %{DOCUMENT_ROOT}/admin_cp/$1 -f
 RewriteRule ^vfjhdizchmgr/admin/(.+)$ admin_cp/$1 [NC,L]
 
-# --- Trang khác: /egoyesfdemnt/ten-trang t? tìm file .php ho?c thu m?c th?t ---
+# --- Trang khï¿½c: /egoyesfdemnt/ten-trang t? tï¿½m file .php ho?c thu m?c th?t ---
 RewriteCond %{DOCUMENT_ROOT}/$1.php -f
 RewriteRule ^egoyesfdemnt/(.+?)/?$ $1.php [NC,L]
 
 RewriteCond %{DOCUMENT_ROOT}/$1 -d
 RewriteRule ^egoyesfdemnt/(.+?)/?$ $1/ [NC,L]
 
-# --- ?nh, CSS, JS, link tuong d?i bên du?i m?i d?a ch? mã hoá t? tìm file th?t ? thu m?c g?c ---
-# (ví d? /asadnsrdecsb/assets/a.css -> assets/a.css; form POST t?i admin_cp.php... v?n ch?y)
+# --- ?nh, CSS, JS, link tuong d?i bï¿½n du?i m?i d?a ch? mï¿½ hoï¿½ t? tï¿½m file th?t ? thu m?c g?c ---
+# (vï¿½ d? /asadnsrdecsb/assets/a.css -> assets/a.css; form POST t?i admin_cp.php... v?n ch?y)
 RewriteCond %{DOCUMENT_ROOT}/$1 -f
 RewriteRule ^(?:asadnsrdecsb|lazrlshalvow|ddbyevhmtepm|hkvpnmzyqfhw|zwpxnupvcnsk|gtjsdzxhflhv|lwhhrrrjuaoo|vfjhdizchmgr|egoyesfdemnt)/(.+)$ $1 [NC,L]
 
-# --- Ð?a ch? cu, gi? nguyên d? form POST t?i d?a ch? cu v?n ch?y ---
+# --- ï¿½?a ch? cu, gi? nguyï¿½n d? form POST t?i d?a ch? cu v?n ch?y ---
 RewriteRule ^dang-nhap/?$ login.php [NC,L]
 RewriteRule ^dang-ky/?$ register.php [NC,L]
 RewriteRule ^key-free/?$ key.php [NC,L]
 RewriteRule ^shop/?$ shop.php [NC,L]
 RewriteRule ^get-free/?$ get_key.php [NC,L]
 
-# [ÐÃ FIX] S?a l?i ng?t dòng ? menu
+# [ï¿½ï¿½ FIX] S?a l?i ng?t dï¿½ng ? menu
 RewriteRule ^menu/?$ index.php [NC,L]
 
-# T? d?ng ?n duôi .php cho các file phát sinh sau này
+# T? d?ng ?n duï¿½i .php cho cï¿½c file phï¿½t sinh sau nï¿½y
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{REQUEST_FILENAME}\.php -f
 RewriteRule ^([^/]+)/?$ $1.php [L]
