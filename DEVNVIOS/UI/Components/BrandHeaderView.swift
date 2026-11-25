@@ -1,25 +1,25 @@
 import SwiftUI
 
 public struct DEVNVIOSLogoMark: View {
-    public var size: CGFloat = 38
+    public var size: CGFloat = 42
 
-    public init(size: CGFloat = 38) {
+    public init(size: CGFloat = 42) {
         self.size = size
     }
 
     public var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
-                .fill(AppTheme.surface)
+            RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                .fill(AppTheme.canvas)
                 .overlay(
-                    RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
+                    RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
                         .strokeBorder(AppTheme.hairline, lineWidth: 1)
                 )
 
             Canvas { context, canvasSize in
                 let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-                let rOuter = min(canvasSize.width, canvasSize.height) * 0.34
-                let rInner = min(canvasSize.width, canvasSize.height) * 0.18
+                let rOuter = min(canvasSize.width, canvasSize.height) * 0.35
+                let rInner = min(canvasSize.width, canvasSize.height) * 0.19
 
                 func hexPath(radius: CGFloat) -> Path {
                     var path = Path()
@@ -35,14 +35,14 @@ public struct DEVNVIOSLogoMark: View {
                     return path
                 }
 
-                context.stroke(hexPath(radius: rOuter), with: .color(AppTheme.accent), lineWidth: max(1.5, size * 0.05))
+                context.stroke(hexPath(radius: rOuter), with: .color(AppTheme.accent), lineWidth: max(1.6, size * 0.05))
                 context.stroke(hexPath(radius: rInner), with: .color(AppTheme.textPrimary), lineWidth: max(1.2, size * 0.04))
 
                 let dotRect = CGRect(
-                    x: center.x - size * 0.05,
-                    y: center.y - size * 0.05,
-                    width: size * 0.10,
-                    height: size * 0.10
+                    x: center.x - size * 0.055,
+                    y: center.y - size * 0.055,
+                    width: size * 0.11,
+                    height: size * 0.11
                 )
                 context.fill(Path(ellipseIn: dotRect), with: .color(AppTheme.accent))
             }
@@ -55,30 +55,73 @@ public struct BrandHeaderView: View {
     public init() {}
 
     public var body: some View {
-        HStack(spacing: 12) {
-            DEVNVIOSLogoMark(size: 42)
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 12) {
+                DEVNVIOSLogoMark(size: 44)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("DEVNVIOS")
-                    .font(.system(size: 18, weight: .bold))
-                    .tracking(1.0)
-                    .foregroundStyle(AppTheme.textPrimary)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("DEVNVIOS")
+                            .font(.system(size: 19, weight: .bold))
+                            .tracking(0.9)
+                            .foregroundStyle(AppTheme.textPrimary)
 
-                Text("PHÂN TÍCH OFFSET IPA CHUYÊN SÂU")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(AppTheme.textSecondary)
+                        Text("v3.0")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(AppTheme.accent)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(AppTheme.accentSubtle)
+                            .clipShape(Capsule())
+                    }
+
+                    Text("LÕI C++17 & SWIFT DÒ OFFSET CHUYÊN SÂU")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+
+                Spacer(minLength: 4)
             }
 
-            Spacer(minLength: 6)
+            Rectangle().fill(AppTheme.hairline.opacity(0.75)).frame(height: 0.75)
 
-            Text("ARM64 • IL2CPP")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(AppTheme.accent)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(AppTheme.accentSubtle)
-                .clipShape(Capsule())
+            // Official Websites Attribution Row (devnvios.io.vn & iosmods.xyz)
+            HStack(spacing: 8) {
+                if let url1 = URL(string: "https://devnvios.io.vn") {
+                    Link(destination: url1) {
+                        websitePill(domain: "devnvios.io.vn", icon: "globe.asia.australia.fill")
+                    }
+                }
+                if let url2 = URL(string: "https://iosmods.xyz") {
+                    Link(destination: url2) {
+                        websitePill(domain: "iosmods.xyz", icon: "safari.fill")
+                    }
+                }
+                Spacer(minLength: 2)
+                Text("C++17 • ARM64")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(AppTheme.textMuted)
+            }
         }
+    }
+
+    private func websitePill(domain: String, icon: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(AppTheme.accent)
+            Text(domain)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(AppTheme.textPrimary)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(AppTheme.canvas.opacity(0.75))
+        .clipShape(Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(AppTheme.hairline, lineWidth: 0.75)
+        )
     }
 }
 
@@ -108,7 +151,7 @@ public struct StatMetricTile: View {
             }
 
             Text(value)
-                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .font(.system(size: 18, weight: .bold, design: .rounded))
                 .foregroundStyle(AppTheme.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -118,7 +161,7 @@ public struct StatMetricTile: View {
                 .foregroundStyle(AppTheme.textMuted)
                 .lineLimit(1)
         }
-        .thinCard(padding: 11, cornerRadius: 12)
+        .thinCard(padding: 12, cornerRadius: 13)
     }
 }
 

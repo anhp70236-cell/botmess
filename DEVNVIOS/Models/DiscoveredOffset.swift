@@ -13,6 +13,10 @@ public enum OffsetCategory: String, Codable, CaseIterable, Identifiable, Sendabl
     case gameObjects = "Game Objects"
     case gameState = "Game State"
     case gameplayVariables = "Gameplay Variables"
+    case uiAndControllers = "UI & Controllers"
+    case coreAndServices = "Core & Services"
+    case graphicsAudioPhysics = "Engine, Render & Audio"
+    case appClassesAndMethods = "App Classes & Methods"
 
     public var id: String { rawValue }
 
@@ -30,6 +34,10 @@ public enum OffsetCategory: String, Codable, CaseIterable, Identifiable, Sendabl
         case .gameObjects: return "Thực thể & Kỹ năng"
         case .gameState: return "Trạng thái Trận đấu"
         case .gameplayVariables: return "Thông số Gameplay"
+        case .uiAndControllers: return "Giao diện & Điều khiển (UI)"
+        case .coreAndServices: return "Hệ thống & Xử lý Lõi (Core)"
+        case .graphicsAudioPhysics: return "Đồ họa, Âm thanh & Vật lý"
+        case .appClassesAndMethods: return "Lớp & Hàm Ứng dụng (IPA)"
         }
     }
 
@@ -45,8 +53,12 @@ public enum OffsetCategory: String, Codable, CaseIterable, Identifiable, Sendabl
         case .character: return "person.text.rectangle"
         case .animation: return "film.stack"
         case .gameObjects: return "cube"
-        case .gameState: return "cpu"
+        case .gameState: return "flag.checkered"
         case .gameplayVariables: return "slider.horizontal.3"
+        case .uiAndControllers: return "rectangle.on.rectangle"
+        case .coreAndServices: return "gearshape.2"
+        case .graphicsAudioPhysics: return "wand.and.rays"
+        case .appClassesAndMethods: return "chevron.left.forwardslash.chevron.right"
         }
     }
 }
@@ -64,18 +76,20 @@ public enum OffsetDataType: String, Codable, CaseIterable, Identifiable, Sendabl
 
     public var vietnameseTitle: String {
         switch self {
-        case .classType: return "Lớp (Class)"
-        case .method: return "Hàm (Method RVA)"
-        case .field: return "Trường (Field Offset)"
+        case .classType: return "Lớp / Kiểu (Class/Struct)"
+        case .method: return "Hàm thực thi (Method RVA)"
+        case .field: return "Trường bộ nhớ (Field Offset)"
         case .staticData: return "Dữ liệu tĩnh (__DATA)"
         case .runtimeData: return "Địa chỉ Runtime"
-        case .symbolFunction: return "Hàm Symbol"
-        case .objcSelector: return "Phương thức ObjC"
+        case .symbolFunction: return "Hàm Ký hiệu (Symbol)"
+        case .objcSelector: return "Selector ObjC"
         }
     }
 }
 
 public enum DiscoverySource: String, Codable, CaseIterable, Identifiable, Sendable {
+    case cppNativeEngine = "C++17 ARM64 Engine"
+    case swiftNominalTypes = "C++17 Swift5 Type Descriptor"
     case machOSymbolTable = "Mach-O Symbol Table"
     case il2cppCodeGen = "IL2CPP CodeGenModule RVA"
     case il2cppMetadata = "IL2CPP Metadata"
@@ -98,10 +112,10 @@ public enum OffsetVerificationStatus: String, Codable, CaseIterable, Identifiabl
 
     public var vietnameseLabel: String {
         switch self {
-        case .verified: return "Đã xác minh"
-        case .probable: return "Khả năng đúng cao"
+        case .verified: return "Chuẩn 100% (Đã xác minh)"
+        case .probable: return "Độ chính xác cao"
         case .unverified: return "Chưa xác minh"
-        case .undetermined: return "Cần bản không mã hóa"
+        case .undetermined: return "Metadata Tĩnh"
         }
     }
 }

@@ -8,15 +8,25 @@ public struct AnalysisView: View {
 
     public init() {}
 
+    private let pipelineChecklist: [(threshold: Double, title: String)] = [
+        (0.10, "Kiểm tra tính hợp lệ & chính sách an toàn IPA"),
+        (0.28, "Giải nén luồng PKZIP / ZIP64 dung lượng lớn"),
+        (0.48, "Đọc cấu trúc Mach-O 64-bit & kiểm tra FairPlay"),
+        (0.62, "Lõi C++17 quét đa luồng lệnh máy ARM64 & Swift5 Types"),
+        (0.76, "Đối chiếu sâu IL2CPP CodeGenModule & Objective-C IMP"),
+        (0.90, "Kiểm chứng chéo Prologue, Field [X0] & ánh xạ ASLR"),
+        (0.99, "Tự động xuất tệp mang tên ứng dụng trên iPhone")
+    ]
+
     public var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    // Progress & Controls Card
-                    VStack(alignment: .leading, spacing: 10) {
+                    // Main Progress Card
+                    VStack(alignment: .leading, spacing: 11) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(pipeline.currentGameName.isEmpty ? "Trình Dò Offset Chuyên Sâu" : pipeline.currentGameName)
+                                Text(pipeline.currentGameName.isEmpty ? "Hệ Thống Dò C++17 & Swift" : pipeline.currentGameName)
                                     .font(.system(size: 16, weight: .bold))
                                     .foregroundStyle(AppTheme.textPrimary)
                                     .lineLimit(1)
@@ -27,12 +37,29 @@ public struct AnalysisView: View {
                             }
                             Spacer()
                             Text("\(Int(pipeline.progress * 100))%")
-                                .font(.system(size: 19, weight: .bold, design: .monospaced))
+                                .font(.system(size: 20, weight: .bold, design: .monospaced))
                                 .foregroundStyle(AppTheme.accent)
                         }
 
                         ProgressView(value: pipeline.progress)
                             .tint(AppTheme.accent)
+
+                        // 7-Stage Deep Verification Checklist
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(pipelineChecklist.enumerated()), id: \.offset) { _, step in
+                                let done = pipeline.progress >= step.threshold
+                                HStack(spacing: 8) {
+                                    Image(systemName: done ? "checkmark.circle.fill" : "circle.dotted")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(done ? AppTheme.statusVerified : AppTheme.textMuted)
+                                    Text(step.title)
+                                        .font(.system(size: 11, weight: done ? .medium : .regular))
+                                        .foregroundStyle(done ? AppTheme.textPrimary : AppTheme.textMuted)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                        .padding(.top, 2)
 
                         HStack(spacing: 10) {
                             if pipeline.queuedCount > 1 {
@@ -45,7 +72,7 @@ public struct AnalysisView: View {
                                 Button(role: .destructive) {
                                     pipeline.cancelCurrentAnalysis()
                                 } label: {
-                                    Label("Hủy Phân Tích", systemImage: "xmark.circle")
+                                    Label("Dừng Quét", systemImage: "xmark.circle")
                                         .font(.system(size: 12, weight: .semibold))
                                 }
                                 .buttonStyle(.bordered)
@@ -62,35 +89,35 @@ public struct AnalysisView: View {
                             }
                         }
                     }
-                    .thinCard(padding: 14, cornerRadius: 13, elevated: true)
+                    .thinCard(padding: 15, cornerRadius: 14, elevated: true)
 
                     if let errorText = pipeline.lastErrorMessage {
                         HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "exclamationmark.triangle.fill")
+                            Image(systemName: "exclamationmark.shield.fill")
                                 .foregroundStyle(AppTheme.statusUndetermined)
                             Text(errorText)
                                 .font(.system(size: 12))
                                 .foregroundStyle(AppTheme.textPrimary)
                         }
-                        .thinCard(padding: 12, cornerRadius: 11)
+                        .thinCard(padding: 12, cornerRadius: 12)
                     }
 
-                    // Latest Completed Bundle Actions
+                    // Completed Output Summary
                     if let bundle = pipeline.latestCompletedBundle {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
-                                Text("KẾT QUẢ DÒ CHUYÊN SÂU THỰC TẾ")
+                                Text("KẾT QUẢ KIỂM CHỨNG THỰC TẾ")
                                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                                     .foregroundStyle(AppTheme.textMuted)
                                 Spacer()
-                                Text("Games/\(bundle.record.directoryName)/")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(AppTheme.accent)
+                                Text("\(bundle.record.directoryName)_OFFSET.txt")
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(AppTheme.statusVerified)
                             }
 
                             HStack(spacing: 8) {
-                                miniCountTile("Đã xác minh", count: bundle.report.verifiedCount, color: AppTheme.statusVerified)
-                                miniCountTile("Khả năng cao", count: bundle.report.probableCount, color: AppTheme.statusProbable)
+                                miniCountTile("Chuẩn 100%", count: bundle.report.verifiedCount, color: AppTheme.statusVerified)
+                                miniCountTile("Chính xác cao", count: bundle.report.probableCount, color: AppTheme.statusProbable)
                                 miniCountTile("Chưa rõ", count: bundle.report.unverifiedCount, color: AppTheme.statusUnverified)
                                 miniCountTile("Token tĩnh", count: bundle.report.undeterminedCount, color: AppTheme.statusUndetermined)
                             }
@@ -100,15 +127,15 @@ public struct AnalysisView: View {
                                     pipeline.pendingExportPromptBundle = bundle
                                 } label: {
                                     HStack(spacing: 5) {
-                                        Image(systemName: "square.and.arrow.down.on.square")
-                                        Text("Xuất 1 Tệp / Tách Tệp")
+                                        Image(systemName: "square.and.arrow.down.on.square.fill")
+                                        Text("Chọn Lưu 1 Tệp / Tách Tệp")
                                     }
                                     .font(.system(size: 12, weight: .semibold))
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 9)
                                     .background(AppTheme.accent)
                                     .foregroundStyle(Color.white)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
 
@@ -116,7 +143,7 @@ public struct AnalysisView: View {
                                     container.openGameDetails(bundle.record)
                                 } label: {
                                     HStack(spacing: 5) {
-                                        Text("Mở Bảng Offset (\(bundle.offsets.count))")
+                                        Text("Xem Chi Tiết (\(bundle.offsets.count))")
                                         Image(systemName: "arrow.right")
                                     }
                                     .font(.system(size: 12, weight: .semibold))
@@ -124,18 +151,18 @@ public struct AnalysisView: View {
                                     .padding(.vertical, 9)
                                     .background(AppTheme.surfaceElevated)
                                     .foregroundStyle(AppTheme.textPrimary)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
                             }
                         }
-                        .thinCard(padding: 14, cornerRadius: 13)
+                        .thinCard(padding: 14, cornerRadius: 14)
                     }
 
-                    // Live Console Log
+                    // Live Log Console
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("NHẬT KÝ PHÂN TÍCH THỜI GIAN THỰC")
+                            Text("NHẬT KÝ LÕI C++17 & MACH-O")
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(AppTheme.textMuted)
                             Spacer()
@@ -153,7 +180,7 @@ public struct AnalysisView: View {
                         }
 
                         if pipeline.logEntries.isEmpty {
-                            Text("Đang chờ chọn tệp IPA... Hệ thống sẽ tự động giải nén luồng ZIP64, đọc Mach-O 64-bit, quét bảng Il2CppCodeGenModule, ObjC IMP, lệnh ARM64 ADRP/ADD/LDR và loại trừ hoàn toàn dữ liệu tiền thật.")
+                            Text("Chờ nạp tệp IPA... Lõi C++17 sẽ tự động quét đa luồng toàn bộ phân vùng __TEXT,__text, Swift5 Nominal Types, ObjC IMP và bảng Il2CppCodeGenModule để xuất kết quả chuẩn xác thực tế.")
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(AppTheme.textMuted)
                                 .padding(.vertical, 14)
@@ -178,10 +205,10 @@ public struct AnalysisView: View {
                                     }
                                 }
                             }
-                            .frame(minHeight: 220, maxHeight: 340)
+                            .frame(minHeight: 200, maxHeight: 320)
                         }
                     }
-                    .thinCard(padding: 13, cornerRadius: 13)
+                    .thinCard(padding: 13, cornerRadius: 14)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)

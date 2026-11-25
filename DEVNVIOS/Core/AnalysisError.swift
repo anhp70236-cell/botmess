@@ -14,6 +14,7 @@ public enum AnalysisError: LocalizedError, Equatable, Sendable {
     case metadataUnavailable(String)
     case insufficientStorage(requiredBytes: Int64, availableBytes: Int64)
     case cancelled
+    case prohibitedFinancialApp(String)
     case databaseError(String)
     case exportError(String)
     case runtimeSnapshotInvalid(String)
@@ -46,6 +47,8 @@ public enum AnalysisError: LocalizedError, Equatable, Sendable {
             return "Không đủ dung lượng bộ nhớ. Cần ít nhất \(HexFormatters.formatBytes(requiredBytes)), còn trống \(HexFormatters.formatBytes(availableBytes))."
         case .cancelled:
             return "Đã hủy quá trình phân tích theo yêu cầu."
+        case .prohibitedFinancialApp(let appName):
+            return "Từ chối phân tích '\(appName)': Hệ thống nghiêm cấm dò Offset đối với ứng dụng Ngân hàng, Ví điện tử, Thanh toán và Tài chính theo quy định pháp luật."
         case .databaseError(let reason):
             return "Lỗi cơ sở dữ liệu Offset: \(reason)"
         case .exportError(let reason):

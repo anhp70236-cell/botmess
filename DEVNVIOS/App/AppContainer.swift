@@ -22,6 +22,7 @@ public final class AppContainer: ObservableObject {
 
     @Published public var selectedTab: AppTab = .home
     @Published public var games: [GameRecord] = []
+    @Published public var savedOffsetFiles: [SavedOffsetFileItem] = []
     @Published public var activeGameForDetails: GameRecord?
     @Published public var storageSnapshot: StorageUsageSnapshot
     @Published public var dropInIPACount: Int = 0
@@ -64,6 +65,7 @@ public final class AppContainer: ObservableObject {
         self.storageSnapshot = storage.computeUsageSnapshot()
         self.dropInIPACount = storage.discoverDropInIPAFiles().count
         self.games = db.loadAllRecords()
+        self.savedOffsetFiles = exporter.listSavedOffsetFiles()
         self.activeGameForDetails = self.games.first
 
         coordinator.onDatabaseUpdated = { [weak self] in
@@ -73,6 +75,7 @@ public final class AppContainer: ObservableObject {
 
     public func refreshAll() {
         games = databaseService.loadAllRecords()
+        savedOffsetFiles = exportService.listSavedOffsetFiles()
         storageSnapshot = storageManager.computeUsageSnapshot()
         dropInIPACount = storageManager.discoverDropInIPAFiles().count
         if let active = activeGameForDetails {

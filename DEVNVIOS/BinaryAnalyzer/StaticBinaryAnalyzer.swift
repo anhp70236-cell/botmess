@@ -16,6 +16,7 @@ public struct StaticBinaryAnalysisOutput: Sendable {
     public let cStringsByVA: [UInt64: String]
     public let objcMetadata: ObjCDiscoveredMetadata
     public let objcResolvedMethods: [ObjCResolvedMethodIMP]
+    public let nativeCPPScan: NativeCPPDeepScanResult
     public let arm64StringXRefs: [ARM64StringXRef]
     public let arm64DataXRefs: [ARM64DataPointerXRef]
     public let incomingCallCountsByFuncVA: [UInt64: Int]
@@ -119,12 +120,20 @@ public enum StaticBinaryAnalyzer {
             logger?.info(stage: "ObjC", "Giải mã \(objcResolvedIMPs.count) hàm IMP Objective-C trực tiếp từ __objc_classlist.")
         }
 
+        logger?.stage("C++17 Core", "Đang chạy lõi C++17 quét sâu toàn bộ lệnh máy ARM64, hàm Getter/Setter & Swift5 Types...")
+        let cppScan = NativeCPPAnalyzerBridge.runDeepScan(sliceData: sliceData, machO: machO)
+        logger?.success(
+            stage: "C++17 Core",
+            "Quét \(cppScan.totalInstructionsScanned) lệnh ARM64 | Prologues: \(cppScan.discoveredProloguesCount) | Getter/Setter: \(cppScan.getterIdiomsCount + cppScan.setterIdiomsCount) | Swift5 Types: \(cppScan.swiftNominalTypes.count)."
+        )
+
         return StaticBinaryAnalysisOutput(
             machO: machO,
             sliceCursor: sliceCursor,
             cStringsByVA: cStrings,
             objcMetadata: ObjCDiscoveredMetadata(classNames: objcClasses, selectorNames: objcSelectors),
             objcResolvedMethods: objcResolvedIMPs,
+            nativeCPPScan: cppScan,
             arm64StringXRefs: deepScan.stringXRefs,
             arm64DataXRefs: deepScan.dataPointerXRefs,
             incomingCallCountsByFuncVA: deepScan.incomingCallCountsByFuncVA,
@@ -158,7 +167,9 @@ public enum StaticBinaryAnalyzer {
         "rotation", "rot", "euler", "quaternion", "camera", "fov", "look",
         "character", "avatar", "controller", "anim", "animator", "skeleton",
         "gameobject", "entity", "actor", "spawn", "gamestate", "match",
-        "level", "gravity", "stamina", "cooldown", "gameplay"
+        "level", "gravity", "stamina", "cooldown", "gameplay",
+        "viewcontroller", "manager", "service", "engine", "render", "audio",
+        "scene", "physics", "network", "session", "config", "handler", "model"
     ]
 
     private static func extractStrings(

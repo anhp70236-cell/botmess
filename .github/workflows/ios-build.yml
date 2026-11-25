@@ -74,7 +74,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v2.1.${{ github.run_number }}-${{ github.run_attempt }}"
+          TAG="v3.0.${{ github.run_number }}-${{ github.run_attempt }}"
           gh release create "${TAG}" \
             --target "${{ github.sha }}" \
             build/Artifacts/DEVNVIOS-IPA-Analyzer.ipa \
@@ -82,5 +82,5 @@ jobs:
             build/Artifacts/build-report.json \
             build/Artifacts/build-report.md \
             build/Artifacts/test-report.json \
-            --title "DEVNVIOS IPA ANALYZER ${TAG} (Tiếng Việt Chuyên Sâu)" \
+            --title "DEVNVIOS IPA ANALYZER ${TAG} (C++17 & Swift Ultimate)" \
             --notes-file build/Artifacts/build-report.md

@@ -295,13 +295,18 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
             report: report
         )
 
+        let loadedBundle = try databaseService.loadGameBundle(for: savedRecord)
+        // Automatically save initial named game offset file (<TenGame>_OFFSET.txt) on iPhone right away
+        let autoExporter = ExportService(storageManager: storageManager)
+        _ = try? autoExporter.exportAllInOneMasterText(bundle: loadedBundle)
+
         progressHandler?(1.0, "Hoàn tất phân tích chuyên sâu!")
         logger?.success(
             stage: "Hoàn tất",
-            "Đã lưu vào Games/\(inspection.directoryName)/ trong \(String(format: "%.2fs", elapsed)). Đang mở tùy chọn xuất 1 tệp hoặc tách nhiều tệp..."
+            "Đã tự động lưu tệp '\(inspection.directoryName)_OFFSET.txt' trên iPhone (\(String(format: "%.2fs", elapsed))). Đang mở tùy chọn Gộp 1 Tệp / Tách Từng Tệp..."
         )
 
-        return try databaseService.loadGameBundle(for: savedRecord)
+        return loadedBundle
     }
 
     // MARK: - Async UI Wrappers

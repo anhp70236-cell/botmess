@@ -145,6 +145,10 @@ public final class IPAImportService: Sendable {
         let shortVersion = (plistObj["CFBundleShortVersionString"] as? String) ?? "1.0"
         let buildVersion = (plistObj["CFBundleVersion"] as? String) ?? "1"
 
+        if SafetyPolicyFilter.isProhibitedFinancialApp(bundleID: bundleID, displayName: displayName) {
+            throw AnalysisError.prohibitedFinancialApp(displayName)
+        }
+
         let mainExecPath = "\(appBundlePrefix)\(executableName)"
         guard entries.contains(where: { $0.path == mainExecPath && !$0.isDirectory }) else {
             throw AnalysisError.missingExecutable(executableName)

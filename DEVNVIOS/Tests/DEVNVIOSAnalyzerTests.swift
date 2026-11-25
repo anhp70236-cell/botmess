@@ -330,4 +330,43 @@ final class DEVNVIOSAnalyzerTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
         }
     }
+
+    @MainActor
+    func testNativeCPPBridgeBankingBlockAndUniversalAppScanning() throws {
+        // 1. Verify C++17 engine detects ARM64 prologues and Getter [X0 + 0x48] idiom
+        let machOData = TestIPABuilder.buildSyntheticARM64MachO(includeSymbols: true, encryptText: false)
+        let staticOut = try StaticBinaryAnalyzer.analyze(binaryData: machOData, moduleName: "NativeCPPTest")
+        XCTAssertGreaterThanOrEqual(staticOut.nativeCPPScan.discoveredProloguesCount, 2)
+        XCTAssertGreaterThanOrEqual(staticOut.nativeCPPScan.getterIdiomsCount, 1)
+        let fn1Insight = staticOut.nativeCPPScan.metricsByFunctionVA[0x1_0000_1000]
+        XCTAssertNotNil(fn1Insight)
+        XCTAssertTrue(fn1Insight?.isGetterIdiom ?? false)
+        XCTAssertEqual(fn1Insight?.primaryFieldOffset, 0x48)
+
+        // 2. Verify strict blocking of banking & e-wallet IPAs
+        let bankIPAURL = tempWorkspaceURL.appendingPathComponent("Input/BankApp.ipa")
+        try TestIPABuilder.buildSyntheticIPA(
+            at: bankIPAURL,
+            options: .init(gameName: "SmartBanking", executableName: "BankExec", bundleID: "vn.bank.mobilebanking", includeIL2CPP: false)
+        )
+        let coordinator = AnalysisPipelineCoordinator(
+            storageManager: storageManager,
+            databaseService: databaseService,
+            importService: importService
+        )
+        XCTAssertThrowsError(try coordinator.executeFullPipeline(ipaSourceURL: bankIPAURL)) { err in
+            XCTAssertEqual(err as? AnalysisError, .prohibitedFinancialApp("SmartBanking"))
+        }
+
+        // 3. Verify non-game general iOS IPA scanning & automatic <Name>_OFFSET.txt file creation
+        let utilityIPAURL = tempWorkspaceURL.appendingPathComponent("Input/PhotoStudio.ipa")
+        try TestIPABuilder.buildSyntheticIPA(
+            at: utilityIPAURL,
+            options: .init(gameName: "PhotoStudio", executableName: "PhotoStudio", bundleID: "com.studio.photo", includeSymbols: true, includeIL2CPP: false)
+        )
+        let appBundle = try coordinator.executeFullPipeline(ipaSourceURL: utilityIPAURL)
+        XCTAssertFalse(appBundle.offsets.isEmpty, "Non-game IPAs must also yield real verified offsets")
+        let savedFiles = exportService.listSavedOffsetFiles()
+        XCTAssertTrue(savedFiles.contains(where: { $0.displayTitle == "PhotoStudio_OFFSET.txt" }))
+    }
 }
