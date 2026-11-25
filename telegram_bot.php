@@ -689,15 +689,23 @@ function screen_ai_hub($note = '')
         $warns[] = '⚠️ Kho Key VIP sắp hết (còn ' . $sVip . ')';
     }
 
-    $t = '🧠 <b>AI GIÁM SÁT TỐI CAO · CHỐNG DDOS & GIAN LẬN</b>' . "\n";
+    $stats   = function_exists('sh_stats_read') ? sh_stats_read() : [];
+    $surgeOn = function_exists('sh_is_surge_active') ? sh_is_surge_active() : false;
+    $drained = (int) (isset($stats['drained_streams']) ? $stats['drained_streams'] : 0);
+    $scBlk   = (int) (isset($stats['script_blocks']) ? $stats['script_blocks'] : 0) + (int) (isset($stats['bug_blocks']) ? $stats['bug_blocks'] : 0);
+    $happyN  = (int) (isset($stats['happy_gates']) ? $stats['happy_gates'] : 0);
+
+    $t = '🧠 <b>AI GIÁM SÁT TỐI CAO · QUAN SÁT VĨNH VIỄN 24/7</b>' . "\n";
     if ($note !== '') {
         $t .= $note . "\n";
     }
     $t .= '<blockquote>'
-        . '🩺 Độ ổn định Web: <b>' . $score . '/100</b> · Chống chặn nhầm: <b>100% (Safe-IP)</b>' . "\n"
-        . '🛡 Khiên L7/L4 & WAF: ' . (!empty($shCfg['enabled']) ? '🟢 <b>ĐANG BẬT</b>' : '🔴 <b>TẮT</b>') . ' · Whitelist: <b>' . count($wlList) . '</b> IP' . "\n"
-        . '☹️ Đang tạm khoá (Mặt buồn): <b>' . $bans['temp'] . '</b> IP · 🚫 Chặn vĩnh viễn: <b>' . $bans['perm'] . '</b> IP' . "\n"
-        . '🕵️ Chặn VPN/Fake IP/Trùng Acc (24h): <b>' . $vpn24 . '</b> lượt'
+        . '🩺 Độ ổn định Web: <b>' . $score . '/100</b> · Tự vá DDoS: ' . ($surgeOn ? '🛡 <b>ĐANG XẢ LUỒNG MẠNH</b>' : '🟢 <b>Sạch 100%</b>') . "\n"
+        . '🛡 Khiên DDoS & Bug/Buff: ' . (!empty($shCfg['enabled']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' · Đã xả: <b>' . $drained . '</b> luồng' . "\n"
+        . '💻 Chống Script & Xem nguồn PC: ' . (!empty($shCfg['inspect_guard']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' · Đã chặn: <b>' . $scBlk . '</b>' . "\n"
+        . '😊 Cổng Mặt cười nhắc tắt VPN/Script: ' . (!empty($shCfg['vpn_gate_enabled']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' (' . $happyN . ' lượt)' . "\n"
+        . '☹️ Đang khoá đa lớp / Mặt buồn: <b>' . $bans['temp'] . '</b> · 🚫 Cấm vĩnh viễn: <b>' . $bans['perm'] . '</b>' . "\n"
+        . '🕵️ Chặn VPN/Fake IP/Trùng Acc lấy Key (24h): <b>' . $vpn24 . '</b> lượt'
         . '</blockquote>';
 
     if ($warns) {
@@ -729,6 +737,10 @@ function screen_ai_hub($note = '')
     $kbd = [
         [
             btn(!empty($shCfg['enabled']) ? '🟢 Khiên DDoS: BẬT' : '🔴 Khiên DDoS: TẮT', 'sh|toggle', !empty($shCfg['enabled']) ? 'success' : 'danger'),
+            btn(!empty($shCfg['inspect_guard']) ? '💻 Chống Script/F12: BẬT' : '🔴 Chống Script: TẮT', 'sh|inspect', !empty($shCfg['inspect_guard']) ? 'success' : 'danger'),
+        ],
+        [
+            btn(!empty($shCfg['vpn_gate_enabled']) ? '😊 Mặt cười VPN/Script: BẬT' : '⚪ Mặt cười VPN: TẮT', 'sh|vpngate'),
             btn('🧹 Quét gỡ IP hết hạn', 'sh|sweep'),
         ],
         [
@@ -759,6 +771,20 @@ function bot_shield_action($act, $arg = '')
         sh_cfg_save(['enabled' => $next]);
         bot_log('tg_shield', ($next ? 'Bật' : 'Tắt') . ' khiên chống DDoS');
         toast($next ? '🛡 Đã bật Khiên DDoS' : '⏸ Đã tạm tắt Khiên DDoS');
+        return screen_ai_hub();
+    }
+    if ($act === 'inspect') {
+        $next = empty($cfg['inspect_guard']);
+        sh_cfg_save(['inspect_guard' => $next]);
+        bot_log('tg_shield', ($next ? 'Bật' : 'Tắt') . ' chống Script & Xem mã nguồn');
+        toast($next ? '💻 Đã bật Chống Script & Xem mã nguồn' : '⏸ Đã tắt Chống Script');
+        return screen_ai_hub();
+    }
+    if ($act === 'vpngate') {
+        $next = empty($cfg['vpn_gate_enabled']);
+        sh_cfg_save(['vpn_gate_enabled' => $next]);
+        bot_log('tg_shield', ($next ? 'Bật' : 'Tắt') . ' cổng Mặt cười nhắc tắt VPN/Script');
+        toast($next ? '😊 Đã bật Cổng Mặt cười VPN/Script' : '⏸ Đã tắt Cổng Mặt cười VPN');
         return screen_ai_hub();
     }
     if ($act === 'sweep') {

@@ -1352,6 +1352,10 @@ function tg_activity_map($type, array $d)
             return [$user, 'member', 'tool_' . (isset($d['outcome']) ? $d['outcome'] : '?'), (isset($d['tool']) ? $d['tool'] : '?')];
         case 'ddos_block':
             return ['ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'ddos_block', isset($d['detail']) ? $d['detail'] : 'DDoS'];
+        case 'script_bug_block':
+            return ['ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'script_bug', isset($d['detail']) ? $d['detail'] : 'Script/Bug'];
+        case 'ddos_surge_healed':
+            return ['bot-ai', 'bot', 'surge_healed', isset($d['detail']) ? $d['detail'] : 'Surge healed'];
         case 'key_spam_ban':
             return [$user !== '' ? $user : 'ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'key_spam_ban', 'spam nhập key sai'];
         case 'vpn_multi_acc':
@@ -1540,20 +1544,56 @@ function tg_render($type, array $d)
             return null;
 
         case 'ddos_block':
-            $mins = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 3600) / 60));
-            $kb   = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
-                ['text' => '🔓 Gỡ ban ngay', 'callback_data' => 'qa|unban|' . $ip],
-                ['text' => '🚫 Chặn vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+            $mins     = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 3600) / 60));
+            $streamIp = isset($d['stream_ip']) && $d['stream_ip'] !== '' && $d['stream_ip'] !== $ip ? (string) $d['stream_ip'] : '';
+            $expAt    = !empty($d['expires_at']) ? substr((string) $d['expires_at'], 11, 8) : '';
+            $kb       = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
+                ['text' => '🔓 Gỡ khoá ngay', 'callback_data' => 'qa|unban|' . $ip],
+                ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
             ]]) : null;
+            $rows = [
+                '🎯 IP thật (người chạy): ' . $ipTag . ($streamIp !== '' ? ' · 🖥 Máy chủ luồng: ' . tg_c($streamIp) : ''),
+                '⚡ Loại tấn công: <b>' . tg_e(isset($d['detail']) ? $d['detail'] : 'HTTP Stream Flood') . '</b>',
+                '⏱ Khoá tự động: <b>' . $mins . ' phút</b>' . ($expAt !== '' ? ' (đến ' . tg_c($expAt) . ')' : '') . ' · 🧹 <b>Đã giải phóng sạch luồng</b>',
+            ];
             return [
                 'cat'      => 'ddos',
-                'title'    => '🚨 <b>CHẶN TẤN CÔNG DDOS / EXPLOIT</b>',
-                'throttle' => ['ddos:' . $ip, 120],
-                'rows'     => [
-                    '🌐 IP tấn công: ' . $ipTag . ' · ⏱ Tạm khoá <b>' . $mins . ' phút</b>',
-                    '⚡ Phát hiện: <b>' . tg_e(isset($d['detail']) ? $d['detail'] : 'HTTP Flood') . '</b>',
-                ],
+                'title'    => '🚨 <b>AI CHẶN & GIẢI PHÓNG LUỒNG DDOS</b>',
+                'throttle' => ['ddos:' . $ip, 90],
+                'rows'     => $rows,
                 'kb'       => $kb,
+            ];
+
+        case 'script_bug_block':
+            $mins     = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 3600) / 60));
+            $streamIp = isset($d['stream_ip']) && $d['stream_ip'] !== '' && $d['stream_ip'] !== $ip ? (string) $d['stream_ip'] : '';
+            $hwFp     = !empty($d['hw_fp']) ? (string) $d['hw_fp'] : '';
+            $evasions = isset($d['evasions']) ? (int) $d['evasions'] : 0;
+            $kb       = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
+                ['text' => '🔓 Gỡ khoá đa lớp', 'callback_data' => 'qa|unban|' . $ip],
+                ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+            ]]) : null;
+            $rows = [
+                '🎯 IP thật: ' . $ipTag . ($streamIp !== '' ? ' · 🖥 Luồng/VPN: ' . tg_c($streamIp) : '') . ($hwFp !== '' ? ' · 📱 HW: ' . tg_c($hwFp) : ''),
+                '🛡 Vi phạm: <b>' . tg_e(isset($d['detail']) ? $d['detail'] : 'Chạy Script / Xem mã nguồn / Bug-Buff') . '</b>',
+                '⏱ Phong toả đa lớp: <b>' . $mins . ' phút</b>' . ($evasions > 0 ? ' · ⚠️ Cố lách khoá: <b>' . $evasions . ' lần</b>' : ''),
+            ];
+            return [
+                'cat'      => 'ddos',
+                'title'    => '🛡 <b>CHẶN SCRIPT / XEM MÃ NGUỒN / BUG WEB</b>',
+                'throttle' => ['sbb:' . $ip . ':' . $hwFp, 60],
+                'rows'     => $rows,
+                'kb'       => $kb,
+            ];
+
+        case 'ddos_surge_healed':
+            return [
+                'cat'      => 'ddos',
+                'title'    => '🧠 <b>AI TỰ VÁ & GIẢI PHÓNG SẠCH ĐA LUỒNG DDOS</b>',
+                'throttle' => ['surge_heal', 180],
+                'rows'     => [
+                    '✅ ' . tg_e(isset($d['detail']) ? $d['detail'] : 'Đã giải phóng toàn bộ luồng nghẽn, website hoạt động ổn định 100%.'),
+                ],
             ];
 
         case 'key_spam_ban':

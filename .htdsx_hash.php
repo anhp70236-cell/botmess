@@ -117,7 +117,11 @@ if (!function_exists('dsx_hash_cb')) {
   if (document.readyState === "loading") { document.addEventListener("DOMContentLoaded", hide); } else { hide(); }
 })();
 DSXJS;
-        $tag = '<script data-dsx="hash-v1">' . $js . '</script>';
+        $snGuard = basename((string) strtok((string) (isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : ''), '?'));
+        $guardTag = ($snGuard !== 'admin_cp.php' && $snGuard !== 'maintenance_access.php' && function_exists('sh_client_guard_script'))
+            ? sh_client_guard_script()
+            : '';
+        $tag = '<script data-dsx="hash-v1">' . $js . '</script>' . $guardTag;
         if (preg_match('/<head(?:\s[^>]*)?>/i', $buf, $mm, PREG_OFFSET_CAPTURE)) {
             $pos = $mm[0][1] + strlen($mm[0][0]);
             $win = substr($buf, $pos, 2048);
