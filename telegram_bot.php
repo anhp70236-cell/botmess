@@ -2423,8 +2423,8 @@ function bot_emoji_gallery($page = 0, $note = '')
         $t .= $note . "\n";
     }
     $t .= '<blockquote>'
-        . '✨ <b>Cơ chế tự động:</b> Bạn chỉ cần <b>gửi bất kỳ Emoji Telegram Premium nào vào cuộc trò chuyện này</b>, Bot sẽ tự động nhận diện bộ Emoji, thay thế <b>100% toàn bộ icon thường</b> thành Emoji Telegram và <b>lưu vĩnh viễn vào MySQL</b> (kể cả khi bạn hết hạn Premium vẫn không mất dữ liệu)!' . "\n"
-        . '📦 Đã lưu vĩnh viễn: <b>' . count($picks) . '/' . count($slots) . '</b> vị trí'
+        . '✨ <b>Cài đặt tự động (tối đa 60 Emoji/lần):</b> Gửi từ <b>1 đến 60 Emoji Telegram Premium</b> bất kỳ vào cuộc trò chuyện này, Bot sẽ <b>tự động phối và thiết lập lại toàn bộ giao diện + nút bấm</b> đổi sạch icon thường thành Emoji Premium sao cho đồng bộ, đẹp mắt nhất và <b>lưu vĩnh viễn vào MySQL</b>!' . "\n"
+        . '📦 Đã thiết lập: <b>' . min(count($slots), count($picks)) . '/' . count($slots) . '</b> vị trí chuẩn'
         . (!empty($vault['pack_name']) ? ' · Bộ: <code>' . tg_e($vault['pack_name']) . '</code>' : '')
         . '</blockquote>';
     if ($cells) {
@@ -2467,11 +2467,30 @@ function bot_extract_custom_emojis(array $m)
 {
     $ids   = [];
     $hints = [];
-    $text  = isset($m['text']) ? (string) $m['text'] : '';
-    foreach ((array) (isset($m['entities']) ? $m['entities'] : []) as $en) {
+    $text  = isset($m['text']) ? (string) $m['text'] : (isset($m['caption']) ? (string) $m['caption'] : '');
+    $ents  = isset($m['entities']) && is_array($m['entities'])
+        ? $m['entities']
+        : (isset($m['caption_entities']) && is_array($m['caption_entities']) ? $m['caption_entities'] : []);
+    $u16   = ($text !== '' && function_exists('mb_convert_encoding')) ? @mb_convert_encoding($text, 'UTF-16LE', 'UTF-8') : '';
+
+    foreach ($ents as $en) {
         if (isset($en['type']) && $en['type'] === 'custom_emoji' && !empty($en['custom_emoji_id'])) {
-            $ids[]   = (string) $en['custom_emoji_id'];
-            $hints[] = '';
+            $ids[] = (string) $en['custom_emoji_id'];
+            $hint  = '';
+            if (is_string($u16) && $u16 !== '' && isset($en['offset'], $en['length'])) {
+                $off = max(0, (int) $en['offset']) * 2;
+                $len = max(0, (int) $en['length']) * 2;
+                if ($len > 0 && $off + $len <= strlen($u16)) {
+                    $sub = @mb_convert_encoding(substr($u16, $off, $len), 'UTF-8', 'UTF-16LE');
+                    if (is_string($sub) && trim($sub) !== '') {
+                        $hint = tg_emoji_norm(trim($sub));
+                    }
+                }
+            }
+            $hints[] = $hint;
+            if (count($ids) >= 60) {
+                break;
+            }
         }
     }
     return [$ids, $hints];
@@ -2483,10 +2502,16 @@ function bot_handle_auto_emoji(array $ids, array $hints = [])
     if (empty($res['ok'])) {
         return ui_error('Không đọc được Emoji vừa gửi, vui lòng thử gửi lại.', 'em|0');
     }
-    bot_log('tg_emoji_auto', 'Tự động áp dụng & lưu vĩnh viễn ' . $res['mapped'] . ' Emoji Premium' . ($res['pack'] !== '' ? ' (pack ' . $res['pack'] . ')' : ''));
-    $note = '✅ <b>ĐÃ NHẬN & THAY THẾ TOÀN BỘ ICON THÀNH EMOJI TELEGRAM!</b>' . "\n"
-        . '💾 Đã lưu vĩnh viễn vào Database (giữ nguyên kể cả khi hết Premium).'
-        . ($res['pack'] !== '' ? ' Bộ: <code>' . tg_e($res['pack']) . '</code> (' . (int) $res['pack_count'] . ' emoji).' : '');
+    bot_log('tg_emoji_auto', 'Tự động thiết lập giao diện với ' . (int) $res['sent_count'] . ' Emoji Premium (lưu ' . $res['mapped'] . '/60 vị trí)' . ($res['pack'] !== '' ? ' [pack ' . $res['pack'] . ']' : ''));
+    $samples = [];
+    foreach ((array) (isset($res['sample_ids']) ? $res['sample_ids'] : []) as $sid) {
+        $samples[] = '<tg-emoji emoji-id="' . $sid . '">⭐</tg-emoji>';
+    }
+    $note = '✅ <b>ĐÃ TỰ ĐỘNG SETUP LẠI GIAO DIỆN BOT BẰNG EMOJI PREMIUM!</b>' . "\n"
+        . '🎨 Đã nhận <b>' . (int) $res['sent_count'] . '</b> Emoji (hỗ trợ tối đa 60 Emoji) → đồng bộ <b>60/60</b> vị trí icon &amp; nút bấm.' . "\n"
+        . '💾 Đã lưu vĩnh viễn vào MySQL'
+        . ($res['pack'] !== '' ? ' · Bộ: <code>' . tg_e($res['pack']) . '</code> (' . (int) $res['pack_count'] . ' icon).' : '.')
+        . ($samples ? "\n" . implode(' ', $samples) : '');
     return screen_home($note);
 }
 

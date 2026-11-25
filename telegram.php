@@ -553,29 +553,45 @@ function tg_emoji_unicode_map()
     ];
 }
 
+/** Semantic aliases so EVERY secondary icon across alerts, /dangbi, /check, & Case Dossier gets a fitting custom emoji! */
+function tg_emoji_extended_aliases()
+{
+    return [
+        '📩' => '📨', '📋' => '📜', '🔎' => '🔍', '💬' => '📝', '🖥' => '🌐', '📡' => '🌐',
+        '📊' => '📈', '💡' => '🧠', '👋' => '👑', '🆔' => '🔐', '↩' => '⬅', '♻' => '🔄',
+        '🔁' => '🔄', '🔀' => '⚙', 'ℹ' => '🔔', '⚪' => '🟡', '⏸' => '🔴', '▶' => '🟢',
+        '✔' => '✅', '☑' => '✅', '🔥' => '⚡', '✨' => '⭐', '🌟' => '⭐', '💰' => '💎',
+    ];
+}
+
 /**
- * Ingests custom_emoji_ids sent by Admin in Telegram chat:
- * - Queries Telegram API for the sticker details + entire custom emoji pack (if any).
- * - Automatically maps ALL normal icons across the bot to Premium emojis.
+ * Ingests up to 60 custom_emoji_ids sent by Admin in Telegram chat:
+ * - Queries Telegram API for all up to 60 stickers + custom emoji pack (if any).
+ * - Automatically designs & maps ALL 60 UI slots + all extended icons harmoniously across the entire Bot UI.
  * - Saves everything permanently in MySQL site_config + JSON vault so it survives Premium expiry!
  */
 function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
 {
-    $cleanIds = [];
-    foreach ($ids as $id) {
+    $orderedIds = [];
+    $orderedHints = [];
+    foreach ($ids as $idx => $id) {
         $id = trim((string) $id);
         if (preg_match('/^\d{5,}$/', $id)) {
-            $cleanIds[] = $id;
+            $orderedIds[]   = $id;
+            $orderedHints[] = isset($msgUnicodeHints[$idx]) ? tg_emoji_norm($msgUnicodeHints[$idx]) : '';
+            if (count($orderedIds) >= 60) {
+                break;
+            }
         }
     }
-    $cleanIds = array_values(array_unique(array_slice($cleanIds, 0, 50)));
-    if (!$cleanIds) {
+    if (!$orderedIds) {
         return ['ok' => false, 'count' => 0, 'pack' => ''];
     }
+    $uniqueIds = array_values(array_unique($orderedIds));
 
-    $vault = tg_emoji_vault_read();
-    $res   = tg_api_raw('getCustomEmojiStickers', ['custom_emoji_ids' => $cleanIds], 6);
-    $found = [];
+    $vault    = tg_emoji_vault_read();
+    $res      = tg_api_raw('getCustomEmojiStickers', ['custom_emoji_ids' => $uniqueIds], 6);
+    $found    = [];
     $packName = '';
 
     if (!empty($res['ok']) && isset($res['result']) && is_array($res['result'])) {
@@ -591,14 +607,12 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         }
     }
 
-    // Also incorporate base character hints from the message entities if API didn't return emoji char
-    foreach ($cleanIds as $idx => $cid) {
-        if (empty($found[$cid]) && !empty($msgUnicodeHints[$idx])) {
-            $found[$cid] = tg_emoji_norm($msgUnicodeHints[$idx]);
+    foreach ($orderedIds as $idx => $cid) {
+        if (empty($found[$cid]) && !empty($orderedHints[$idx])) {
+            $found[$cid] = $orderedHints[$idx];
         }
     }
 
-    // Fetch entire pack permanently if set_name is available
     $packList = is_array($vault['pack_list']) ? $vault['pack_list'] : [];
     if ($packName !== '') {
         $pRes = tg_api_raw('getStickerSet', ['name' => $packName], 6);
@@ -625,17 +639,20 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         }
     }
 
-    // 1. Direct unicode matches from sent emojis
     if (!is_array($vault['picks'])) {
         $vault['picks'] = [];
     }
-    foreach ($found as $cid => $uChar) {
-        if ($uChar !== '') {
+
+    // Build lookup by base unicode character from the Admin's sent emojis first, then from pack
+    $sentByChar = [];
+    foreach ($orderedIds as $idx => $cid) {
+        $uChar = !empty($found[$cid]) ? $found[$cid] : $orderedHints[$idx];
+        if ($uChar !== '' && !isset($sentByChar[$uChar])) {
+            $sentByChar[$uChar] = $cid;
             $vault['picks'][$uChar] = $cid;
         }
     }
 
-    // 2. Match unicode emojis from the pack for any unpicked slot
     $packByChar = [];
     foreach ($packList as $item) {
         if (!empty($item['e']) && !empty($item['id']) && !isset($packByChar[$item['e']])) {
@@ -643,11 +660,9 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         }
     }
 
-    // 3. Build rich permanent pool: sent custom emojis first, then pack emojis
-    $pool = $cleanIds;
-    if (count($cleanIds) === 1 && count($packList) === 0) {
-        // Admin sent 1 standalone custom emoji -> apply it universally as default_id across all normal icons!
-        $pool = [$cleanIds[0]];
+    $pool = $uniqueIds;
+    if (count($uniqueIds) === 1 && count($packList) === 0) {
+        $pool = [$uniqueIds[0]];
     } elseif ($packList) {
         foreach ($packList as $item) {
             if (!empty($item['id'])) {
@@ -657,27 +672,45 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         $pool = array_values(array_unique($pool));
     }
 
-    $vault['default_id']  = $cleanIds[0];
+    $vault['default_id']  = $orderedIds[0];
     $vault['pool']        = array_slice($pool, 0, 120);
     $vault['replace_all'] = true;
 
-    // 4. Fill ALL 60 UI slots so 100% of normal icons become Telegram Custom Emojis immediately!
-    $slots = tg_emoji_slots();
-    $sentCount = count($cleanIds);
+    // Auto-design ALL 60 UI slots aesthetically:
+    // - If Admin sent multiple emojis (up to 60): exact semantic match wins first if available in sent set,
+    //   otherwise distributes the Admin's sent emojis (1..60) cleanly across all 60 UI slots so the whole Bot UI transforms harmoniously!
+    $slots     = tg_emoji_slots();
+    $sentCount = count($orderedIds);
     foreach ($slots as $idx => $sl) {
         $u = $sl[0];
-        if ($sentCount > 1 && isset($cleanIds[$idx])) {
-            // Multiple emojis sent in one message -> fill slots in order too!
-            $vault['picks'][$u] = $cleanIds[$idx];
+        if (isset($sentByChar[$u])) {
+            $vault['picks'][$u] = $sentByChar[$u];
+        } elseif ($sentCount > 1 && isset($orderedIds[$idx])) {
+            $vault['picks'][$u] = $orderedIds[$idx];
+        } elseif ($sentCount > 1) {
+            // Cycle harmoniously across the Admin's sent palette (e.g. if Admin sent 10, 20, or 40 emojis)
+            $vault['picks'][$u] = isset($packByChar[$u]) ? $packByChar[$u] : $orderedIds[$idx % $sentCount];
         } elseif (!isset($vault['picks'][$u])) {
             if (isset($packByChar[$u])) {
                 $vault['picks'][$u] = $packByChar[$u];
-            } elseif ($sentCount === 1) {
-                // Single custom emoji sent: if pack has stickers, use matching or sent emoji so every icon is Premium!
-                $vault['picks'][$u] = $cleanIds[0];
-            } elseif (!empty($vault['pool'])) {
-                $vault['picks'][$u] = $vault['pool'][$idx % count($vault['pool'])];
+            } elseif ($sentCount === 1 && !empty($packList)) {
+                $vault['picks'][$u] = $packList[$idx % count($packList)]['id'];
+            } else {
+                $vault['picks'][$u] = $orderedIds[0];
             }
+        }
+    }
+
+    // Map all extended secondary icons to their matching semantic slot so ZERO icons look out of place!
+    foreach (tg_emoji_extended_aliases() as $extChar => $targetSlotChar) {
+        $eNorm = tg_emoji_norm($extChar);
+        $tNorm = tg_emoji_norm($targetSlotChar);
+        if (isset($sentByChar[$eNorm])) {
+            $vault['picks'][$eNorm] = $sentByChar[$eNorm];
+        } elseif (isset($packByChar[$eNorm])) {
+            $vault['picks'][$eNorm] = $packByChar[$eNorm];
+        } elseif (!empty($vault['picks'][$tNorm])) {
+            $vault['picks'][$eNorm] = $vault['picks'][$tNorm];
         }
     }
 
@@ -689,11 +722,13 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
 
     return [
         'ok'         => true,
-        'sent_count' => count($cleanIds),
+        'sent_count' => $sentCount,
+        'unique_cnt' => count($uniqueIds),
         'pack'       => $vault['pack_name'],
         'pack_count' => count($packList),
-        'mapped'     => count($vault['picks']),
-        'sample_id'  => $cleanIds[0],
+        'mapped'     => count($slots),
+        'sample_ids' => array_slice($uniqueIds, 0, 8),
+        'sample_id'  => $orderedIds[0],
     ];
 }
 
@@ -831,6 +866,14 @@ function tg_emoji_table()
                 }
             }
         }
+        // Map semantic aliases for any extended icons not yet explicitly picked
+        foreach (tg_emoji_extended_aliases() as $extChar => $targetSlotChar) {
+            $eNorm = tg_emoji_norm($extChar);
+            $tNorm = tg_emoji_norm($targetSlotChar);
+            if (!isset($t[$eNorm]) && isset($t[$tNorm])) {
+                $t[$eNorm] = $t[$tNorm];
+            }
+        }
         // Guarantee 100% of slots get replaced when vault has a default_id
         if (!empty($v['replace_all']) && !empty($v['default_id']) && preg_match('/^\d{5,}$/', (string) $v['default_id'])) {
             foreach (tg_emoji_slots() as $sl) {
@@ -882,7 +925,7 @@ function tg_dress_text($html)
         return $html;
     }
     $re    = $table ? tg_emoji_regex($table, false) : null;
-    $anyRe = $fallbackId !== '' ? '~([\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}])[\x{FE0E}\x{FE0F}]?~u' : null;
+    $anyRe = $fallbackId !== '' ? '~([\x{2139}\x{2194}-\x{21AA}\x{231A}-\x{23FA}\x{25AA}-\x{27BF}\x{2B05}-\x{2B55}\x{1F170}-\x{1FAFF}])[\x{FE0E}\x{FE0F}]?~u' : null;
     $parts = preg_split('~(<tg-emoji\b.*?</tg-emoji>|<[^>]+>)~s', (string) $html, -1, PREG_SPLIT_DELIM_CAPTURE);
     if ($parts === false) {
         return $html;
@@ -944,7 +987,7 @@ function tg_dress_markup($markup)
         return $markup;
     }
     $re    = $table ? tg_emoji_regex($table, true) : null;
-    $anyRe = $fallbackId !== '' ? '~^([\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}])[\x{FE0E}\x{FE0F}]?\s*~u' : null;
+    $anyRe = $fallbackId !== '' ? '~^([\x{2139}\x{2194}-\x{21AA}\x{231A}-\x{23FA}\x{25AA}-\x{27BF}\x{2B05}-\x{2B55}\x{1F170}-\x{1FAFF}])[\x{FE0E}\x{FE0F}]?\s*~u' : null;
 
     foreach ($markup['inline_keyboard'] as $r => $row) {
         foreach ((array) $row as $c => $b) {
