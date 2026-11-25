@@ -1,0 +1,177 @@
+import SwiftUI
+
+public struct DEVNVIOSLogoMark: View {
+    public var size: CGFloat = 36
+
+    public init(size: CGFloat = 36) {
+        self.size = size
+    }
+
+    public var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                .fill(AppTheme.surfaceElevated)
+                .overlay(
+                    RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                        .strokeBorder(AppTheme.hairline, lineWidth: 1)
+                )
+
+            Canvas { context, canvasSize in
+                let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+                let rOuter = min(canvasSize.width, canvasSize.height) * 0.34
+                let rInner = min(canvasSize.width, canvasSize.height) * 0.18
+
+                func hexPath(radius: CGFloat) -> Path {
+                    var path = Path()
+                    for i in 0..<6 {
+                        let angle = CGFloat(Double(i) * (.pi / 3.0) - (.pi / 2.0))
+                        let pt = CGPoint(
+                            x: center.x + radius * cos(angle),
+                            y: center.y + radius * sin(angle)
+                        )
+                        if i == 0 { path.move(to: pt) } else { path.addLine(to: pt) }
+                    }
+                    path.closeSubpath()
+                    return path
+                }
+
+                let outer = hexPath(radius: rOuter)
+                let inner = hexPath(radius: rInner)
+
+                context.stroke(outer, with: .color(AppTheme.accent), lineWidth: max(1.4, size * 0.05))
+                context.stroke(inner, with: .color(AppTheme.textPrimary), lineWidth: max(1.2, size * 0.04))
+
+                let dotRect = CGRect(x: center.x - size * 0.05, y: center.y - size * 0.05, width: size * 0.10, height: size * 0.10)
+                context.fill(Path(ellipseIn: dotRect), with: .color(AppTheme.accent))
+            }
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+public struct BrandHeaderView: View {
+    public init() {}
+
+    public var body: some View {
+        HStack(spacing: 12) {
+            DEVNVIOSLogoMark(size: 40)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("DEVNVIOS")
+                    .font(.system(size: 18, weight: .bold, design: .default))
+                    .tracking(1.1)
+                    .foregroundStyle(AppTheme.textPrimary)
+
+                Text("IPA OFFSET ANALYZER")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(AppTheme.textSecondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Text("ARM64 • IL2CPP")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(AppTheme.accent)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(AppTheme.accentSubtle)
+                .clipShape(Capsule())
+        }
+    }
+}
+
+public struct StatMetricTile: View {
+    public let title: String
+    public let value: String
+    public let subtitle: String
+    public let iconName: String
+
+    public init(title: String, value: String, subtitle: String, iconName: String) {
+        self.title = title
+        self.value = value
+        self.subtitle = subtitle
+        self.iconName = iconName
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: iconName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.accent)
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
+            }
+
+            Text(value)
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundStyle(AppTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Text(subtitle)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(AppTheme.textMuted)
+                .lineLimit(1)
+        }
+        .thinCard(padding: 11, cornerRadius: 11)
+    }
+}
+
+public struct VerificationBadge: View {
+    public let status: OffsetVerificationStatus
+
+    public init(status: OffsetVerificationStatus) {
+        self.status = status
+    }
+
+    public var body: some View {
+        let color = AppTheme.color(for: status)
+        Text(status.vietnameseLabel)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.13))
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(color.opacity(0.32), lineWidth: 0.7)
+            )
+    }
+}
+
+public struct EmptyStateCardView: View {
+    public let icon: String
+    public let title: String
+    public let message: String
+
+    public init(icon: String, title: String, message: String) {
+        self.icon = icon
+        self.title = title
+        self.message = message
+    }
+
+    public var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 26, weight: .light))
+                .foregroundStyle(AppTheme.textMuted)
+
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(AppTheme.textPrimary)
+                .multilineTextAlignment(.center)
+
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundStyle(AppTheme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .thinCard()
+    }
+}

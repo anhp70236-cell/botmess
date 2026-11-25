@@ -1,0 +1,85 @@
+name: DEVNVIOS IPA Analyzer — Automated Build & Test
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: devnvios-ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-package-ipa:
+    name: Build, Test & Package IPA (macOS ARM64)
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Verify macOS, Xcode & Dependency Environment
+        run: |
+          chmod +x DEVNVIOS/GitHub/scripts/*.sh
+          ./DEVNVIOS/GitHub/scripts/verify_environment.sh
+
+      - name: 3. Generate & Inspect Xcode Project
+        run: |
+          xcodegen generate --spec project.yml
+          xcodebuild -list -project DEVNVIOS.xcodeproj
+
+      - name: 4. Compile & Execute Full XCTest Suite
+        run: |
+          ./DEVNVIOS/GitHub/scripts/run_tests.sh
+
+      - name: 5. Build Release ARM64 Binary & Package IPA
+        run: |
+          ./DEVNVIOS/GitHub/scripts/package_ipa.sh
+
+      - name: 6. Generate Build & Test Reports
+        if: always()
+        run: |
+          mkdir -p build/Artifacts build/Reports
+          python3 DEVNVIOS/GitHub/scripts/generate_build_report.py || true
+
+      - name: 7. Upload Diagnostics Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEVNVIOS-Build-Failure-Logs
+          path: build/Reports/
+          retention-days: 14
+
+      - name: 8. Upload Verified IPA & Reports Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEVNVIOS-IPA-Analyzer-Bundle
+          path: |
+            build/Artifacts/DEVNVIOS-IPA-Analyzer.ipa
+            build/Artifacts/DEVNVIOS-IPA-Analyzer.ipa.sha256
+            build/Artifacts/build-report.json
+            build/Artifacts/build-report.md
+            build/Artifacts/test-report.json
+          retention-days: 90
+
+      - name: 9. Publish Downloadable IPA Release Asset
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v2.0.${{ github.run_number }}-${{ github.run_attempt }}"
+          gh release create "${TAG}" \
+            build/Artifacts/DEVNVIOS-IPA-Analyzer.ipa \
+            build/Artifacts/DEVNVIOS-IPA-Analyzer.ipa.sha256 \
+            build/Artifacts/build-report.json \
+            build/Artifacts/build-report.md \
+            build/Artifacts/test-report.json \
+            --title "DEVNVIOS IPA ANALYZER ${TAG}" \
+            --notes-file build/Artifacts/build-report.md
