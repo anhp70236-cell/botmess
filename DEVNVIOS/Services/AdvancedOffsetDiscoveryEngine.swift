@@ -23,37 +23,38 @@ public enum OffsetCategoryClassifier {
             "charactercontroller", "charactermovement", "rigidbody", "navmesh"
         ]),
         (.rotation, [
-            "rotation", "localrotation", "quaternion", "eulerangles", "yaw", "pitch", "roll",
+            "rotation", "localrotation", "quaternion", "eulerangles", "get_yaw", "set_yaw",
+            "get_pitch", "set_pitch", "rollangle", "get_roll", "set_roll",
             "aimrotation", "lookrotation", "lookat", "turnspeed", "aiming", "orientation"
         ]),
         (.camera, [
-            "camera", "maincamera", "fieldofview", "get_fieldofview", "set_fieldofview", "fov",
-            "camerafollow", "cameracontroller", "springarm", "viewport", "worldtoscreen",
-            "screenpointtoray", "cinemachine", "zoom"
+            "camera", "maincamera", "fieldofview", "get_fieldofview", "set_fieldofview",
+            "get_fov", "set_fov", "camerafov", "camerafollow", "cameracontroller",
+            "springarm", "viewport", "worldtoscreen", "screenpointtoray", "cinemachine", "camerazoom"
         ]),
         (.animation, [
             "animator", "animation", "animstate", "animinstance", "crossfade", "blendtree",
             "playspeed", "animspeed", "montage", "ragdoll", "rootmotion"
         ]),
         (.character, [
-            "character", "avatar", "humanoid", "hero", "skinmesh", "skeleton", "bone", "headbone",
-            "hitbox", "hurtbox", "capsule", "characterstats", "attributes"
+            "character", "avatar", "humanoid", "hero", "skinmesh", "skeleton", "headbone",
+            "bonepos", "hitbox", "hurtbox", "capsulecollider", "characterstats", "attributes"
         ]),
         (.player, [
             "player", "localplayer", "mainplayer", "myplayer", "playercontroller",
-            "playermanager", "playerinput", "playerdata", "pawn"
+            "playermanager", "playerinput", "playerdata", "localpawn"
         ]),
         (.gameObjects, [
             "gameobject", "transform", "entity", "actor", "enemy", "monster", "boss", "npc",
-            "weapon", "gun", "ammo", "projectile", "bullet", "skill", "ability", "spawner"
+            "weapon", "guncontroller", "ammo", "projectile", "bullet", "skill", "ability", "spawner"
         ]),
         (.gameState, [
             "gamestate", "gamemanager", "matchstate", "roundmanager", "levelmanager",
-            "timescale", "set_timescale", "sessionstate", "worldstate", "wave", "mission"
+            "timescale", "set_timescale", "sessionstate", "worldstate", "wavemanager", "mission"
         ]),
         (.gameplayVariables, [
-            "cooldown", "firerate", "attackspeed", "attackrange", "range", "recoil", "spread",
-            "crit", "critical", "defense", "difficulty", "experience", "exp", "gameplay"
+            "cooldown", "firerate", "attackspeed", "attackrange", "weaponrange", "recoil", "bulletspread",
+            "critrate", "critical", "defense", "difficulty", "experience", "get_exp", "set_exp", "gameplay"
         ])
     ]
 
