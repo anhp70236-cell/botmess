@@ -469,6 +469,109 @@ function sh_enrich_case_dossier($conn, $rawCode)
     return $base;
 }
 
+/**
+ * Collects 100% of currently active blocks across MySQL ip_bans, pre-DB fast cache (bans/*.json),
+ * and tg_user_blocks (automatically sweeping expired records first so zero stale entries appear).
+ */
+function sh_collect_active_blocks($conn)
+{
+    $now   = time();
+    $byKey = [];
+
+    if (($conn instanceof mysqli) && function_exists('ipg_sweep_expired')) {
+        ipg_sweep_expired($conn);
+    }
+
+    // 1. Pre-DB fast cache bans/*.json
+    foreach (glob(sh_dir() . '/bans/*/*.json') ?: [] as $bf) {
+        $bd = sh_json_read($bf);
+        if (empty($bd['ip'])) {
+            continue;
+        }
+        $expTs = isset($bd['expires_ts']) ? (int) $bd['expires_ts'] : 0;
+        if ($expTs > 0 && $expTs <= $now) {
+            sh_full_clean_slate_unban($conn, $bd['ip'], isset($bd['username']) ? (string) $bd['username'] : '');
+            continue;
+        }
+        $ip = sh_norm_ip($bd['ip']);
+        if ($ip === '') {
+            continue;
+        }
+        $byKey['ip:' . $ip] = [
+            'kind'       => $expTs > 0 ? 'temp_ip' : 'perm_ip',
+            'ip'         => $ip,
+            'username'   => isset($bd['username']) ? (string) $bd['username'] : '',
+            'reason'     => isset($bd['reason']) ? (string) $bd['reason'] : '',
+            'ban_type'   => isset($bd['ban_type']) ? (string) $bd['ban_type'] : 'temp',
+            'case_code'  => isset($bd['case_code']) ? (string) $bd['case_code'] : '',
+            'expires_ts' => $expTs,
+            'created_at' => isset($bd['created_at']) ? (string) $bd['created_at'] : '',
+        ];
+    }
+
+    // 2. MySQL ip_bans active rows
+    if ($conn instanceof mysqli) {
+        try {
+            $res = @$conn->query("SELECT id, ip, username, reason, ban_type, created_at, expires_at FROM ip_bans WHERE active = 1 AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY id DESC LIMIT 100");
+            while ($res && ($r = $res->fetch_assoc())) {
+                $ip = sh_norm_ip($r['ip']);
+                if ($ip === '') {
+                    continue;
+                }
+                $expTs = (!empty($r['expires_at']) && strpos((string) $r['expires_at'], '0000') !== 0)
+                    ? (int) strtotime((string) $r['expires_at'])
+                    : 0;
+                $k = 'ip:' . $ip;
+                if (isset($byKey[$k])) {
+                    $byKey[$k]['id'] = (int) $r['id'];
+                    if ($byKey[$k]['username'] === '' && !empty($r['username'])) {
+                        $byKey[$k]['username'] = (string) $r['username'];
+                    }
+                    if ($expTs === 0 && empty($r['expires_at'])) {
+                        $byKey[$k]['kind']       = 'perm_ip';
+                        $byKey[$k]['expires_ts'] = 0;
+                    }
+                } else {
+                    $byKey[$k] = [
+                        'id'         => (int) $r['id'],
+                        'kind'       => $expTs > 0 ? 'temp_ip' : 'perm_ip',
+                        'ip'         => $ip,
+                        'username'   => !empty($r['username']) ? (string) $r['username'] : '',
+                        'reason'     => (string) $r['reason'],
+                        'ban_type'   => !empty($r['ban_type']) ? (string) $r['ban_type'] : 'manual',
+                        'case_code'  => '',
+                        'expires_ts' => $expTs,
+                        'created_at' => (string) $r['created_at'],
+                    ];
+                }
+            }
+        } catch (Throwable $e) {}
+
+        // 3. MySQL tg_user_blocks active rows
+        try {
+            $resU = @$conn->query("SELECT id, user_id, username, reason, created_at FROM tg_user_blocks WHERE active = 1 ORDER BY id DESC LIMIT 50");
+            while ($resU && ($u = $resU->fetch_assoc())) {
+                $uname = trim((string) $u['username']);
+                if ($uname !== '') {
+                    $byKey['usr:' . strtolower($uname)] = [
+                        'id'         => (int) $u['user_id'],
+                        'kind'       => 'user_block',
+                        'ip'         => '',
+                        'username'   => $uname,
+                        'reason'     => (string) $u['reason'],
+                        'ban_type'   => 'account_lock',
+                        'case_code'  => '',
+                        'expires_ts' => 0,
+                        'created_at' => (string) $u['created_at'],
+                    ];
+                }
+            }
+        } catch (Throwable $e) {}
+    }
+
+    return array_values($byKey);
+}
+
 /** Destroys / invalidates all encrypted Case Codes for an IP the instant they are unbanned! */
 function sh_revoke_case_codes_for_ip($ip)
 {
@@ -1349,7 +1452,7 @@ function sh_inspect_ip_vpn($ip)
 function sh_wants_json()
 {
     return isset($_GET['ajax']) || isset($_GET['sync'])
-        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam'])
+        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal'])
         || (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower((string) $_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
         || (isset($_SERVER['HTTP_ACCEPT']) && stripos((string) $_SERVER['HTTP_ACCEPT'], 'application/json') === 0);
 }
@@ -1425,227 +1528,405 @@ function sh_resolve_brand_logo_file()
 }
 
 /**
- * Auto-trims transparent padding around the main iosmods.xyz logo (e.g. dslogo_*.png)
- * and caches a crisp 3x Retina inline data URI so the header logo renders FULL-SIZE & RAZOR-SHARP
- * in 0ms even when the visitor's IP is completely blocked!
+ * Serves the exact uncropped iosmods.xyz main header logo (matching index.php ?brand_logo=1 1:1!)
+ * directly before any ban check so all 3 shimmer layers share 1 cached bitmap with ZERO phase lag!
  */
-function sh_logo_src()
+function sh_logo_url()
 {
-    static $memo = null;
-    if ($memo !== null) {
-        return $memo;
-    }
-    $cacheFile = sh_dir() . '/brand_logo_inline_v6.json';
-    $cached    = sh_json_read($cacheFile);
+    $file = sh_resolve_brand_logo_file();
+    $ver  = $file !== '' && is_file($file) ? substr(md5($file . '|' . (int) @filemtime($file)), 0, 8) : 'v7';
+    return '/asadnsrdecsb/home?__sh_brand_logo=1&v=' . $ver;
+}
 
-    // Fast path: if cached within last 300s and source file hasn't changed, use in 0.03ms without DB!
-    if (!empty($cached['uri']) && !empty($cached['src']) && is_file($cached['src']) && (int) @filemtime($cached['src']) === (int) (isset($cached['mtime']) ? $cached['mtime'] : 0) && (time() - (int) (isset($cached['checked']) ? $cached['checked'] : 0)) < 600) {
-        return $memo = (string) $cached['uri'];
+function sh_serve_brand_logo_asset()
+{
+    if (!isset($_GET['__sh_brand_logo'])) {
+        return;
     }
-
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
     $file = sh_resolve_brand_logo_file();
     if ($file === '' || !is_file($file)) {
-        return $memo = '/index.php?brand_logo=1';
+        http_response_code(404);
+        exit;
     }
-    $mtime = (int) @filemtime($file);
-    if (!empty($cached['uri']) && isset($cached['src'], $cached['mtime']) && $cached['src'] === $file && (int) $cached['mtime'] === $mtime) {
-        sh_json_update($cacheFile, function ($x) {
-            $x['checked'] = time();
-            return $x;
-        });
-        return $memo = (string) $cached['uri'];
+    $mtime     = (int) @filemtime($file);
+    $hash      = substr(md5($file . '|' . $mtime), 0, 16);
+    $cacheWebp = sh_dir() . '/logo_exact_' . $hash . '.webp';
+    $cachePng  = sh_dir() . '/logo_exact_' . $hash . '.png';
+
+    $mime  = '';
+    $bytes = '';
+    if (is_file($cacheWebp)) {
+        $mime  = 'image/webp';
+        $bytes = (string) @file_get_contents($cacheWebp);
+    } elseif (is_file($cachePng)) {
+        $mime  = 'image/png';
+        $bytes = (string) @file_get_contents($cachePng);
     }
 
-    $bytes = @file_get_contents($file);
-    if (!is_string($bytes) || $bytes === '') {
-        return $memo = '/uploads/' . basename($file);
-    }
+    if ($bytes === '') {
+        $raw = @file_get_contents($file);
+        if (!is_string($raw) || $raw === '') {
+            http_response_code(404);
+            exit;
+        }
+        // Resize proportionally WITHOUT cropping transparent margins (100% identical to index.php build_brand_logo!)
+        if (function_exists('imagecreatefromstring')) {
+            @ini_set('memory_limit', '256M');
+            $im = @imagecreatefromstring($raw);
+            if ($im !== false) {
+                $w     = imagesx($im);
+                $h     = imagesy($im);
+                $scale = min(1.0, 126.0 / max(1, $h), 520.0 / max(1, $w));
+                $dw    = max(1, (int) round($w * $scale));
+                $dh    = max(1, (int) round($h * $scale));
+                $dst   = imagecreatetruecolor($dw, $dh);
+                imagealphablending($dst, false);
+                imagesavealpha($dst, true);
+                imagefill($dst, 0, 0, imagecolorallocatealpha($dst, 0, 0, 0, 127));
+                imagecopyresampled($dst, $im, 0, 0, 0, 0, $dw, $dh, $w, $h);
+                imagedestroy($im);
 
-    $uri = '';
-    if (function_exists('imagecreatefromstring')) {
-        @ini_set('memory_limit', '256M');
-        $im = @imagecreatefromstring($bytes);
-        if ($im !== false) {
-            $w = imagesx($im);
-            $h = imagesy($im);
-            // Scan alpha bounding box (step=2 for speed) so ALL empty transparent padding around "iosmods.xyz" is stripped!
-            $minX = $w;
-            $minY = $h;
-            $maxX = 0;
-            $maxY = 0;
-            $step = ($w > 500 || $h > 500) ? 2 : 1;
-            for ($y = 0; $y < $h; $y += $step) {
-                for ($x = 0; $x < $w; $x += $step) {
-                    $rgba  = imagecolorat($im, $x, $y);
-                    $alpha = ($rgba >> 24) & 0x7F;
-                    if ($alpha < 122) {
-                        if ($x < $minX) $minX = $x;
-                        if ($y < $minY) $minY = $y;
-                        if ($x > $maxX) $maxX = $x;
-                        if ($y > $maxY) $maxY = $y;
+                if (function_exists('imagewebp')) {
+                    ob_start();
+                    $ok = @imagewebp($dst, null, 92);
+                    $wb = (string) ob_get_clean();
+                    if ($ok && $wb !== '') {
+                        $mime  = 'image/webp';
+                        $bytes = $wb;
+                        @file_put_contents($cacheWebp, $wb, LOCK_EX);
                     }
                 }
-            }
-            if ($maxX > $minX && $maxY > $minY) {
-                $pad = max(2, (int) round(min($w, $h) * 0.015));
-                $cx  = max(0, $minX - $pad);
-                $cy  = max(0, $minY - $pad);
-                $cw  = min($w - $cx, ($maxX - $minX) + 1 + $pad * 2);
-                $ch  = min($h - $cy, ($maxY - $minY) + 1 + $pad * 2);
-            } else {
-                $cx = 0; $cy = 0; $cw = $w; $ch = $h;
-            }
-
-            // Target 3x Retina height (144px -> displays at 46px-48px CSS height with ultra-sharp detail!)
-            $targetH = min(156, $ch);
-            $scale   = $targetH / max(1, $ch);
-            $dw      = max(1, (int) round($cw * $scale));
-            $dh      = max(1, (int) round($ch * $scale));
-            if ($dw > 660) {
-                $s2 = 660 / $dw;
-                $dw = 660;
-                $dh = max(1, (int) round($dh * $s2));
-            }
-
-            $dst = imagecreatetruecolor($dw, $dh);
-            imagealphablending($dst, false);
-            imagesavealpha($dst, true);
-            imagefill($dst, 0, 0, imagecolorallocatealpha($dst, 0, 0, 0, 127));
-            imagecopyresampled($dst, $im, 0, 0, $cx, $cy, $dw, $dh, $cw, $ch);
-            imagedestroy($im);
-
-            if (function_exists('imagewebp')) {
-                ob_start();
-                $ok   = @imagewebp($dst, null, 92);
-                $webp = (string) ob_get_clean();
-                if ($ok && $webp !== '') {
-                    $uri = 'data:image/webp;base64,' . base64_encode($webp);
+                if ($bytes === '') {
+                    ob_start();
+                    @imagepng($dst, null, 8);
+                    $pn = (string) ob_get_clean();
+                    if ($pn !== '') {
+                        $mime  = 'image/png';
+                        $bytes = $pn;
+                        @file_put_contents($cachePng, $pn, LOCK_EX);
+                    }
                 }
+                imagedestroy($dst);
             }
-            if ($uri === '') {
-                ob_start();
-                @imagepng($dst, null, 8);
-                $png = (string) ob_get_clean();
-                if ($png !== '') {
-                    $uri = 'data:image/png;base64,' . base64_encode($png);
-                }
-            }
-            imagedestroy($dst);
+        }
+        if ($bytes === '') {
+            $ext   = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+            $mime  = $ext === 'webp' ? 'image/webp' : ($ext === 'jpg' || $ext === 'jpeg' ? 'image/jpeg' : 'image/png');
+            $bytes = $raw;
         }
     }
 
-    if ($uri === '') {
-        $uri = '/uploads/' . basename($file);
+    $etag = '"' . md5($bytes) . '"';
+    header_remove('Pragma');
+    header('Cache-Control: public, max-age=604800, immutable');
+    header('ETag: ' . $etag);
+    if (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim((string) $_SERVER['HTTP_IF_NONE_MATCH']) === $etag) {
+        http_response_code(304);
+        exit;
     }
-    sh_json_update($cacheFile, function () use ($uri, $file, $mtime) {
-        return ['uri' => $uri, 'src' => $file, 'mtime' => $mtime, 'checked' => time()];
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . strlen($bytes));
+    echo $bytes;
+    exit;
+}
+
+/**
+ * Handles in-page Appeal submission (?__sh_appeal=1) directly from the Block Page!
+ * Strictly rate-limited (1 appeal / 10 minutes per IP+device) so attackers CANNOT spam Admin's Telegram,
+ * while genuine blocked users can submit their username + explanation and Admin gets 1-tap Unban immediately!
+ */
+function sh_handle_appeal_endpoint()
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_GET['__sh_appeal'])) {
+        return;
+    }
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+
+    $lid       = isset($_POST['lid']) && preg_match('/^[a-f0-9]{32}$/i', (string) $_POST['lid']) ? strtolower((string) $_POST['lid']) : sh_browser_lid();
+    $sig       = isset($_POST['sig']) ? (string) $_POST['sig'] : '';
+    $caseCode  = isset($_POST['case_code']) ? sh_extract_case_code($_POST['case_code']) : '';
+    $typedUser = isset($_POST['username']) ? trim(preg_replace('/[\r\n\t<>]+/', '', substr((string) $_POST['username'], 0, 60))) : '';
+    $msg       = isset($_POST['message']) ? trim(preg_replace('/[\r\n]+/', ' ', strip_tags(substr((string) $_POST['message'], 0, 400)))) : '';
+    $isPreview = !empty($_POST['preview']);
+
+    if ($msg === '' || (function_exists('mb_strlen') ? mb_strlen($msg, 'UTF-8') : strlen($msg)) < 3) {
+        echo json_encode(['ok' => false, 'msg' => 'Vui lòng nhập nội dung yêu cầu gửi Admin.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($lid === '' || !hash_equals(sh_client_sig($lid), $sig)) {
+        echo json_encode(['ok' => false, 'msg' => 'Phiên xác thực không hợp lệ, vui lòng tải lại trang.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($isPreview) {
+        echo json_encode(['ok' => true, 'msg' => 'Đã gửi yêu cầu đến Admin thành công. Vui lòng chờ Admin kiểm tra và phản hồi.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $forensics = sh_trace_forensics();
+    $ip        = sh_client_ip();
+    if ($ip === '') {
+        echo json_encode(['ok' => false, 'msg' => 'Không xác định được địa chỉ kết nối.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $banRec = sh_read_ban_cache($ip);
+    if ($banRec === null && $forensics['real_ip'] !== $ip) {
+        $banRec = sh_read_ban_cache($forensics['real_ip']);
+    }
+    $caseRec = $caseCode !== '' ? sh_lookup_case_code($caseCode) : null;
+    if ($banRec === null && $caseRec === null) {
+        echo json_encode(['ok' => true, 'msg' => 'Kết nối của bạn hiện đã được mở khoá, hãy tải lại trang.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // Strict cooldown: max 1 appeal per 600s (10 minutes) per IP or Browser LID!
+    $now     = time();
+    $rlKey   = md5('ap_rl|' . $ip . '|' . $lid);
+    $rlFile  = sh_dir() . '/appeals_rl/' . substr($rlKey, 0, 2) . '/' . $rlKey . '.json';
+    $rlState = sh_json_read($rlFile);
+    if (!empty($rlState['at']) && ($now - (int) $rlState['at']) < 600) {
+        $waitMin = max(1, (int) ceil((600 - ($now - (int) $rlState['at'])) / 60));
+        echo json_encode(['ok' => false, 'msg' => 'Bạn đã gửi yêu cầu trước đó. Vui lòng chờ Admin xử lý (thử lại sau ' . $waitMin . ' phút).'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    sh_json_update($rlFile, function () use ($now, $ip) {
+        return ['at' => $now, 'ip' => $ip];
     });
-    return $memo = $uri;
+
+    // Check session username if logged in
+    if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+        @session_start();
+    }
+    $sessUser = isset($_SESSION['username']) && is_string($_SESSION['username']) ? trim($_SESSION['username']) : '';
+    $banUser  = ($banRec && !empty($banRec['username'])) ? (string) $banRec['username'] : (($caseRec && !empty($caseRec['username'])) ? (string) $caseRec['username'] : '');
+    $finalUser = $sessUser !== '' ? $sessUser : ($typedUser !== '' ? $typedUser : $banUser);
+    $reason    = ($banRec && !empty($banRec['reason'])) ? (string) $banRec['reason'] : (($caseRec && !empty($caseRec['reason'])) ? (string) $caseRec['reason'] : 'Khoá bảo mật hệ thống');
+    $finalCode = $caseCode !== '' ? $caseCode : (($banRec && !empty($banRec['case_code'])) ? (string) $banRec['case_code'] : '');
+
+    $appealData = [
+        'ip'         => $forensics['real_ip'] ?: $ip,
+        'stream_ip'  => $forensics['stream_ip'],
+        'username'   => $finalUser,
+        'verified_u' => $sessUser !== '' ? 1 : 0,
+        'typed_user' => $typedUser,
+        'case_code'  => $finalCode,
+        'reason'     => $reason,
+        'message'    => $msg,
+        'at'         => date('Y-m-d H:i:s', $now),
+    ];
+
+    sh_json_update(sh_dir() . '/appeals_log.json', function ($list) use ($appealData) {
+        if (!is_array($list)) {
+            $list = [];
+        }
+        $list[] = $appealData;
+        return array_slice($list, -60);
+    });
+
+    // Send directly to Admin Telegram Bot right now!
+    $sentNow = false;
+    try {
+        if (is_file(__DIR__ . '/telegram.php')) {
+            require_once __DIR__ . '/telegram.php';
+            if (function_exists('tg_boot')) {
+                tg_boot('web');
+            }
+            if (function_exists('tg_enabled') && tg_enabled() && function_exists('tg_event')) {
+                tg_event('user_appeal', $appealData);
+                if (function_exists('tg_flush')) {
+                    tg_flush(false);
+                }
+                $sentNow = true;
+            }
+        }
+    } catch (Throwable $e) {
+        $sentNow = false;
+    }
+    if (!$sentNow) {
+        sh_queue_pending_event('user_appeal', $appealData);
+    }
+
+    echo json_encode(['ok' => true, 'msg' => 'Đã gửi yêu cầu cho Admin thành công. Vui lòng chờ Admin kiểm tra hoặc đợi hết thời gian khoá.'], JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 function sh_native_shared_css()
 {
     return <<<'CSS'
-:root{color-scheme:dark;--ds-bg:#000000;--ds-card:#0a0a0b;--ds-field:#141416;--ds-line:#1f1f23;--ds-line2:#26262b;--ds-h:#ffffff;--ds-p:#9ca3af;--ds-mute:#8e8e93;--ds-hd-bg:#000000;--ds-hd-line:#1c1c1f;--ds-btn-bg:#0a0a0b;--ds-btn-line:#26262b;--ds-btn-fg:#ffffff;--blue:#0a84ff;--blue-press:#0070e0;--ok:#34c759;--hd:60px;--logo-h:46px;--hbtn:34px;--font:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-:root[data-theme="light"]{color-scheme:light;--ds-bg:#f5f7fa;--ds-card:#ffffff;--ds-field:#f3f4f6;--ds-line:#e5e7eb;--ds-line2:#d1d5db;--ds-h:#111827;--ds-p:#4b5563;--ds-mute:#6b7280;--ds-hd-bg:#ffffff;--ds-hd-line:#e5e7eb;--ds-btn-bg:#f3f4f6;--ds-btn-line:#d1d5db;--ds-btn-fg:#111827;--blue:#0a6cdc;--blue-press:#0858b6}
+:root{color-scheme:dark;--ds-bg:#000000;--ds-card:#0a0a0b;--ds-field:#141416;--ds-line:#1f1f23;--ds-line2:#26262b;--ds-h:#ffffff;--ds-p:#9ca3af;--ds-mute:#8e8e93;--ds-hd-bg:#000000;--ds-hd-line:#1c1c1f;--ds-btn-bg:#0a0a0b;--ds-btn-line:#26262b;--ds-btn-fg:#ffffff;--ds-nav:#0e0e10;--ds-item:#d1d5db;--ds-link:#3b9eff;--blue:#0a84ff;--cta-bg:#ffffff;--cta-fg:#000000;--hd:54px;--logo-h:42px;--hbtn:32px;--font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+:root[data-theme="light"]{color-scheme:light;--ds-bg:#f5f7fa;--ds-card:#ffffff;--ds-field:#f3f4f6;--ds-line:#e5e7eb;--ds-line2:#d1d5db;--ds-h:#111827;--ds-p:#4b5563;--ds-mute:#6b7280;--ds-hd-bg:#ffffff;--ds-hd-line:#e5e7eb;--ds-btn-bg:#f3f4f6;--ds-btn-line:#d1d5db;--ds-btn-fg:#111827;--ds-nav:#ffffff;--ds-item:#374151;--ds-link:#0a6cdc;--blue:#0a6cdc;--cta-bg:#111827;--cta-fg:#ffffff}
 *,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{min-height:100%;margin:0;background:var(--ds-bg);color:var(--ds-h);font-family:var(--font);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
-body{display:flex;flex-direction:column;min-height:100dvh;overflow-x:hidden}
-.site-header{position:sticky;top:0;z-index:900;display:flex;align-items:center;justify-content:space-between;height:var(--hd);padding:0 14px;background:var(--ds-hd-bg);border-bottom:1px solid var(--ds-hd-line)}
-.brand{display:inline-flex;align-items:center;min-width:0;height:100%;text-decoration:none;line-height:0}
-.ds-logo{position:relative;display:inline-block;flex:0 1 auto;min-width:0;max-width:72vw;height:var(--logo-h);line-height:0;overflow:hidden;contain:paint;-webkit-transform:translateZ(0);transform:translateZ(0)}
-.brand__logo{display:block;width:auto;height:var(--logo-h);max-width:72vw;object-fit:contain}
-.ds-sw{position:absolute;top:0;left:0;display:block;width:100%;height:100%;pointer-events:none;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.5) 28%,#000 50%,rgba(0,0,0,.5) 72%,rgba(0,0,0,0) 92%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.5) 28%,#000 50%,rgba(0,0,0,.5) 72%,rgba(0,0,0,0) 92%);animation:ds-sw35 1.8s linear infinite}
-.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:.88;animation:ds-swi35 1.8s linear infinite}
-.ds-sw2,.ds-sw2 .ds-swi{animation-delay:-.9s}
-@keyframes ds-sw35{from{transform:translate3d(-80%,0,0)}to{transform:translate3d(80%,0,0)}}
-@keyframes ds-swi35{from{transform:translate3d(80%,0,0)}to{transform:translate3d(-80%,0,0)}}
-.ds-hd{display:flex;align-items:center;gap:7px;flex:0 0 auto}
-.ds-hbtn{display:flex;align-items:center;justify-content:center;min-width:var(--hbtn);height:var(--hbtn);padding:0 9px;font-size:12px;font-weight:800;letter-spacing:.02em;color:var(--ds-btn-fg);background:var(--ds-btn-bg);border:1px solid var(--ds-btn-line);border-radius:10px;cursor:pointer;user-select:none}
-.ds-hbtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round}
-.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px 28px}
-.panel{width:100%;max-width:420px;background:var(--ds-card);border:1px solid var(--ds-line);border-radius:22px;padding:28px 22px 22px;text-align:center}
-.anim-icon{width:68px;height:68px;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;color:var(--ds-h)}
-.anim-icon svg{width:64px;height:64px;overflow:visible}
-.panel-title{margin:0 0 10px;font-size:23px;font-weight:800;letter-spacing:-.025em;line-height:1.2;color:var(--ds-h)}
-.cause{margin:0 0 20px;font-size:14px;line-height:1.58;color:var(--ds-p);word-break:break-word}
-.cause strong{color:var(--ds-h);font-weight:700}
-.timer-card{margin:0 0 18px;padding:13px 15px 12px;background:var(--ds-field);border:1px solid var(--ds-line2);border-radius:14px;text-align:left}
-.timer-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:9px}
-.timer-lbl{font-size:12.5px;font-weight:600;color:var(--ds-p)}
-.timer-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:20px;font-weight:800;letter-spacing:.03em;font-variant-numeric:tabular-nums;color:var(--ds-h)}
-.meter-bar{height:3px;width:100%;background:var(--ds-line2);border-radius:2px;overflow:hidden}
-.meter-fill{height:100%;width:100%;background:var(--blue);border-radius:2px;transition:width 1s linear}
-.spec-title{margin:0 0 6px;font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ds-mute);text-align:left}
-.meta{text-align:left;margin-bottom:18px;border-top:1px solid var(--ds-line)}
-.meta-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;font-size:13.5px;border-bottom:1px solid var(--ds-line)}
+html{touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:100%;background:var(--ds-bg)}
+body{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;margin:0;padding-top:var(--hd);overflow-x:hidden;background:var(--ds-bg);color:var(--ds-h);font-family:var(--font);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+body *{font-family:var(--font)}
+h1,h2,h3,p{margin:0}
+a{color:inherit}
+button{padding:0;font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+[hidden]{display:none!important}
+.site-header{position:fixed;top:0;left:0;right:0;width:100%;z-index:900;display:flex;align-items:center;justify-content:space-between;height:var(--hd);min-height:var(--hd);max-height:var(--hd);padding:0 14px;background:var(--ds-hd-bg);border-bottom:1px solid var(--ds-hd-line);transform:translateZ(0);isolation:isolate}
+.brand{display:flex;align-items:center;height:100%;min-width:0;text-decoration:none;line-height:0}
+.ds-logo{position:relative;display:inline-block;flex:0 1 auto;min-width:0;max-width:70vw;height:var(--logo-h);line-height:0;overflow:hidden;contain:paint;-webkit-transform:translateZ(0);transform:translateZ(0)}
+.brand__logo{display:block;width:auto;height:var(--logo-h);min-height:var(--logo-h);max-height:var(--logo-h);max-width:70vw;object-fit:contain}
+.ds-sw{position:absolute;top:0;left:0;display:block;width:100%;height:100%;pointer-events:none;transform-origin:50% 50%;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.55) 28%,#000 50%,rgba(0,0,0,.55) 72%,rgba(0,0,0,0) 92%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.55) 28%,#000 50%,rgba(0,0,0,.55) 72%,rgba(0,0,0,0) 92%);will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-sw35 1.6s linear infinite;animation:ds-sw35 1.6s linear infinite;-webkit-animation-delay:var(--dsx-ph,0s);animation-delay:var(--dsx-ph,0s)}
+.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;pointer-events:none;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:1;transform-origin:50% 50%;will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-swi35 1.6s linear infinite;animation:ds-swi35 1.6s linear infinite;-webkit-animation-delay:var(--dsx-ph,0s);animation-delay:var(--dsx-ph,0s)}
+.ds-sw2,.ds-sw2 .ds-swi{-webkit-animation-delay:var(--dsx-ph2,-.8s);animation-delay:var(--dsx-ph2,-.8s)}
+html.dsx-re .ds-sw,html.dsx-re .ds-swi{-webkit-animation:none!important;animation:none!important}
+@keyframes ds-sw35{from{transform:translate3d(-78%,0,0)}to{transform:translate3d(78%,0,0)}}
+@keyframes ds-swi35{from{transform:translate3d(78%,0,0)}to{transform:translate3d(-78%,0,0)}}
+.ds-hd{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.ds-hbtn{display:flex;align-items:center;justify-content:center;min-width:var(--hbtn);height:var(--hbtn);padding:0 8px;font-size:12px;font-weight:800;color:var(--ds-btn-fg);background:var(--ds-btn-bg);border:1px solid var(--ds-btn-line);border-radius:10px;user-select:none}
+.ds-hbtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ds-lang{position:relative}
+.ds-pop{position:absolute;top:calc(100% + 8px);right:0;z-index:2000;min-width:136px;overflow:hidden;background:var(--ds-nav);border:1px solid var(--ds-btn-line);border-radius:12px}
+.ds-pop button{display:block;width:100%;padding:10px 14px;font-size:13px;font-weight:600;text-align:left;color:var(--ds-item);background:transparent}
+.ds-pop button:active{background:var(--ds-field)}
+.ds-pop button.is-on{color:var(--ds-link)}
+.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px 10px}
+.panel{width:100%;max-width:400px;background:var(--ds-card);border:1px solid var(--ds-line);border-radius:20px;padding:24px 20px 20px;text-align:center}
+.anim-icon{width:56px;height:56px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:var(--ds-h)}
+.anim-icon svg{width:52px;height:52px;overflow:visible}
+.panel-title{margin:0 0 8px;font-size:20px;font-weight:800;letter-spacing:-.02em;line-height:1.25;color:var(--ds-h)}
+.cause{margin:0 0 16px;font-size:13.5px;line-height:1.55;color:var(--ds-p);word-break:break-word}
+.cause strong{color:var(--ds-h);font-weight:650}
+.meta{text-align:left;margin-bottom:16px;border-top:1px solid var(--ds-line)}
+.meta-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;font-size:13px;border-bottom:1px solid var(--ds-line)}
 .meta-row span:first-child{color:var(--ds-p);flex:none}
-.meta-row span:last-child{color:var(--ds-h);font-weight:650;text-align:right;word-break:break-all}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;letter-spacing:.015em}
-.code-box{margin:0 0 14px;height:50px;padding:0 8px 0 14px;background:var(--ds-field);border:1px solid var(--ds-line2);border-radius:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
-.code-box:active{border-color:var(--blue)}
-.code-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:700;letter-spacing:.02em;color:var(--ds-h);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.code-copy{flex:none;height:34px;padding:0 11px;border-radius:10px;background:var(--ds-card);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:5px;cursor:pointer}
-.code-copy svg{width:13.5px;height:13.5px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.code-copy.is-copied{color:var(--ok);border-color:var(--ok)}
-.submit-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:50px;padding:0 18px;border-radius:14px;background:var(--blue);color:#ffffff;text-decoration:none;font-size:15.5px;font-weight:700;border:0;cursor:pointer;transition:transform .1s,background-color .15s}
-.submit-btn:active{transform:scale(.986);background:var(--blue-press)}
-.submit-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.foot-policy{margin:14px 0 0;font-size:12px;line-height:1.5;color:var(--ds-mute)}
-.site-footer{padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--ds-line);text-align:center;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ds-p)}
-.site-footer a{color:var(--blue);text-decoration:none;font-weight:700}
-.site-footer__heart{display:inline-block;width:12px;height:12px;vertical-align:-2px;color:#ff3b30;animation:sh-beat .8s infinite}
-.site-footer__year{display:block;margin-top:3px;font-weight:400;opacity:.72}
-@keyframes sh-beat{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
-@keyframes sh-sad-head{0%,100%{transform:translateY(0) rotate(0deg)}35%{transform:translateY(2px) rotate(-2.2deg)}70%{transform:translateY(1.5px) rotate(2.2deg)}}
-@keyframes sh-eye-blink{0%,44%,48%,92%,96%,100%{transform:scaleY(1)}46%,94%{transform:scaleY(.12)}}
-@keyframes sh-mouth-sigh{0%,100%{transform:translateY(0)}50%{transform:translateY(1.1px)}}
-@keyframes sh-happy-bob{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-2.5px) scale(1.025)}}
-@keyframes sh-shackle-open{0%{transform:translateY(0) rotate(0deg)}45%{transform:translateY(-4.5px) rotate(0deg)}100%{transform:translateY(-4.5px) rotate(16deg)}}
-.svg-sad{animation:sh-sad-head 4.2s ease-in-out infinite;transform-origin:12px 12px}
-.svg-eye{animation:sh-eye-blink 4.6s infinite;transform-origin:center}
-.svg-frown{animation:sh-mouth-sigh 4.2s ease-in-out infinite}
-.svg-happy{animation:sh-happy-bob 2.8s ease-in-out infinite;transform-origin:12px 12px}
-.svg-shackle{animation:sh-shackle-open 1.1s cubic-bezier(.22,1,.36,1) forwards;transform-origin:16px 10px}
+.meta-row span:last-child{color:var(--ds-h);font-weight:600;text-align:right;word-break:break-all}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:.015em;font-variant-numeric:tabular-nums}
+.code-inline{display:inline-flex;align-items:center;gap:7px;min-width:0}
+.copy-pill{flex:none;height:26px;padding:0 9px;border-radius:8px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11.5px;font-weight:650;cursor:pointer}
+.copy-pill:active{opacity:.72}
+.cta-btn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:44px;padding:0 16px;border-radius:12px;background:var(--cta-bg);color:var(--cta-fg);text-decoration:none;font-size:14px;font-weight:700;border:0;cursor:pointer;transition:opacity .15s,transform .1s}
+.cta-btn:active{transform:scale(.988);opacity:.88}
+.cta-btn:disabled{opacity:.55;cursor:default}
+.appeal-box{margin-top:12px;padding-top:12px;border-top:1px solid var(--ds-line);text-align:left}
+.ap-in,.ap-ta{display:block;width:100%;padding:10px 13px;font-size:16px;color:var(--ds-h);background:var(--ds-field);border:1px solid var(--ds-line2);border-radius:12px;outline:0;-webkit-appearance:none;appearance:none}
+.ap-in{height:42px;margin-bottom:8px}
+.ap-ta{min-height:68px;resize:none;line-height:1.4;margin-bottom:10px}
+.ap-in::placeholder,.ap-ta::placeholder{color:var(--ds-p);opacity:.8}
+.ap-in:focus,.ap-ta:focus{border-color:var(--ds-h)}
+.ap-actions{display:flex;gap:8px}
+.ap-cancel{flex:0 0 84px;height:40px;border-radius:11px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:13.5px;font-weight:650}
+.ap-send{flex:1 1 auto;height:40px;border-radius:11px;background:var(--cta-bg);color:var(--cta-fg);font-size:13.5px;font-weight:700}
+.ap-msg{margin-top:10px;font-size:12.5px;line-height:1.45;color:var(--ds-p);text-align:center}
+.site-about{flex:0 0 auto;margin:26px 0 0;padding:24px 16px 0;border-top:1px solid var(--ds-line)}
+.ds-docs{max-width:400px;margin:0 auto 22px;text-align:left}
+.ds-docs__blk{display:block;margin:0 0 20px}
+.ds-docs__h{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:13.5px;font-weight:700;line-height:1.25;letter-spacing:.03em;text-transform:uppercase;color:var(--ds-h)}
+.ds-docs__h svg{flex:0 0 auto;width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ds-docs__h--brand{margin-bottom:6px;font-size:17px;letter-spacing:-.01em;text-transform:none}
+.ds-docs__p{font-size:13px;font-weight:400;line-height:1.55;color:var(--ds-mute)}
+.ds-rules{margin:0;padding:0 0 0 16px;font-size:13px;line-height:1.6;color:var(--ds-mute)}
+.ds-rules li{margin-bottom:4px}
+.ds-rules li:last-child{margin-bottom:0}
+.ds-doclink{display:block;padding:5px 0;font-size:13.5px;font-weight:400;line-height:1.3;text-decoration:none;color:var(--ds-mute)}
+.ds-doclink:active{opacity:.6}
+.site-footer{padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--ds-line);text-align:center;font-size:11.5px;font-weight:600;text-transform:none;line-height:1.35;color:var(--ds-p)}
+.site-footer a{color:var(--blue);text-decoration:none;font-weight:600}
+.site-footer__heart{display:inline-block;width:12px;height:12px;vertical-align:-2px;color:#ff3b30;animation:sh-beat .6s infinite}
+.site-footer__year{display:block;margin-top:2px;font-weight:400;opacity:.7}
+@keyframes sh-beat{0%,100%{transform:scale(1)}50%{transform:scale(1.2)}}
+@keyframes sh-sad-head{0%,100%{transform:translateY(0) rotate(0deg)}35%{transform:translateY(1.6px) rotate(-1.8deg)}70%{transform:translateY(1.2px) rotate(1.8deg)}}
+@keyframes sh-eye-blink{0%,44%,48%,92%,96%,100%{transform:scaleY(1)}46%,94%{transform:scaleY(.14)}}
+@keyframes sh-mouth-sigh{0%,100%{transform:translateY(0)}50%{transform:translateY(.9px)}}
+@keyframes sh-happy-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+@keyframes sh-shackle-open{0%{transform:translateY(0) rotate(0deg)}45%{transform:translateY(-4.2px) rotate(0deg)}100%{transform:translateY(-4.2px) rotate(15deg)}}
+.svg-sad{animation:sh-sad-head 4.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+.svg-eye{animation:sh-eye-blink 4.8s infinite;transform-box:fill-box;transform-origin:center}
+.svg-frown{animation:sh-mouth-sigh 4.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+.svg-happy{animation:sh-happy-bob 3s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+.svg-shackle{animation:sh-shackle-open 1.1s cubic-bezier(.22,1,.36,1) forwards;transform-box:fill-box;transform-origin:100% 100%}
 @media (prefers-reduced-motion:reduce){.ds-sw,.ds-swi,.svg-sad,.svg-eye,.svg-frown,.svg-happy,.svg-shackle,.site-footer__heart{animation:none}}
 CSS;
 }
 
 function sh_header_html($e)
 {
-    $logo = sh_logo_src();
+    $logo = sh_logo_url();
     return '<header class="site-header">'
-        . '<a class="brand" href="/" aria-label="iosmods.xyz">'
-        . '<span class="ds-logo">'
-        . '<img class="brand__logo" id="sh-brand-img" src="' . $e($logo) . '" alt="iosmods.xyz" fetchpriority="high" decoding="sync" draggable="false">'
-        . '<i class="ds-sw" aria-hidden="true"><img class="ds-swi" alt="" decoding="async" draggable="false"></i>'
-        . '<i class="ds-sw ds-sw2" aria-hidden="true"><img class="ds-swi" alt="" decoding="async" draggable="false"></i>'
+        . '<a class="brand" href="/" aria-label="iosmods">'
+        . '<span class="ds-logo" id="ds-logo">'
+        . '<img class="brand__logo" id="brand-logo" src="' . $e($logo) . '" alt="iosmods" fetchpriority="high" decoding="sync" draggable="false">'
+        . '<i class="ds-sw" aria-hidden="true"><img class="ds-swi" src="' . $e($logo) . '" alt="" decoding="async" draggable="false"></i>'
+        . '<i class="ds-sw ds-sw2" aria-hidden="true"><img class="ds-swi" src="' . $e($logo) . '" alt="" decoding="async" draggable="false"></i>'
         . '</span>'
         . '</a>'
         . '<div class="ds-hd">'
-        . '<span class="ds-hbtn" style="cursor:default">VI</span>'
-        . '<button class="ds-hbtn" id="ds-theme-btn" type="button" aria-label="Đổi giao diện"></button>'
+        . '<div class="ds-lang">'
+        . '<button class="ds-hbtn" id="ds-lang-btn" type="button" aria-label="Language">VI</button>'
+        . '<div class="ds-pop" id="ds-lang-pop" hidden>'
+        . '<button type="button" data-lang="vi" class="is-on">Tiếng Việt</button>'
+        . '<button type="button" data-lang="en">English</button>'
+        . '</div>'
+        . '</div>'
+        . '<button class="ds-hbtn" id="ds-theme-btn" type="button" aria-label="Theme"></button>'
         . '</div>'
         . '</header>'
-        . '<script>(function(){var m=document.getElementById("sh-brand-img");if(m){var s=m.getAttribute("src"),l=document.querySelectorAll(".ds-swi");for(var i=0;i<l.length;i++)l[i].src=s;}'
-        . 'var r=document.documentElement,b=document.getElementById("ds-theme-btn");if(!b)return;'
+        . '<script>(function(){'
+        . 'var r=document.documentElement;'
+        // Exact phase-locked continuous logo shimmer + iOS freeze recovery (same as devnvios_theme.php)
+        . 'function phase(){try{var P=1600,q=Date.now()%P;r.style.setProperty("--dsx-ph",(-q/1000)+"s");r.style.setProperty("--dsx-ph2",(-((q+800)%P)/1000)+"s");}catch(e){}}'
+        . 'phase();'
+        . 'var lastRe=0,beat=Date.now();'
+        . 'function restart(){var n=Date.now();if(n-lastRe<500)return;lastRe=n;phase();r.classList.add("dsx-re");void r.offsetWidth;r.classList.remove("dsx-re");}'
+        . 'document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")restart();});'
+        . 'window.addEventListener("pageshow",restart);window.addEventListener("focus",restart);'
+        . 'setInterval(function(){var n=Date.now();if(n-beat>3000&&document.visibilityState==="visible")restart();beat=n;},1200);'
+        // Exact Theme Toggle (Moon / Sun) synced with main iosmods.xyz
+        . 'var tb=document.getElementById("ds-theme-btn");'
         . 'var M=\'<svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>\','
         . 'S=\'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4"/></svg>\';'
-        . 'function p(){b.innerHTML=r.getAttribute("data-theme")==="light"?S:M;}p();'
-        . 'b.addEventListener("click",function(){var l=r.getAttribute("data-theme")!=="light";if(l)r.setAttribute("data-theme","light");else r.removeAttribute("data-theme");try{localStorage.setItem("ds-theme",l?"light":"dark");}catch(e){}p();});'
+        . 'function paintT(){if(tb)tb.innerHTML=r.getAttribute("data-theme")==="light"?S:M;}paintT();'
+        . 'if(tb)tb.addEventListener("click",function(){var l=r.getAttribute("data-theme")!=="light";if(l)r.setAttribute("data-theme","light");else r.removeAttribute("data-theme");try{localStorage.setItem("ds-theme",l?"light":"dark");}catch(e){}paintT();});'
+        // Exact Language Dropdown (VI / EN) synced with ds-lang
+        . 'var lb=document.getElementById("ds-lang-btn"),lp=document.getElementById("ds-lang-pop");'
+        . 'function setLang(lg){if(!lb)return;lg=lg==="en"?"en":"vi";lb.textContent=lg.toUpperCase();'
+        . 'if(lp){var bs=lp.querySelectorAll("button[data-lang]");for(var i=0;i<bs.length;i++)bs[i].classList.toggle("is-on",bs[i].getAttribute("data-lang")===lg);}'
+        . 'var ns=document.querySelectorAll("[data-en]");for(var j=0;j<ns.length;j++){var el=ns[j];if(!el.getAttribute("data-vi"))el.setAttribute("data-vi",el.textContent);el.textContent=lg==="en"?el.getAttribute("data-en"):el.getAttribute("data-vi");}}'
+        . 'try{var sl=localStorage.getItem("ds-lang");if(sl==="en")setLang("en");}catch(e){}'
+        . 'if(lb&&lp){lb.addEventListener("click",function(ev){ev.stopPropagation();lp.hidden=!lp.hidden;});'
+        . 'lp.addEventListener("click",function(ev){var t=ev.target&&ev.target.closest?ev.target.closest("button[data-lang]"):null;if(!t)return;var g=t.getAttribute("data-lang")||"vi";try{localStorage.setItem("ds-lang",g);}catch(e){}setLang(g);lp.hidden=true;});'
+        . 'document.addEventListener("click",function(){lp.hidden=true;});}'
         . '})();</script>';
 }
 
-function sh_footer_html()
+function sh_about_and_footer_html()
 {
-    return '<footer class="site-footer">Made with '
+    return '<section class="site-about">'
+        . '<div class="ds-docs">'
+        . '<div class="ds-docs__blk">'
+        . '<h3 class="ds-docs__h ds-docs__h--brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M7 10v4M5 12h4M16 11h.01M18 13h.01"/></svg><span>iosmods</span></h3>'
+        . '<p class="ds-docs__p" data-en="iOS apps, IPA utilities and tools in one place. Activate a valid key to open your selected package safely.">Kho ứng dụng IPA và công cụ tiện ích dành cho iOS. Kích hoạt Key hợp lệ để mở sản phẩm an toàn.</p>'
+        . '</div>'
+        . '<div class="ds-docs__blk">'
+        . '<h3 class="ds-docs__h"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span data-en="Website Security Rules">Nội quy bảo mật website</span></h3>'
+        . '<ul class="ds-rules">'
+        . '<li data-en="Do not enable VPN, Proxy, 1.1.1.1 WARP or region-spoofing tools while accessing the site.">Không bật VPN, Proxy, 1.1.1.1 hoặc công cụ đổi vùng mạng khi truy cập và nhận Key.</li>'
+        . '<li data-en="Do not run browser scripts, automation bots, source-inspection tools (F12) or exploit requests.">Không chạy tiện ích Script, công cụ tự động, mở F12 soi mã nguồn hoặc gửi luồng khai thác lỗi.</li>'
+        . '<li data-en="Do not rapidly spam product GET buttons without an active key or brute-force invalid keys.">Không bấm lấy sản phẩm liên tục khi chưa có Key hợp lệ hoặc thử sai mã Key nhiều lần.</li>'
+        . '<li data-en="Do not create multiple accounts on the same device or network to bypass Free Key limits.">Không tạo nhiều tài khoản phụ trên cùng thiết bị/mạng để lạm dụng giới hạn Key Free.</li>'
+        . '</ul>'
+        . '</div>'
+        . '<h3 class="ds-docs__h"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg><span data-en="Documents">Tài liệu</span></h3>'
+        . '<a class="ds-doclink" href="/docs.php?doc=privacy" data-en="Privacy Policy">Chính sách bảo mật</a>'
+        . '<a class="ds-doclink" href="/docs.php?doc=terms" data-en="Terms of Service">Điều khoản sử dụng</a>'
+        . '</div>'
+        . '</section>'
+        . '<footer class="site-footer">Made with '
         . '<svg class="site-footer__heart" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
         . ' by <a href="/">iosmods</a><span class="site-footer__year">@2024</span></footer>';
 }
 
 /**
- * TIER 1 UI — Frameless Animated Happy Face (😊) in Native iosmods.xyz Style + Full-Size Main Logo:
- * Triggered immediately when VPN / Fake-Region or passive browser Userscript/Extension is active.
+ * TIER 1 UI — Refined Animated Happy Face (😊) in Exact iosmods.xyz Native Style:
  */
 function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 {
@@ -1679,7 +1960,7 @@ function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 <meta name="color-scheme" content="dark light">
 <meta name="robots" content="noindex, nofollow">
 <title>Kiểm tra kết nối · iosmods.xyz</title>
-<script>try{if(localStorage.getItem('ds-theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
+<script>try{var __t=localStorage.getItem('ds-theme');if(__t==='light'||(__t==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches))document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
 <style><?= sh_native_shared_css() ?></style>
 </head>
 <body>
@@ -1687,40 +1968,33 @@ function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 <main class="stage">
   <section class="panel" role="dialog">
     <div class="anim-icon" aria-hidden="true">
-      <svg class="svg-happy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="9.6"/>
-        <g class="svg-eye"><path d="M8.1 10.2c.38-.62.92-.92 1.5-.92s1.12.3 1.5.92"/></g>
-        <g class="svg-eye"><path d="M12.9 10.2c.38-.62.92-.92 1.5-.92s1.12.3 1.5.92"/></g>
-        <path d="M8.1 14.1c1 1.7 2.32 2.55 3.9 2.55s2.9-.85 3.9-2.55"/>
+      <svg class="svg-happy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9.5"/>
+        <g class="svg-eye"><path d="M8.15 10.25c.36-.56.86-.84 1.4-.84s1.04.28 1.4.84"/></g>
+        <g class="svg-eye"><path d="M13.05 10.25c.36-.56.86-.84 1.4-.84s1.04.28 1.4.84"/></g>
+        <path d="M8.35 13.85c.92 1.48 2.14 2.22 3.65 2.22s2.73-.74 3.65-2.22"/>
       </svg>
     </div>
-    <h1 class="panel-title">Vui lòng tắt công cụ trung gian</h1>
-    <p class="cause">Hệ thống bảo mật <strong>iosmods.xyz</strong> ghi nhận kết nối của bạn đang bật <strong><?= $e($whatOff) ?></strong>. Hãy tắt hoàn toàn công cụ này rồi bấm truy cập lại.</p>
+    <h1 class="panel-title" data-en="Please Disable Proxy / Script">Vui lòng tắt công cụ trung gian</h1>
+    <p class="cause">Hệ thống phát hiện kết nối đang bật <strong><?= $e($whatOff) ?></strong>. Vui lòng tắt hoàn toàn công cụ này trước khi truy cập.</p>
 
-    <div class="spec-title">Thông tin kiểm tra</div>
     <div class="meta">
-      <div class="meta-row"><span>Công cụ phát hiện</span><span><?= $e($whatOff) ?></span></div>
-      <div class="meta-row"><span>Địa chỉ kết nối</span><span class="mono"><?= $e($ip) ?></span></div>
-      <div class="meta-row"><span>Trạng thái tài khoản</span><span>An toàn · Chưa bị khoá</span></div>
+      <div class="meta-row"><span data-en="Detected">Phát hiện</span><span><?= $e($whatOff) ?></span></div>
+      <div class="meta-row"><span data-en="IP Address">Địa chỉ IP</span><span class="mono"><?= $e($ip) ?></span></div>
     </div>
 
-    <a class="submit-btn" href="/" onclick="document.cookie='sh_vg_retry=1;path=/;max-age=20';">
-      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
-      <span>Đã tắt xong · Truy cập lại</span>
-    </a>
-    <p class="foot-policy">Quy định bảo mật của iosmods.xyz nghiêm cấm sử dụng VPN chuyển vùng hoặc tiện ích Script can thiệp vào hệ thống.</p>
+    <a class="cta-btn" href="/" onclick="document.cookie='sh_vg_retry=1;path=/;max-age=20';" data-en="Disabled · Continue">Đã tắt xong · Truy cập lại</a>
   </section>
   <?= $previewBarHtml ?>
 </main>
-<?= sh_footer_html() ?>
+<?= sh_about_and_footer_html() ?>
 </body>
 </html>
 <?php
 }
 
 /**
- * TIER 2 UI — Frameless Animated Sad Face (☹️) + Animated Unlock Transition (🔓)
- * in Native iosmods.xyz Style + Full-Size Main Logo + Multi-Segment Encrypted Case Code!
+ * TIER 2 UI — Refined Animated Sad Face (☹️) + Unlock Transition (🔓) + Inline Appeal Form to Admin!
  */
 function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = '')
 {
@@ -1739,11 +2013,8 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
             $expiresTs = (int) $parsed;
         }
     }
-    $createdTs = !empty($ban['created_ts']) ? (int) $ban['created_ts'] : ($expiresTs > 0 ? $now - 60 : $now);
-    $totalSec  = $expiresTs > 0 ? max(60, $expiresTs - $createdTs) : 0;
     $isTemp    = $expiresTs > 0;
     $left      = $isTemp ? max(1, $expiresTs - $now) : 0;
-    $pct       = ($isTemp && $totalSec > 0) ? max(2, min(100, (int) round(($left / $totalSec) * 100))) : 100;
     $banType   = isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'manual';
     $isSpam    = in_array($banType, ['key_spam', 'prod_spam'], true);
     $isPreview = !empty($ban['is_preview']);
@@ -1782,9 +2053,15 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         return;
     }
 
+    $lid      = sh_ensure_browser_lid();
+    $sig      = sh_client_sig($lid);
+    $knownUsr = !empty($ban['username']) ? (string) $ban['username'] : '';
+    if ($knownUsr === '' && session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['username'])) {
+        $knownUsr = (string) $_SESSION['username'];
+    }
+
     header('Content-Type: text/html; charset=utf-8');
     $e       = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); };
-    $contact = sh_contact_url();
     $heading = $isSpam ? 'Tạm khoá do thao tác quá mức' : 'Truy cập đã bị khoá bảo mật';
     ?><!DOCTYPE html>
 <html lang="vi">
@@ -1794,7 +2071,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
 <meta name="color-scheme" content="dark light">
 <meta name="robots" content="noindex, nofollow">
 <title><?= $e($heading) ?> · iosmods.xyz</title>
-<script>try{if(localStorage.getItem('ds-theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
+<script>try{var __t=localStorage.getItem('ds-theme');if(__t==='light'||(__t==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches))document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
 <style><?= sh_native_shared_css() ?></style>
 </head>
 <body>
@@ -1802,82 +2079,130 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
 <main class="stage">
   <section class="panel" role="alert">
     <div class="anim-icon" id="sh-icon-box" aria-hidden="true">
-      <svg class="svg-sad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="9.6"/>
-        <path d="M7.7 8.4c.7-.45 1.5-.55 2.3-.3"/>
-        <path d="M16.3 8.4c-.7-.45-1.5-.55-2.3-.3"/>
-        <g class="svg-eye"><circle cx="9.1" cy="10.5" r="1.05" fill="currentColor" stroke="none"/></g>
-        <g class="svg-eye"><circle cx="14.9" cy="10.5" r="1.05" fill="currentColor" stroke="none"/></g>
-        <path class="svg-frown" d="M8.3 16.3c1-1.45 2.3-2.15 3.7-2.15s2.7.7 3.7 2.15"/>
+      <svg class="svg-sad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9.5"/>
+        <g class="svg-eye"><line x1="9.2" y1="9.5" x2="9.2" y2="10.9" stroke-width="2.1"/></g>
+        <g class="svg-eye"><line x1="14.8" y1="9.5" x2="14.8" y2="10.9" stroke-width="2.1"/></g>
+        <path class="svg-frown" d="M8.65 15.85c.9-1.2 2.02-1.8 3.35-1.8s2.45.6 3.35 1.8"/>
       </svg>
     </div>
     <h1 class="panel-title" id="sh-title"><?= $e($heading) ?></h1>
     <p class="cause" id="sh-cause"><strong>Nguyên nhân:</strong> <?= $e($reason) ?></p>
 
-<?php if ($isTemp) { ?>
-    <div class="timer-card">
-      <div class="timer-top">
-        <span class="timer-lbl">Tự động mở khoá sau</span>
-        <span class="timer-val" id="sh-cd" data-left="<?= (int) $left ?>" data-total="<?= (int) max($left, $totalSec) ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span>
-      </div>
-      <div class="meter-bar"><div class="meter-fill" id="sh-bar" style="width:<?= (int) $pct ?>%"></div></div>
-    </div>
-<?php } ?>
-
-    <div class="spec-title">Chi tiết bảo mật</div>
     <div class="meta">
-<?php if (!$isTemp) { ?>
-      <div class="meta-row"><span>Thời hạn khoá</span><span>Vĩnh viễn (Chờ Admin xét duyệt)</span></div>
+<?php if ($isTemp) { ?>
+      <div class="meta-row"><span data-en="Auto Unlock In">Tự động mở sau</span><span class="mono" id="sh-cd" data-left="<?= (int) $left ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span></div>
+<?php } else { ?>
+      <div class="meta-row"><span data-en="Duration">Thời hạn khoá</span><span data-en="Permanent">Vĩnh viễn</span></div>
 <?php } ?>
-      <div class="meta-row"><span>Địa chỉ IP ghi nhận</span><span class="mono"><?= $e($ip) ?></span></div>
-<?php if ($streamIp !== '') { ?>
-      <div class="meta-row"><span>Máy chủ luồng mạng</span><span class="mono"><?= $e($streamIp) ?></span></div>
-<?php } ?>
-      <div class="meta-row"><span>Chế độ bảo vệ</span><span>Khoá đồng bộ IP &amp; Thiết bị</span></div>
+      <div class="meta-row"><span data-en="IP Address">Địa chỉ IP</span><span class="mono"><?= $e($ip) ?><?= $streamIp !== '' ? ' · ' . $e($streamIp) : '' ?></span></div>
+      <div class="meta-row">
+        <span data-en="Verification">Mã xác minh</span>
+        <span class="code-inline">
+          <span class="mono" id="sh-code-val"><?= $e($caseCode) ?></span>
+          <button type="button" class="copy-pill" id="sh-copy-btn" data-code="<?= $e($caseCode) ?>" data-en="Copy">Sao chép</button>
+        </span>
+      </div>
     </div>
 
-    <div class="spec-title">Mã xác minh gửi Admin</div>
-    <div class="code-box" id="sh-code-box" data-code="<?= $e($caseCode) ?>" title="Chạm để sao chép mã xác minh">
-      <span class="code-val"><?= $e($caseCode) ?></span>
-      <button type="button" class="code-copy" id="sh-copy-btn">
-        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        <span id="sh-copy-txt">Sao chép</span>
-      </button>
-    </div>
+    <button type="button" class="cta-btn" id="sh-open-appeal" data-en="Contact Admin to Unlock">Liên hệ Admin mở khoá</button>
 
-    <a class="submit-btn" id="sh-contact-btn" href="<?= $e($contact) ?>" rel="noopener">
-      <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-      <span>Gửi mã cho Admin mở khoá</span>
-    </a>
-    <p class="foot-policy">Bắt buộc đợi hết thời gian khoá hoặc gửi mã xác minh trên cho Admin kiểm tra. Mã xác minh sẽ tự động huỷ ngay khi mở chặn.</p>
+    <div class="appeal-box" id="sh-appeal-box" hidden>
+      <input type="text" class="ap-in" id="sh-ap-user" maxlength="60" value="<?= $e($knownUsr) ?>" placeholder="Tên tài khoản web của bạn (nếu có)" autocomplete="username">
+      <textarea class="ap-ta" id="sh-ap-msg" maxlength="350" placeholder="Nhập nội dung / lý do gửi Admin xem xét mở khoá..."></textarea>
+      <div class="ap-actions">
+        <button type="button" class="ap-cancel" id="sh-ap-cancel" data-en="Close">Đóng</button>
+        <button type="button" class="ap-send" id="sh-ap-send" data-en="Send Request">Gửi yêu cầu</button>
+      </div>
+    </div>
+    <p class="ap-msg" id="sh-ap-status" hidden></p>
   </section>
   <?= $previewBarHtml ?>
 </main>
-<?= sh_footer_html() ?>
+<?= sh_about_and_footer_html() ?>
 <script>
 (function(){
-  var box = document.getElementById('sh-code-box'), btn = document.getElementById('sh-copy-btn'), txt = document.getElementById('sh-copy-txt'), cbtn = document.getElementById('sh-contact-btn');
-  function copyCode(){
-    if (!box) return;
-    var c = box.getAttribute('data-code') || '';
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(c);
-      } else {
-        var ta = document.createElement('textarea'); ta.value = c; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-      }
-      if (btn) btn.classList.add('is-copied');
-      if (txt) txt.textContent = 'Đã chép ✓';
-    } catch(e){}
+  var cpBtn = document.getElementById('sh-copy-btn');
+  if (cpBtn) {
+    cpBtn.addEventListener('click', function(){
+      var c = cpBtn.getAttribute('data-code') || '';
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(c);
+        } else {
+          var ta = document.createElement('textarea'); ta.value = c; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+        }
+        cpBtn.textContent = 'Đã sao chép';
+      } catch(e){}
+    });
   }
-  if (box) box.addEventListener('click', copyCode);
-  if (cbtn) cbtn.addEventListener('click', copyCode);
+
+  var openBtn = document.getElementById('sh-open-appeal'),
+      apBox   = document.getElementById('sh-appeal-box'),
+      canBtn  = document.getElementById('sh-ap-cancel'),
+      sendBtn = document.getElementById('sh-ap-send'),
+      uIn     = document.getElementById('sh-ap-user'),
+      mIn     = document.getElementById('sh-ap-msg'),
+      stEl    = document.getElementById('sh-ap-status');
+
+  if (openBtn && apBox) {
+    openBtn.addEventListener('click', function(){
+      apBox.hidden = false;
+      openBtn.hidden = true;
+      if (stEl) stEl.hidden = true;
+      if (uIn && !uIn.value) uIn.focus(); else if (mIn) mIn.focus();
+    });
+  }
+  if (canBtn && apBox && openBtn) {
+    canBtn.addEventListener('click', function(){
+      apBox.hidden = true;
+      openBtn.hidden = false;
+    });
+  }
+  if (sendBtn) {
+    sendBtn.addEventListener('click', function(){
+      var msg = (mIn ? mIn.value : '').trim();
+      var usr = (uIn ? uIn.value : '').trim();
+      if (msg.length < 3) {
+        if (stEl) { stEl.hidden = false; stEl.textContent = 'Vui lòng nhập nội dung yêu cầu trước khi gửi.'; }
+        if (mIn) mIn.focus();
+        return;
+      }
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Đang gửi...';
+      var f = new URLSearchParams();
+      f.set('lid', <?= json_encode($lid) ?>);
+      f.set('sig', <?= json_encode($sig) ?>);
+      f.set('case_code', <?= json_encode($caseCode) ?>);
+      f.set('username', usr);
+      f.set('message', msg);
+      f.set('preview', <?= $isPreview ? '"1"' : '""' ?>);
+      fetch((location.pathname || '/') + '?__sh_appeal=1', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
+        body: f.toString()
+      }).then(function(r){ return r.json(); }).then(function(j){
+        if (j && j.ok) {
+          apBox.hidden = true;
+          openBtn.hidden = true;
+          if (stEl) { stEl.hidden = false; stEl.textContent = j.msg || 'Đã gửi yêu cầu đến Admin thành công.'; }
+        } else {
+          sendBtn.disabled = false;
+          sendBtn.textContent = 'Gửi yêu cầu';
+          if (stEl) { stEl.hidden = false; stEl.textContent = (j && j.msg) ? j.msg : 'Không thể gửi yêu cầu lúc này.'; }
+        }
+      }).catch(function(){
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Gửi yêu cầu';
+        if (stEl) { stEl.hidden = false; stEl.textContent = 'Lỗi kết nối, vui lòng thử lại.'; }
+      });
+    });
+  }
 
   var el = document.getElementById('sh-cd');
   if (!el) return;
   var left = parseInt(el.getAttribute('data-left') || '0', 10);
-  var total = Math.max(left, parseInt(el.getAttribute('data-total') || '60', 10));
-  var bar = document.getElementById('sh-bar');
   var isPv = el.getAttribute('data-preview') === '1';
   function pad(n){ return n < 10 ? '0' + n : '' + n; }
   function fmt(s){
@@ -1891,7 +2216,6 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     }
     if (tt) tt.textContent = 'Đã tự động mở khoá';
     if (cs) cs.innerHTML = 'Hệ thống đã hoàn tất kiểm tra bảo mật và mở khoá kết nối.';
-    if (bar) bar.style.width = '0%';
     if (!isPv) setTimeout(function(){ window.location.reload(); }, 1100);
   }
   var iv = setInterval(function(){
@@ -1903,7 +2227,6 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       return;
     }
     el.textContent = fmt(left);
-    if (bar) bar.style.width = Math.max(1, Math.round((left / total) * 100)) + '%';
   }, 1000);
 })();
 </script>
@@ -1931,15 +2254,15 @@ function sh_handle_preview_showcase()
     $pill = function ($m, $lbl) use ($mode, $tok) {
         $act = ($mode === $m) || ($m === 'ban_ip' && !in_array($mode, ['spam_sys', 'happy_vpn', 'unlock_anim'], true));
         $st  = $act
-            ? 'border:1px solid var(--blue);background:var(--blue);color:#fff'
+            ? 'border:1px solid var(--cta-bg);background:var(--cta-bg);color:var(--cta-fg)'
             : 'border:1px solid var(--ds-line2);background:var(--ds-field);color:var(--ds-h)';
-        return '<a href="?sh_test_view=' . $m . '&k=' . $tok . '" style="padding:8px 12px;border-radius:10px;font-size:12px;font-weight:700;text-decoration:none;' . $st . '">' . $lbl . '</a>';
+        return '<a href="?sh_test_view=' . $m . '&k=' . $tok . '" style="padding:7px 11px;border-radius:10px;font-size:11.5px;font-weight:700;text-decoration:none;' . $st . '">' . $lbl . '</a>';
     };
-    $nav = '<div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:420px;width:100%">'
+    $nav = '<div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:400px;width:100%">'
         . $pill('ban_ip', '1. Bị chặn bảo mật')
         . $pill('spam_sys', '2. Khoá Spam (5p–30p)')
-        . $pill('happy_vpn', '3. Mặt cười tắt VPN/Script')
-        . $pill('unlock_anim', '4. Hiệu ứng Mở khoá')
+        . $pill('happy_vpn', '3. Mặt cười tắt VPN')
+        . $pill('unlock_anim', '4. Mở khoá 00:00')
         . '</div>';
 
     if ($mode === 'happy_vpn') {
@@ -2381,9 +2704,9 @@ function sh_client_guard_script()
 
 function sh_is_light_subresource()
 {
-    if (isset($_GET['brand_logo']) || isset($_GET['favicon']) || isset($_GET['sync']) || isset($_GET['tg_ping'])
+    if (isset($_GET['brand_logo']) || isset($_GET['__sh_brand_logo']) || isset($_GET['favicon']) || isset($_GET['sync']) || isset($_GET['tg_ping'])
         || isset($_GET['ds_check_user']) || isset($_GET['ds_check_key_lock'])
-        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam'])) {
+        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal'])) {
         return true;
     }
     $path = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
@@ -2588,17 +2911,25 @@ function sh_early_guard()
         return;
     }
 
+    // Any intentional early exit inside sh_early_guard() occurs before db.php creates $conn,
+    // so suppress false 'db_down' shutdown alerts unless sh_early_guard() returns normally to db.php.
+    $GLOBALS['SH_SKIP_DB_ALERT'] = 1;
+
+    sh_serve_brand_logo_asset();
+    sh_handle_appeal_endpoint();
     sh_handle_preview_showcase();
     sh_handle_client_endpoints();
 
     $forensics = sh_trace_forensics();
     $ip        = sh_client_ip();
     if ($ip === '') {
+        $GLOBALS['SH_SKIP_DB_ALERT'] = 0;
         return;
     }
 
     list($safe, ) = sh_is_safe_ip($ip);
     if ($safe || sh_is_admin_viewer()) {
+        $GLOBALS['SH_SKIP_DB_ALERT'] = 0;
         return;
     }
 
@@ -2680,6 +3011,7 @@ function sh_early_guard()
 
     $cfg = sh_cfg();
     if (empty($cfg['enabled']) || sh_is_light_subresource()) {
+        $GLOBALS['SH_SKIP_DB_ALERT'] = 0;
         return;
     }
 
@@ -2886,6 +3218,8 @@ function sh_early_guard()
             exit;
         }
     }
+
+    $GLOBALS['SH_SKIP_DB_ALERT'] = 0;
 }
 
 /* ------------------------------------------------------------------

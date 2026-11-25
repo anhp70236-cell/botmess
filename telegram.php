@@ -1377,6 +1377,9 @@ function tg_activity_map($type, array $d)
             return ['tg:' . (isset($d['by']) ? $d['by'] : ''), 'bot', 'ip_ban', (isset($d['ip']) ? $d['ip'] : '')];
         case 'ip_unban':
             return ['tg:' . (isset($d['by']) ? $d['by'] : ''), 'bot', 'ip_unban', (isset($d['ip']) ? $d['ip'] : '')];
+        case 'user_appeal':
+            return [$user !== '' ? $user : ('ip:' . (isset($d['ip']) ? $d['ip'] : '')), 'blocked', 'user_appeal', isset($d['message']) ? $d['message'] : 'yêu cầu mở khoá'];
+
         case 'ip_auto_unban':
             return ['auto-timer', 'bot', 'ip_auto_unban', (isset($d['ip']) ? $d['ip'] : '')];
     }
@@ -1675,6 +1678,43 @@ function tg_render($type, array $d)
                 'throttle' => ['vma:' . $user . ':' . $ip, 90],
                 'rows'     => $rows,
                 'kb'       => $btns ? tg_alert_kb([$btns]) : null,
+            ];
+
+        case 'user_appeal':
+            $cc       = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $streamIp = isset($d['stream_ip']) && $d['stream_ip'] !== '' && $d['stream_ip'] !== $ip ? (string) $d['stream_ip'] : '';
+            $msg      = isset($d['message']) ? (string) $d['message'] : '';
+            $reason   = isset($d['reason']) ? (string) $d['reason'] : '';
+            $verU     = !empty($d['verified_u']);
+            $uDisp    = $user !== '' ? (tg_c($user) . ($verU ? ' <i>(đã đăng nhập)</i>' : ' <i>(khách nhập)</i>')) : '<i>khách chưa nhập tên</i>';
+            $kbRows   = [];
+            if ($ip !== '' && strlen($ip) <= 42) {
+                $row1 = [['text' => '🔓 Gỡ chặn ngay', 'callback_data' => 'qa|unban|' . $ip]];
+                if ($user !== '' && strlen($user) <= 36) {
+                    $row1[] = ['text' => '🎁 Gỡ + Mở Get Key', 'callback_data' => 'qa|unban_fk|' . $ip . ':' . $user];
+                }
+                $kbRows[] = $row1;
+                $row2 = [];
+                if ($cc !== '' && strlen($cc) <= 40) {
+                    $row2[] = ['text' => '🔍 Xem hồ sơ mã', 'callback_data' => 'qa|case|' . $cc];
+                }
+                $row2[]   = ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip];
+                $kbRows[] = $row2;
+            }
+            $aRows = [
+                '👤 Tài khoản web: ' . $uDisp,
+                '🌐 Địa chỉ IP: ' . $ipTag . ($streamIp !== '' ? ' · 🖥 Luồng: ' . tg_c($streamIp) : ''),
+                '🔎 Đang bị chặn vì: ' . tg_e(tg_clip($reason, 140)),
+                '💬 Yêu cầu gửi Admin: <b>' . tg_e(tg_clip($msg, 260)) . '</b>',
+            ];
+            if ($cc !== '') {
+                $aRows[] = '🔐 Mã xác minh: ' . tg_c($cc);
+            }
+            return [
+                'cat'   => 'ban',
+                'title' => '📩 <b>YÊU CẦU MỞ KHOÁ TỪ NGƯỜI DÙNG</b>',
+                'rows'  => $aRows,
+                'kb'    => $kbRows ? tg_alert_kb($kbRows) : null,
             ];
 
         case 'ip_auto_unban':

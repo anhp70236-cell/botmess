@@ -460,34 +460,32 @@ function screen_home($note = '')
     $vault   = tg_emoji_vault_read();
     $emCnt   = count(isset($vault['picks']) && is_array($vault['picks']) ? $vault['picks'] : []);
 
-    $activeCases = function_exists('sh_list_active_cases') ? count(sh_list_active_cases(20)) : 0;
+    $allActive = function_exists('sh_collect_active_blocks') ? sh_collect_active_blocks(bdb()) : [];
+    $actTotal  = count($allActive);
 
     $t = '🛡 <b>' . tg_e(tg_cfg('site_name', 'IOSMODS.XYZ')) . '</b> · <b>TRUNG TÂM ĐIỀU HÀNH</b>' . "\n"
-        . '<i>' . ($maint ? '🔴 CHẾ ĐỘ BẢO TRÌ' : '🟢 HỆ THỐNG ĐANG MỞ') . ' · ' . (!empty($shCfg['enabled']) ? '🛡 KHIÊN BẢO VỆ TỐI CAO' : '⚠️ KHIÊN ĐANG TẮT') . '</i>' . "\n";
+        . '<i>' . ($maint ? '🔴 ĐANG BẢO TRÌ TOÀN WEB' : '🟢 WEBSITE ĐANG MỞ') . ' · ' . (!empty($shCfg['enabled']) ? '🛡 KHIÊN AI 24/7' : '⚠️ KHIÊN TẮT') . '</i>' . "\n";
     if ($note !== '') {
         $t .= '<blockquote>' . $note . '</blockquote>' . "\n";
     }
     $t .= '<blockquote>'
-        . '👥 Thành viên: <b>' . $users . '</b> · 🟢 Đang dùng Key: <b>' . ($aFree + $aVip) . '</b> <i>(FREE ' . $aFree . ' · VIP ' . $aVip . ')</i>' . "\n"
-        . '🔑 Tồn kho Key: <b>FREE ' . $sFree . '</b> · <b>VIP ' . $sVip . '</b> · 📦 Sản phẩm: <b>' . $pTotal . '</b>'
+        . '👥 Thành viên: <b>' . $users . '</b> · 🟢 Có Key: <b>' . ($aFree + $aVip) . '</b> <i>(F:' . $aFree . ' · V:' . $aVip . ')</i>' . "\n"
+        . '🔑 Kho Key: <b>FREE ' . $sFree . '</b> · <b>VIP ' . $sVip . '</b> · 📦 Sản phẩm: <b>' . $pTotal . '</b>'
         . '</blockquote>' . "\n"
         . '<blockquote>'
-        . '🧠 AI Chống DDoS/Script: ' . (!empty($shCfg['enabled']) ? '🟢 <b>24/7</b>' : '🔴 <b>TẮT</b>')
-        . ' · ⏱ Đang tạm khoá: <b>' . $bans['temp'] . '</b> · 🚫 Cấm vĩnh viễn: <b>' . $bans['perm'] . '</b>' . "\n"
-        . '🔐 Mã IMX đang chờ xử lý: <b>' . $activeCases . '</b>'
-        . ' · 🧹 Tự xoá lệnh: <b>' . ($adSec > 0 ? $adSec . 's' : 'Tắt') . '</b>'
+        . '📋 Đang bị chặn hiện tại: ' . ($actTotal > 0 ? '🔴 <b>' . $actTotal . ' đối tượng</b> <i>(Tạm khoá ' . $bans['temp'] . ' · Cấm ' . $bans['perm'] . ')</i>' : '🟢 <b>Không có ai bị chặn</b>') . "\n"
+        . '🧹 Tự xoá lệnh: <b>' . ($adSec > 0 ? $adSec . 's' : 'Tắt') . '</b>'
         . ($emCnt > 0 ? ' · 🎨 Emoji: <b>Premium</b>' : '')
-        . ($blocked > 0 ? ' · ⛔ Khoá User: <b>' . $blocked . '</b>' : '')
         . '</blockquote>' . "\n"
-        . '<i>💡 Dán trực tiếp mã <code>IMX-...</code> hoặc địa chỉ IP vào khung chat để tra nguyên nhân &amp; gỡ khoá 1 chạm · ' . tg_e(tg_now('H:i:s d/m')) . '</i>';
+        . '<i>💡 Gửi trực tiếp <code>tên_user</code>, <code>IP</code> hoặc mã <code>IMX-...</code> vào chat để kiểm tra ai đang bị chặn · ' . tg_e(tg_now('H:i:s d/m')) . '</i>';
 
     ui_send($t, kb([
-        [btn('🔐 Tra mã xác minh IMX' . ($activeCases > 0 ? ' (' . $activeCases . ')' : ''), 'csx|menu'), btn($maint ? '🟢 Tắt bảo trì ngay' : '🛠 Chế độ bảo trì', 'mt|menu')],
-        [btn('🔑 Kho Key & Tạo Key', 'ky'), btn('🔓 Mở khoá Get Key', 'uk|0')],
-        [btn('🛡 Chống DDoS & Khoá IP', 'bn|0'), btn('🧠 AI Giám sát VPN/Acc', 'aihub')],
-        [btn('👥 Thành viên (' . $users . ')', cbd('us', '', 0)), btn('📦 Sản phẩm (' . $pTotal . ')', 'pr|0')],
-        [btn('🎨 Emoji Premium', 'em|0'), btn('🔔 Thông báo & Tự xoá', 'al')],
-        [btn('⚙️ Cấu hình Web', 'cf|0'), btn('🗄 Database', 'db'), btn('🔄 Làm mới', 'home')],
+        [btn('📋 Danh sách đang bị chặn (' . $actTotal . ')', 'abl|0'), btn('🔍 Kiểm tra User / IP / Mã', 'chk|ask')],
+        [btn($maint ? '🟢 Tắt bảo trì ngay' : '🛠 Chế độ bảo trì', 'mt|menu'), btn('🔓 Mở khoá Get Key', 'uk|0')],
+        [btn('🔑 Kho Key & Tạo Key', 'ky'), btn('🛡 Chống DDoS & IP', 'bn|0')],
+        [btn('🧠 AI Giám sát 24/7', 'aihub'), btn('👥 Thành viên (' . $users . ')', cbd('us', '', 0))],
+        [btn('📦 Sản phẩm (' . $pTotal . ')', 'pr|0'), btn('🎨 Emoji Premium', 'em|0')],
+        [btn('🔔 Thông báo & Tự xoá', 'al'), btn('⚙️ Cấu hình', 'cf|0'), btn('🔄 Làm mới', 'home')],
     ]));
 }
 
@@ -1055,6 +1053,21 @@ function bot_quick_alert_action($act, $target, array $origMessage)
             $doneNote = !empty($res['ok']) ? '☹️ Đã tạm khoá 30p IP ' . $ip : ('⚠️ ' . $res['msg']);
             toast($doneNote);
         }
+    } elseif ($act === 'unban_fk') {
+        $parts = explode(':', (string) $target, 2);
+        $ip    = ipg_norm($parts[0]);
+        $usr   = isset($parts[1]) ? trim($parts[1]) : '';
+        if ($ip !== '' && bot_ipg_ready()) {
+            ipg_unban(bdb(), $ip, $admin);
+        }
+        if ($usr !== '') {
+            bot_unlock_all_locks($usr);
+        } elseif ($ip !== '') {
+            bot_unlock_all_locks($ip);
+        }
+        bot_log('tg_appeal_unban', $ip . ($usr !== '' ? ' / ' . $usr : '') . ' [Nút yêu cầu]');
+        $doneNote = '✅ Đã gỡ khoá & cấp quyền cho ' . ($usr !== '' ? $usr : $ip);
+        toast(tg_clip($doneNote, 180));
     } elseif ($act === 'fkpass') {
         list($ok, $msg) = bot_unlock_all_locks($target);
         if ($ok) {
@@ -2615,12 +2628,268 @@ function bot_conv_input(array $conv, $text, array $m)
             return screen_ip($text);
 
         case 'case_ask':
-            return screen_case_lookup($text);
+            return screen_smart_check($text);
+
+        case 'smart_check':
+            return screen_smart_check($text);
 
         case 'block_reason':
             return bot_user_block((int) $d['id'], $text, true);
     }
     return screen_home();
+}
+
+/**
+ * Live Active Blocked List (/dangbi, /dschan, abl|...):
+ * Shows EVERYONE currently blocked right now across IP bans, pre-DB shield cache, and Account blocks.
+ * Clearly announces if NOBODY is currently blocked!
+ */
+function screen_active_blocked($page = 0, $note = '')
+{
+    $items = function_exists('sh_collect_active_blocks') ? sh_collect_active_blocks(bdb()) : [];
+    $total = count($items);
+
+    $t = '📋 <b>DANH SÁCH ĐANG BỊ CHẶN TRÊN WEBSITE</b>' . "\n";
+    if ($note !== '') {
+        $t .= '<blockquote>' . $note . "</blockquote>\n";
+    }
+
+    if ($total === 0) {
+        $t .= '<blockquote>'
+            . '🟢 <b>HIỆN TẠI KHÔNG CÓ AI ĐANG BỊ CHẶN</b>' . "\n"
+            . 'Toàn bộ thành viên và địa chỉ IP trên hệ thống đang hoạt động bình thường, không có bất kỳ lệnh khoá nào đang áp dụng.'
+            . '</blockquote>';
+        return ui_send($t, kb([
+            [btn('🔍 Kiểm tra 1 User / IP cụ thể', 'chk|ask'), btn('🔄 Làm mới', 'abl|0')],
+            [btn('📜 Lịch sử chặn trước đây', 'bn|0'), btn('🏠 Menu chính', 'home')],
+        ]));
+    }
+
+    $per   = 6;
+    $pages = max(1, (int) ceil($total / $per));
+    $page  = max(0, min((int) $page, $pages - 1));
+    $slice = array_slice($items, $page * $per, $per);
+
+    $tempN = 0;
+    $permN = 0;
+    foreach ($items as $it) {
+        if ($it['kind'] === 'temp_ip') {
+            $tempN++;
+        } else {
+            $permN++;
+        }
+    }
+
+    $t .= '<blockquote>'
+        . '🔴 Đang bị chặn: <b>' . $total . ' đối tượng</b> <i>(Tạm khoá: ' . $tempN . ' · Cấm/Khoá tài khoản: ' . $permN . ')</i>'
+        . '</blockquote>' . "\n";
+
+    $kbd = [];
+    foreach ($slice as $idx => $it) {
+        $num     = $page * $per + $idx + 1;
+        $who     = !empty($it['username']) ? ('👤 <code>' . tg_e($it['username']) . '</code>') : '';
+        $ipTxt   = !empty($it['ip']) ? ('🌐 <code>' . tg_e($it['ip']) . '</code>') : '';
+        $leftTxt = 'Vĩnh viễn';
+        if (!empty($it['expires_ts']) && (int) $it['expires_ts'] > time()) {
+            $leftTxt = 'còn ' . max(1, (int) ceil(((int) $it['expires_ts'] - time()) / 60)) . ' phút';
+        }
+        $t .= '<b>' . $num . '.</b> ' . implode(' · ', array_filter([$who, $ipTxt])) . ' · <i>(' . $leftTxt . ")</i>\n"
+            . '   ↳ ' . tg_e(tg_clip($it['reason'], 95)) . "\n";
+
+        if ($it['kind'] === 'user_block' && !empty($it['id'])) {
+            $kbd[] = [btn('🔓 Mở khoá User ' . tg_clip($it['username'], 22), 'uu|' . (int) $it['id'] . '|ok', 'success')];
+        } elseif (!empty($it['ip'])) {
+            $lbl = '🔓 Gỡ ' . ($it['username'] !== '' ? ($it['username'] . ' (' . $it['ip'] . ')') : $it['ip']);
+            $rowBtns = [btn(tg_clip($lbl, 34), cbd('abl', 'unban_ip', $it['ip']), 'success')];
+            if (!empty($it['case_code'])) {
+                $rowBtns[] = btn('🔍 Hồ sơ', cbd('csx', 'view', $it['case_code']));
+            }
+            $kbd[] = $rowBtns;
+        }
+    }
+
+    if ($pages > 1) {
+        $kbd[] = pager_row('abl', [], $page, $pages);
+    }
+    if ($tempN > 0) {
+        $kbd[] = [btn('🧹 Gỡ toàn bộ ' . $tempN . ' IP tạm khoá', 'abl|clear_temp', 'success')];
+    }
+    $kbd[] = [btn('🔍 Kiểm tra User / IP', 'chk|ask'), btn('🔄 Làm mới', 'abl|' . $page)];
+    $kbd[] = home_row();
+    return ui_send(rtrim($t), kb($kbd));
+}
+
+/**
+ * Smart Universal Checker (/check, chk|..., or typing any Username / IP / IMX-... in chat):
+ * Checks ALL security layers; if the target is NOT blocked anywhere, states clearly that they are NOT blocked!
+ */
+function screen_smart_check($rawQuery, $note = '')
+{
+    $q = trim((string) $rawQuery);
+    if ($q === '') {
+        conv_set($GLOBALS['CTX']['admin'], 'smart_check');
+        return ui_send('🔍 <b>KIỂM TRA AI ĐANG BỊ CHẶN</b>' . "\n" . hr() . "\n"
+            . 'Gửi <b>tên tài khoản web</b>, <b>địa chỉ IP</b> hoặc <b>mã xác minh IMX-...</b> cần kiểm tra:',
+            kb([[btn('📋 Xem danh sách đang bị chặn', 'abl|0')], [btn('✖ Huỷ', 'home')]]));
+    }
+
+    // 1. IMX-... Case Code
+    if (function_exists('sh_extract_case_code')) {
+        $imx = sh_extract_case_code($q);
+        if ($imx !== '' || stripos($q, 'IMX-') === 0) {
+            return screen_case_lookup($imx !== '' ? $imx : $q, $note);
+        }
+    }
+
+    // 2. IP Address Check
+    if (filter_var($q, FILTER_VALIDATE_IP) !== false) {
+        $ip    = ipg_norm($q);
+        $dbBan = bot_ipg_ready() ? ipg_is_banned(bdb(), $ip) : null;
+        $fast  = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($ip) : null;
+        $fkBlk = 0;
+        try {
+            if (bt_valid('free_key_ip_log')) {
+                $fkBlk = (int) bq_val("SELECT COUNT(*) FROM free_key_ip_log WHERE (ip_raw = ? OR ip = ?) AND event LIKE 'blocked%' AND created_at >= ?", 'ssi', [$ip, $ip, time() - 28800]);
+            }
+        } catch (Throwable $e) {}
+
+        if (!$dbBan && !$fast && $fkBlk === 0) {
+            $users = bot_ip_users($ip, 5);
+            $t     = '🟢 <b>ĐỊA CHỈ IP KHÔNG BỊ CHẶN</b>' . "\n"
+                . ($note !== '' ? '<blockquote>' . $note . "</blockquote>\n" : '')
+                . '<blockquote>'
+                . '🌐 IP: <code>' . tg_e($ip) . "</code>\n"
+                . '✅ Trạng thái: <b>Không bị chặn</b> — truy cập website và nhận Key bình thường.'
+                . ($users ? "\n👥 Tài khoản từng dùng IP: <code>" . tg_e(implode(', ', $users)) . '</code>' : '')
+                . '</blockquote>';
+            return ui_send($t, kb([
+                [btn('🌐 Chi tiết IP', cbd('csx', 'ip_raw', $ip)), btn('📋 DS đang bị chặn', 'abl|0')],
+                home_row(),
+            ]));
+        }
+        return screen_ip($ip, $note !== '' ? $note : ($fkBlk > 0 && !$dbBan && !$fast ? '⚠️ IP này không bị khoá web nhưng đang vướng <b>' . $fkBlk . '</b> lượt chặn chu kỳ Get Key 8h.' : ''));
+    }
+
+    // 3. Username Check (checks Account Lock + Entity Lock + All Recent IPs of User + Get-Key Lock!)
+    $uRow  = bq_row('SELECT id, username, role, key_type, (expiry_date > NOW()) AS has_key FROM users WHERE username = ? LIMIT 1', 's', [$q]);
+    $uname = $uRow ? (string) $uRow['username'] : $q;
+
+    $uBlock   = tg_user_block_row($uname);
+    $uElock   = function_exists('sh_read_entity_lock') ? sh_read_entity_lock('user', $uname) : null;
+    $userIps  = array_keys(bot_user_ips($uname, 10));
+    $bannedIps = [];
+    foreach ($userIps as $uip) {
+        $b1 = bot_ipg_ready() ? ipg_is_banned(bdb(), $uip) : null;
+        $b2 = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($uip) : null;
+        if ($b1 || $b2) {
+            $bannedIps[$uip] = $b2 ? $b2['reason'] : $b1['reason'];
+        }
+    }
+    $fkLock = 0;
+    try {
+        if (bt_valid('free_key_ip_log')) {
+            $fkLock = (int) bq_val("SELECT COUNT(*) FROM free_key_ip_log WHERE username = ? AND event LIKE 'blocked%' AND created_at >= ?", 'si', [$uname, time() - 28800]);
+        }
+    } catch (Throwable $e) {}
+
+    if (!$uBlock && !$uElock && !$bannedIps && $fkLock === 0) {
+        $t = '🟢 <b>' . ($uRow ? 'TÀI KHOẢN «' . tg_e($uname) . '» KHÔNG BỊ CHẶN' : 'KHÔNG TÌM THẤY LỆNH CHẶN CHO «' . tg_e($uname) . '»') . '</b>' . "\n"
+            . ($note !== '' ? '<blockquote>' . $note . "</blockquote>\n" : '')
+            . '<blockquote>'
+            . ($uRow
+                ? ('👤 Thành viên: <code>' . tg_e($uname) . '</code> (#' . (int) $uRow['id'] . ')' . "\n"
+                    . '✅ Trạng thái bảo mật: <b>Hoàn toàn sạch — KHÔNG bị chặn IP, thiết bị hay khoá tài khoản.</b>' . "\n"
+                    . '🔑 Gói Key hiện tại: <b>' . ((int) $uRow['has_key'] === 1 ? tg_e($uRow['key_type']) : 'Chưa kích hoạt / Hết hạn') . '</b>')
+                : ('ℹ️ Không có tài khoản <code>' . tg_e($uname) . '</code> trong CSDL hoặc chưa từng phát sinh lệnh chặn nào.'))
+            . '</blockquote>';
+        $kbd = [];
+        if ($uRow) {
+            $kbd[] = [btn('👤 Xem hồ sơ thành viên', cbd('dr', 'users', (int) $uRow['id'])), btn('🔓 Cấp quyền Get Key 1 lần', cbd('uk', 'run', $uname))];
+        }
+        $kbd[] = [btn('🔍 Kiểm tra người khác', 'chk|ask'), btn('📋 DS đang bị chặn', 'abl|0')];
+        $kbd[] = home_row();
+        return ui_send($t, kb($kbd));
+    }
+
+    // Target IS blocked on at least 1 layer!
+    $t = '🔴 <b>PHÁT HIỆN LỆNH CHẶN ĐỐI VỚI «' . tg_e($uname) . '»</b>' . "\n";
+    if ($note !== '') {
+        $t .= '<blockquote>' . $note . "</blockquote>\n";
+    }
+    $t .= '<blockquote>';
+    if ($uBlock) {
+        $t .= '⛔ <b>Khoá tài khoản:</b> ' . tg_e($uBlock['reason']) . "\n";
+    }
+    if ($uElock) {
+        $t .= '🔒 <b>Khoá liên kết thiết bị/tài khoản:</b> ' . tg_e(isset($uElock['reason']) ? $uElock['reason'] : 'Đang bị khoá đồng bộ') . "\n";
+    }
+    foreach ($bannedIps as $bip => $breason) {
+        $t .= '🌐 <b>IP đang bị chặn (<code>' . tg_e($bip) . '</code>):</b> ' . tg_e(tg_clip($breason, 110)) . "\n";
+    }
+    if ($fkLock > 0) {
+        $t .= '🕵️ <b>Giới hạn Get Key Free:</b> Vướng ' . $fkLock . " lượt chặn VPN/trùng thiết bị trong 8h qua.\n";
+    }
+    $t = rtrim($t) . '</blockquote>';
+
+    $kbd = [
+        [btn('🔓 Gỡ sạch TOÀN BỘ khoá cho ' . tg_clip($uname, 20), cbd('abl', 'unban_user', $uname), 'success')],
+    ];
+    if ($uRow) {
+        $kbd[] = [btn('👤 Hồ sơ thành viên', cbd('dr', 'users', (int) $uRow['id']))];
+    }
+    $kbd[] = [btn('📋 DS đang bị chặn', 'abl|0'), btn('🏠 Menu chính', 'home')];
+    return ui_send($t, kb($kbd));
+}
+
+function bot_active_blocked_action($sub, $arg = '')
+{
+    $admin = $GLOBALS['CTX']['admin'];
+    if ($sub === 'unban_ip' && $arg !== '') {
+        $ip = ipg_norm($arg);
+        if ($ip !== '' && bot_ipg_ready()) {
+            ipg_unban(bdb(), $ip, $admin);
+        } elseif ($ip !== '' && function_exists('sh_full_clean_slate_unban')) {
+            sh_full_clean_slate_unban(bdb(), $ip, '');
+        }
+        bot_log('tg_ipunban', $ip . ' [DS đang chặn]');
+        toast('🔓 Đã gỡ chặn ' . $ip);
+        return screen_active_blocked(0, '✅ Đã gỡ chặn hoàn toàn cho IP <code>' . tg_e($ip) . '</code>.');
+    }
+    if ($sub === 'clear_temp') {
+        $items = function_exists('sh_collect_active_blocks') ? sh_collect_active_blocks(bdb()) : [];
+        $n     = 0;
+        foreach ($items as $it) {
+            if ($it['kind'] === 'temp_ip' && !empty($it['ip'])) {
+                if (bot_ipg_ready()) {
+                    ipg_unban(bdb(), $it['ip'], $admin);
+                }
+                $n++;
+            }
+        }
+        bot_log('tg_clear_temp_bans', 'Gỡ toàn bộ ' . $n . ' IP tạm khoá');
+        toast('🧹 Đã gỡ ' . $n . ' IP tạm khoá');
+        return screen_active_blocked(0, '✅ Đã gỡ sạch toàn bộ <b>' . $n . '</b> IP tạm khoá.');
+    }
+    if ($sub === 'unban_user' && $arg !== '') {
+        $uname = trim((string) $arg);
+        $uRow  = bq_row('SELECT id, username, password FROM users WHERE username = ? LIMIT 1', 's', [$uname]);
+        if ($uRow && tg_user_block_row($uRow['username'])) {
+            bot_user_unblock((int) $uRow['id'], 'ok');
+        }
+        foreach (array_keys(bot_user_ips($uname, 12)) as $uip) {
+            if (bot_ipg_ready()) {
+                ipg_unban(bdb(), $uip, $admin);
+            }
+        }
+        if (function_exists('sh_full_clean_slate_unban')) {
+            sh_full_clean_slate_unban(bdb(), '', $uname);
+        }
+        bot_unlock_all_locks($uname);
+        bot_log('tg_full_unban_user', 'Gỡ toàn diện mọi khoá cho ' . $uname);
+        toast('🔓 Đã gỡ sạch mọi khoá cho ' . $uname);
+        return screen_smart_check($uname, '✅ Đã gỡ sạch toàn bộ khoá IP, thiết bị, tài khoản và giới hạn Get Key!');
+    }
+    return screen_active_blocked((int) $sub);
 }
 
 function screen_case_menu($note = '')
@@ -2885,10 +3154,11 @@ function bot_case_action($act, $code)
 
 function bot_help()
 {
-    ui_send('🤖 <b>DANH SÁCH LỆNH NHANH</b>' . "\n" . '<blockquote>'
-        . "/menu · Bảng điều khiển Admin CP\n"
-        . "/check <code>IMX-...</code> · Kiểm tra mã xác minh khách gửi\n"
-        . "/baotri · Quản lý bảo trì website\n"
+    ui_send('🤖 <b>DANH SÁCH LỆNH ĐIỀU HÀNH NHANH</b>' . "\n" . '<blockquote>'
+        . "/menu · Bảng điều khiển trung tâm\n"
+        . "/dangbi · Xem danh sách ai đang bị chặn\n"
+        . "/check <code>tên_user / IP / IMX-...</code> · Kiểm tra có bị chặn không\n"
+        . "/baotri · Bật / Tắt bảo trì website\n"
         . "/mokhoa <code>user_hoặc_IP</code> · Mở khoá Get Key\n"
         . "/user <code>tên</code> · /key <code>MÃ</code> · /genkey <code>vip 5 720</code>\n"
         . "/ban <code>IP lý_do</code> · /unban <code>IP</code> · /ip <code>IP</code>\n"
@@ -2952,9 +3222,16 @@ function bot_on_message(array $m)
             case 'baotri':
                 conv_clear($from);
                 return bot_maintenance($arg === 'on' ? 'on' : ($arg === 'off' ? 'off' : 'menu'));
-            case 'check':
+            case 'dangbi':
+            case 'dschan':
+            case 'danhsachchan':
+            case 'blocked':
                 conv_clear($from);
-                return $arg !== '' ? screen_case_lookup($arg) : screen_case_menu();
+                return screen_active_blocked(0);
+            case 'check':
+            case 'kiemtra':
+                conv_clear($from);
+                return $arg !== '' ? screen_smart_check($arg) : screen_smart_check('');
             case 'mokhoa':
                 conv_clear($from);
                 return $arg !== '' ? bot_unlock_route('run', $arg) : screen_unlock(0);
@@ -3031,9 +3308,12 @@ function bot_on_message(array $m)
         return screen_case_lookup($text);
     }
 
-    // Smart Direct IP Lookup: Paste any raw IPv4/IPv6 address directly into chat!
+    // Smart Direct IP or Single-Token Username Check when no conversation is active!
     if (!$convNow && filter_var($text, FILTER_VALIDATE_IP) !== false) {
-        return screen_ip($text);
+        return screen_smart_check($text);
+    }
+    if (!$convNow && preg_match('/^[A-Za-z0-9_.-]{3,36}$/', $text)) {
+        return screen_smart_check($text);
     }
 
     if ($convNow) {
@@ -3058,6 +3338,10 @@ function bot_route($data, array $origMessage = [])
             return;
         case 'qa':
             return bot_quick_alert_action($a, $b, $origMessage);
+        case 'abl':
+            return bot_active_blocked_action($a, $b);
+        case 'chk':
+            return screen_smart_check($a === 'ask' ? '' : $a);
         case 'csx':
             if ($a === 'ip_raw') {
                 return screen_ip($b);
@@ -3297,7 +3581,8 @@ function bot_setup()
 
     $cmds = [
         ['command' => 'menu',    'description' => 'Mở bảng điều khiển Admin CP'],
-        ['command' => 'check',   'description' => 'Tra cứu mã xác minh IMX khách gửi'],
+        ['command' => 'dangbi',  'description' => 'Xem danh sách ai đang bị chặn'],
+        ['command' => 'check',   'description' => 'Kiểm tra User / IP / Mã IMX có bị chặn không'],
         ['command' => 'baotri',  'description' => 'Bật / Tắt bảo trì website'],
         ['command' => 'mokhoa',  'description' => 'Mở khoá Get Key Free cho User / IP'],
         ['command' => 'ai',      'description' => 'AI Giám sát Chống DDoS & VPN'],
