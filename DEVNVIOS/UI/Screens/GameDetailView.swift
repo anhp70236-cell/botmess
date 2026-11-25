@@ -15,13 +15,13 @@ public struct GameDetailRootView: View {
                         VStack(spacing: 16) {
                             EmptyStateCardView(
                                 icon: "cylinder.split.1x2",
-                                title: "No Offset Databases Saved",
-                                message: "Import an IPA from Home or Analysis to automatically create a per-game folder with metadata.json, offsets.json, symbols.json, runtime.json, report.json, and history.json."
+                                title: "Kho Offset Đang Trống",
+                                message: "Sau khi chọn và phân tích tệp IPA, toàn bộ Offset (Máu, Thể lực, Vị trí, Di chuyển, Camera...) sẽ hiển thị tại đây và lưu trực tiếp trong ứng dụng Tệp (Files) của iPhone."
                             )
                             Button {
-                                container.isShowingFileImporter = true
+                                container.openIPAPicker()
                             } label: {
-                                Label("Import IPA Archive", systemImage: "square.and.arrow.down")
+                                Label("Chọn Tệp IPA Để Dò Ngay", systemImage: "doc.badge.plus")
                                     .font(.system(size: 14, weight: .semibold))
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 10)
@@ -36,7 +36,7 @@ public struct GameDetailRootView: View {
                 }
             }
             .background(AppTheme.canvas.ignoresSafeArea())
-            .navigationTitle(container.activeGameForDetails?.gameName ?? "Game Details")
+            .navigationTitle(container.activeGameForDetails?.gameName ?? "Kho Offset")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if container.games.count > 1 {
@@ -52,7 +52,7 @@ public struct GameDetailRootView: View {
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "square.stack.3d.up")
-                                Text("Switch")
+                                Text("Đổi Game")
                                     .font(.system(size: 13, weight: .medium))
                             }
                             .foregroundStyle(AppTheme.accent)
@@ -76,15 +76,14 @@ struct GameDetailContentView: View {
     @State private var searchText: String = ""
     @State private var selectedCategory: OffsetCategory?
     @State private var selectedStatus: OffsetVerificationStatus?
-    @State private var selectedDataType: OffsetDataType?
 
     @State private var inspectedOffset: DiscoveredOffset?
+    @State private var isShowingExportChoiceSheet = false
     @State private var isShowingReportSheet = false
     @State private var isShowingRuntimeSheet = false
     @State private var isShowingTraceImporter = false
     @State private var confirmDeleteGame = false
     @State private var confirmDeleteIPA = false
-    @State private var exportedFileURL: URL?
     @State private var copiedAddressLabel: String?
 
     private var filteredOffsets: [DiscoveredOffset] {
@@ -93,8 +92,7 @@ struct GameDetailContentView: View {
             bundle.offsets,
             searchQuery: searchText,
             category: selectedCategory,
-            verificationStatus: selectedStatus,
-            dataType: selectedDataType
+            verificationStatus: selectedStatus
         )
     }
 
@@ -104,13 +102,13 @@ struct GameDetailContentView: View {
                 if let bundle {
                     binarySummaryCard(bundle: bundle)
                     actionToolbarCard(bundle: bundle)
-                    searchAndFilterSection(totalCount: bundle.offsets.count)
+                    searchAndFilterSection(bundle: bundle)
 
                     if filteredOffsets.isEmpty {
                         EmptyStateCardView(
                             icon: "magnifyingglass",
-                            title: "No Matching Offsets",
-                            message: "Adjust search keywords or clear active category/verification filters."
+                            title: "Không Có Offset Phù Hợp Bộ Lọc",
+                            message: "Hãy xóa từ khóa tìm kiếm hoặc chọn nhóm danh mục khác."
                         )
                     } else {
                         LazyVStack(spacing: 10) {
@@ -133,9 +131,9 @@ struct GameDetailContentView: View {
                         }
                     }
                 } else if let loadError {
-                    EmptyStateCardView(icon: "exclamationmark.octagon", title: "Database Read Error", message: loadError)
+                    EmptyStateCardView(icon: "exclamationmark.octagon", title: "Lỗi Đọc Cơ Sở Dữ Liệu", message: loadError)
                 } else {
-                    ProgressView("Loading \(record.directoryName)/ database...")
+                    ProgressView("Đang tải dữ liệu \(record.directoryName)/...")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 40)
                 }
@@ -148,6 +146,12 @@ struct GameDetailContentView: View {
         .onChange(of: record.lastAnalyzedAt) { _ in reloadBundle() }
         .sheet(item: $inspectedOffset) { item in
             OffsetInspectorSheet(offset: item, defaultBase: bundle?.metadata.defaultBaseAddress ?? 0x1_0000_0000)
+        }
+        .sheet(isPresented: $isShowingExportChoiceSheet) {
+            if let bundle {
+                ExportModePromptSheet(bundle: bundle) {}
+                    .environmentObject(container)
+            }
         }
         .sheet(isPresented: $isShowingReportSheet) {
             if let bundle {
@@ -167,40 +171,42 @@ struct GameDetailContentView: View {
                 )
             }
         }
-        .fileImporter(
-            isPresented: $isShowingTraceImporter,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                applyAuthorizedRuntimeTrace(from: url)
-            }
+        .sheet(isPresented: $isShowingTraceImporter) {
+            IPADocumentPicker(
+                onPickURLs: { urls in
+                    isShowingTraceImporter = false
+                    if let first = urls.first {
+                        applyAuthorizedRuntimeTrace(from: first)
+                    }
+                },
+                onCancel: {
+                    isShowingTraceImporter = false
+                }
+            )
         }
-        .confirmationDialog("Delete Original IPA?", isPresented: $confirmDeleteIPA, titleVisibility: .visible) {
-            Button("Delete IPA (Keep Offsets)", role: .destructive) {
+        .confirmationDialog("Xóa Tệp IPA Gốc?", isPresented: $confirmDeleteIPA, titleVisibility: .visible) {
+            Button("Xóa IPA • Giữ Nguyên Offset", role: .destructive) {
                 container.deleteStoredIPAOnly(for: record)
                 reloadBundle()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Hủy", role: .cancel) {}
         } message: {
-            Text("Removes the large IPA archive while keeping \(record.directoryName)/{metadata,offsets,symbols,runtime,report,history}.json intact.")
+            Text("Xóa tệp IPA dung lượng lớn để nhẹ máy nhưng giữ nguyên toàn bộ Offset trong \(record.directoryName)/.")
         }
-        .confirmationDialog("Delete \(record.gameName)?", isPresented: $confirmDeleteGame, titleVisibility: .visible) {
-            Button("Delete Game & All Offsets", role: .destructive) {
+        .confirmationDialog("Xóa Game \(record.gameName)?", isPresented: $confirmDeleteGame, titleVisibility: .visible) {
+            Button("Xóa Hoàn Toàn", role: .destructive) {
                 container.deleteGameCompletely(record)
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Hủy", role: .cancel) {}
         } message: {
-            Text("Permanently removes \(record.directoryName)/ and all discovered offsets.")
+            Text("Xóa vĩnh viễn thư mục \(record.directoryName)/ và toàn bộ kết quả đã lưu.")
         }
     }
 
     private func reloadBundle() {
         do {
-            let loaded = try container.databaseService.loadGameBundle(for: record)
-            self.bundle = loaded
+            self.bundle = try container.databaseService.loadGameBundle(for: record)
             self.loadError = nil
-            self.exportedFileURL = try? container.exportService.exportFullAnalysisPackageJSON(bundle: loaded)
         } catch {
             self.bundle = nil
             self.loadError = error.localizedDescription
@@ -208,8 +214,6 @@ struct GameDetailContentView: View {
     }
 
     private func applyAuthorizedRuntimeTrace(from url: URL) {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
             let data = try Data(contentsOf: url)
             let trace = try container.runtimeInspector.parseAuthorizedTraceJSON(data)
@@ -234,8 +238,8 @@ struct GameDetailContentView: View {
                         .foregroundStyle(AppTheme.textSecondary)
                 }
                 Spacer()
-                Text("\(record.directoryName)/")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                Text("Games/\(record.directoryName)/")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(AppTheme.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -243,23 +247,23 @@ struct GameDetailContentView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
 
-            Divider().overlay(AppTheme.hairline)
+            Rectangle().fill(AppTheme.hairline).frame(height: 0.8)
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 8) {
-                metaKeyValue("Module", meta.analysisModuleName)
-                metaKeyValue("Architecture", meta.cpuArchitecture.uppercased())
-                metaKeyValue("Encryption", meta.encryptionState == .unencrypted ? "None (cryptid=0)" : "FairPlay (cryptid=\(meta.cryptID))")
-                metaKeyValue("Symbols", "\(meta.symbolStripStatus.rawValue) (\(meta.totalSymbolsCount))")
-                metaKeyValue("IL2CPP", meta.isUnityIL2CPP ? (meta.il2cppMetadataVersion.map { "v\($0)" } ?? meta.il2cppMetadataStatus) : "Not Present")
+                metaKeyValue("Module chính", meta.analysisModuleName)
+                metaKeyValue("Kiến trúc CPU", meta.cpuArchitecture.uppercased())
+                metaKeyValue("Mã hóa FairPlay", meta.encryptionState == .unencrypted ? "Không (cryptid=0)" : "Có (cryptid=\(meta.cryptID))")
+                metaKeyValue("Ký hiệu Symbol", "\(meta.symbolStripStatus.rawValue) (\(meta.totalSymbolsCount))")
+                metaKeyValue("Unity IL2CPP", meta.isUnityIL2CPP ? (meta.il2cppMetadataVersion.map { "Chuẩn v\($0)" } ?? meta.il2cppMetadataStatus) : "Không")
                 metaKeyValue("ASLR Base", HexFormatters.vaHex(meta.defaultBaseAddress))
             }
 
-            Text("Persisted files: metadata.json • offsets.json • symbols.json • runtime.json • report.json • history.json")
+            Text("Đã lưu trên iPhone: Tệp (Files) -> Trên iPhone của tôi -> DEVNVIOS IPA ANALYZER -> Games/\(record.directoryName)/")
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(AppTheme.textMuted)
+                .foregroundStyle(AppTheme.statusVerified)
                 .lineLimit(2)
         }
-        .thinCard(padding: 14, cornerRadius: 12, elevated: true)
+        .thinCard(padding: 14, cornerRadius: 13, elevated: true)
     }
 
     private func metaKeyValue(_ key: String, _ val: String) -> some View {
@@ -279,9 +283,24 @@ struct GameDetailContentView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 Button {
+                    isShowingExportChoiceSheet = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "square.and.arrow.down.on.square.fill")
+                        Text("Xuất 1 Tệp / Tách Từng Tệp")
+                    }
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+
+                Button {
                     isShowingReportSheet = true
                 } label: {
-                    actionChipLabel("Report & History", icon: "doc.text.magnifyingglass")
+                    actionChipLabel("Báo cáo & Lịch sử", icon: "doc.text.magnifyingglass")
                 }
 
                 Button {
@@ -290,24 +309,18 @@ struct GameDetailContentView: View {
                     actionChipLabel("Runtime & ASLR", icon: "memorychip")
                 }
 
-                if let exportURL = exportedFileURL {
-                    ShareLink(item: exportURL) {
-                        actionChipLabel("Export JSON", icon: "square.and.arrow.up")
-                    }
-                }
-
                 if record.hasStoredIPA {
                     Button {
                         container.selectedTab = .analysis
                         pipeline.reanalyze(record: record)
                     } label: {
-                        actionChipLabel("Re-analyze", icon: "arrow.clockwise")
+                        actionChipLabel("Dò lại", icon: "arrow.clockwise")
                     }
 
                     Button {
                         confirmDeleteIPA = true
                     } label: {
-                        actionChipLabel("Delete IPA Only", icon: "archivebox")
+                        actionChipLabel("Xóa IPA gốc", icon: "archivebox")
                     }
                 }
 
@@ -316,7 +329,7 @@ struct GameDetailContentView: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "trash")
-                        Text("Delete Game")
+                        Text("Xóa Game")
                     }
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(AppTheme.statusUndetermined)
@@ -353,12 +366,13 @@ struct GameDetailContentView: View {
     }
 
     @ViewBuilder
-    private func searchAndFilterSection(totalCount: Int) -> some View {
+    private func searchAndFilterSection(bundle: GameAnalysisBundle) -> some View {
+        let totalCount = bundle.offsets.count
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(AppTheme.textMuted)
-                TextField("Search class, method, field, RVA (0x...)", text: $searchText)
+                TextField("Tìm tên hàm, máu, vị trí, camera, RVA (0x...)", text: $searchText)
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(AppTheme.textPrimary)
                     .autocorrectionDisabled()
@@ -374,13 +388,12 @@ struct GameDetailContentView: View {
             }
             .thinCard(padding: 10, cornerRadius: 10)
 
-            // Verification Status Filter Chips
+            // Status Filter Chips
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    filterChip(title: "All (\(totalCount))", isSelected: selectedStatus == nil && selectedCategory == nil && selectedDataType == nil) {
+                    filterChip(title: "Tất cả (\(totalCount))", isSelected: selectedStatus == nil && selectedCategory == nil) {
                         selectedStatus = nil
                         selectedCategory = nil
-                        selectedDataType = nil
                     }
                     ForEach(OffsetVerificationStatus.allCases) { st in
                         filterChip(title: st.vietnameseLabel, isSelected: selectedStatus == st) {
@@ -390,18 +403,22 @@ struct GameDetailContentView: View {
                 }
             }
 
-            // Category Filter Chips
+            // Vietnamese Category Filter Chips with live counts
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(OffsetCategory.allCases) { cat in
-                        filterChip(title: cat.rawValue, isSelected: selectedCategory == cat) {
+                        let cCount = bundle.report.categoryBreakdown[cat.rawValue] ?? 0
+                        filterChip(
+                            title: "\(cat.vietnameseTitle) (\(cCount))",
+                            isSelected: selectedCategory == cat
+                        ) {
                             selectedCategory = (selectedCategory == cat) ? nil : cat
                         }
                     }
                 }
             }
 
-            Text("Showing \(filteredOffsets.count) of \(totalCount) offsets")
+            Text("Đang hiển thị \(filteredOffsets.count) / \(totalCount) offset")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(AppTheme.textMuted)
         }
@@ -412,13 +429,13 @@ struct GameDetailContentView: View {
             Text(title)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .foregroundStyle(isSelected ? AppTheme.accent : AppTheme.textSecondary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
                 .background(isSelected ? AppTheme.accentSubtle : AppTheme.surface)
                 .clipShape(Capsule())
                 .overlay(
                     Capsule()
-                        .strokeBorder(isSelected ? AppTheme.accent.opacity(0.6) : AppTheme.hairline, lineWidth: 0.8)
+                        .strokeBorder(isSelected ? AppTheme.accent.opacity(0.65) : AppTheme.hairline, lineWidth: 0.8)
                 )
         }
         .buttonStyle(.plain)
@@ -447,7 +464,7 @@ struct OffsetRowCard: View {
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
 
-                        Text("\(offset.category.rawValue) • \(offset.dataType.rawValue) • \(offset.discoverySource.rawValue)")
+                        Text("\(offset.category.vietnameseTitle) • \(offset.dataType.vietnameseTitle) • \(offset.discoverySource.rawValue)")
                             .font(.system(size: 10))
                             .foregroundStyle(AppTheme.textSecondary)
                             .lineLimit(1)
@@ -458,15 +475,15 @@ struct OffsetRowCard: View {
                 }
 
                 HStack(spacing: 10) {
-                    addressPair("RVA", offset.rvaFormatted)
-                    addressPair("VA", offset.value)
-                    addressPair("FILE", offset.fileOffsetFormatted)
+                    addressPair(offset.dataType == .field ? "FIELD" : "RVA", offset.rvaFormatted)
+                    addressPair("GIÁ TRỊ / VA", offset.value)
+                    addressPair("FILE OFF", offset.fileOffsetFormatted)
                     Spacer(minLength: 4)
 
                     Button(action: onCopy) {
                         HStack(spacing: 4) {
                             Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-                            Text(isCopied ? "Copied" : "Copy")
+                            Text(isCopied ? "Đã chép" : "Chép")
                         }
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(isCopied ? AppTheme.statusVerified : AppTheme.accent)
@@ -478,7 +495,7 @@ struct OffsetRowCard: View {
                     .buttonStyle(.plain)
                 }
             }
-            .thinCard(padding: 12, cornerRadius: 11)
+            .thinCard(padding: 12, cornerRadius: 12)
         }
         .buttonStyle(.plain)
     }
@@ -526,27 +543,26 @@ struct OffsetInspectorSheet: View {
                     .thinCard()
 
                     VStack(alignment: .leading, spacing: 8) {
-                        detailRow("Module", offset.moduleName)
-                        detailRow("Category", offset.category.rawValue)
-                        detailRow("Data Type", offset.dataType.rawValue)
-                        detailRow("Value / Static VA", offset.value)
-                        detailRow("RVA", offset.rvaFormatted)
-                        detailRow("File Offset", offset.fileOffsetFormatted)
-                        detailRow("Discovery Source", offset.discoverySource.rawValue)
-                        detailRow("Confidence", String(format: "%.0f%%", offset.confidenceScore * 100))
+                        detailRow("Module thực thi", offset.moduleName)
+                        detailRow("Nhóm chức năng", offset.category.vietnameseTitle)
+                        detailRow("Loại dữ liệu", offset.dataType.vietnameseTitle)
+                        detailRow("Giá trị / Địa chỉ ảo (Static VA)", offset.value)
+                        detailRow("Địa chỉ RVA / Field Offset", offset.rvaFormatted)
+                        detailRow("Vị trí trong tệp (File Offset)", offset.fileOffsetFormatted)
+                        detailRow("Nguồn phát hiện", offset.discoverySource.rawValue)
+                        detailRow("Độ tin cậy", String(format: "%.0f%%", offset.confidenceScore * 100))
                         if let sig = offset.signatureHint {
-                            detailRow("Signature / Prologue", sig)
+                            detailRow("Chữ ký lệnh ARM64 / Metadata Token", sig)
                         }
-                        detailRow("Detected At", ISO8601DateFormatter().string(from: offset.detectedAt))
+                        detailRow("Thời điểm phát hiện", ISO8601DateFormatter().string(from: offset.detectedAt))
                     }
                     .thinCard()
 
-                    // Interactive ASLR Calculator
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("ASLR-AWARE ADDRESS CALCULATOR")
+                        Text("BỘ TÍNH ĐỊA CHỈ ĐỘNG ASLR")
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(AppTheme.textMuted)
-                        Text("Formula: RuntimeVA = StaticVA (\(HexFormatters.vaHex(defaultBase)) + RVA) + ASLRSlide")
+                        Text("Công thức: RuntimeVA = StaticVA (\(HexFormatters.vaHex(defaultBase)) + RVA) + ASLRSlide")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(AppTheme.textSecondary)
 
@@ -562,14 +578,14 @@ struct OffsetInspectorSheet: View {
                         }
 
                         HStack {
-                            Text("Runtime VA:")
+                            Text("Địa chỉ Runtime:")
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(AppTheme.textSecondary)
                             Text(computedRuntimeHex)
                                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                                 .foregroundStyle(AppTheme.statusVerified)
                             Spacer()
-                            Button("Copy") {
+                            Button("Sao chép") {
                                 UIPasteboard.general.string = computedRuntimeHex
                             }
                             .font(.system(size: 12, weight: .semibold))
@@ -581,11 +597,11 @@ struct OffsetInspectorSheet: View {
                 .padding(16)
             }
             .background(AppTheme.canvas.ignoresSafeArea())
-            .navigationTitle("Offset Details")
+            .navigationTitle("Chi Tiết Offset")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Đóng") { dismiss() }
                 }
             }
         }
@@ -614,10 +630,10 @@ struct AnalysisReportSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("9-STAGE PIPELINE REPORT")
+                        Text("BÁO CÁO 9 PHƯƠNG PHÁP PHÂN TÍCH")
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(AppTheme.textMuted)
-                        Text("Duration: \(String(format: "%.2f", bundle.report.durationSeconds))s • SHA-256: \(bundle.metadata.binarySHA256.prefix(16))...")
+                        Text("Thời gian xử lý: \(String(format: "%.2f", bundle.report.durationSeconds))s • SHA-256: \(bundle.metadata.binarySHA256.prefix(16))...")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(AppTheme.textSecondary)
                     }
@@ -625,7 +641,7 @@ struct AnalysisReportSheet: View {
 
                     if !bundle.report.warnings.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("WARNINGS & LIMITATIONS")
+                            Text("GHI CHÚ KỸ THUẬT & TRẠNG THÁI BẢO VỆ")
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(AppTheme.statusProbable)
                             ForEach(bundle.report.warnings + bundle.report.limitations, id: \.self) { w in
@@ -657,10 +673,10 @@ struct AnalysisReportSheet: View {
 
                     if let cross = bundle.report.crossVersionDelta {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("CROSS-VERSION COMPARISON (v\(cross.previousVersion) -> v\(cross.currentVersion))")
+                            Text("SO SÁNH XUYÊN PHIÊN BẢN (v\(cross.previousVersion) -> v\(cross.currentVersion))")
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(AppTheme.accent)
-                            Text("Matched: \(cross.matchedCount) • Shifted RVAs: \(cross.shiftedRVAEntries.count) • Added: \(cross.newlyAddedCount) • Missing: \(cross.missingCount)")
+                            Text("Khớp tên: \(cross.matchedCount) • Đổi địa chỉ RVA: \(cross.shiftedRVAEntries.count) • Mới: \(cross.newlyAddedCount) • Bị gỡ: \(cross.missingCount)")
                                 .font(.system(size: 12))
                                 .foregroundStyle(AppTheme.textPrimary)
                             ForEach(cross.shiftedRVAEntries.prefix(15), id: \.self) { line in
@@ -673,7 +689,7 @@ struct AnalysisReportSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("ANALYSIS HISTORY (\(bundle.history.count) RUNS)")
+                        Text("LỊCH SỬ CÁC LẦN QUÉT (\(bundle.history.count))")
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(AppTheme.textMuted)
                         ForEach(bundle.history) { h in
@@ -682,7 +698,7 @@ struct AnalysisReportSheet: View {
                                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                                     .foregroundStyle(AppTheme.textPrimary)
                                 Spacer()
-                                Text("\(h.totalOffsets) offsets (\(h.verifiedCount) verified)")
+                                Text("\(h.totalOffsets) offset (\(h.verifiedCount) đã xác minh)")
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(AppTheme.textSecondary)
                             }
@@ -693,11 +709,11 @@ struct AnalysisReportSheet: View {
                 .padding(16)
             }
             .background(AppTheme.canvas.ignoresSafeArea())
-            .navigationTitle("Analysis Report")
+            .navigationTitle("Báo Cáo Chi Tiết")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Close") { dismiss() }
+                    Button("Đóng") { dismiss() }
                 }
             }
         }
@@ -715,10 +731,10 @@ struct RuntimeInspectorSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("RUNTIME & ASLR MAPPING")
+                        Text("ÁNH XẠ ĐỊA CHỈ ĐỘNG RUNTIME & ASLR")
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(AppTheme.textMuted)
-                        Text("Mode: \(bundle.runtime.observationMode)")
+                        Text("Chế độ: \(bundle.runtime.observationMode)")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(AppTheme.textPrimary)
                         ForEach(bundle.runtime.notes, id: \.self) { note in
@@ -727,7 +743,7 @@ struct RuntimeInspectorSheet: View {
                                 .foregroundStyle(AppTheme.textSecondary)
                         }
                         Button(action: onImportTraceTapped) {
-                            Label("Import Authorized Runtime Trace (.json)", systemImage: "tray.and.arrow.down")
+                            Label("Nhập Tệp Runtime Trace (.json)", systemImage: "tray.and.arrow.down")
                                 .font(.system(size: 12, weight: .semibold))
                         }
                         .buttonStyle(.borderedProminent)
@@ -737,7 +753,7 @@ struct RuntimeInspectorSheet: View {
                     .thinCard()
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("DYNAMIC ASLR TABLE (SLIDE \(HexFormatters.hex(bundle.runtime.sampleASLRSlide)))")
+                        Text("BẢNG ÁNH XẠ ASLR (SLIDE \(HexFormatters.hex(bundle.runtime.sampleASLRSlide)))")
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(AppTheme.textMuted)
                         ForEach(bundle.runtime.mappedRuntimeSymbols.prefix(25)) { sym in
@@ -749,26 +765,7 @@ struct RuntimeInspectorSheet: View {
                                     .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(AppTheme.accent)
                             }
-                            Divider().overlay(AppTheme.hairline)
-                        }
-                    }
-                    .thinCard()
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("AUTHORIZED IN-PROCESS DYLD MODULES")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(AppTheme.textMuted)
-                        ForEach(bundle.runtime.hostDyldModulesSample.prefix(12)) { mod in
-                            HStack {
-                                Text(mod.imageName)
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(AppTheme.textPrimary)
-                                    .lineLimit(1)
-                                Spacer()
-                                Text("Base \(HexFormatters.hex(mod.runtimeBaseAddress))")
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                            }
+                            Rectangle().fill(AppTheme.hairline).frame(height: 0.8)
                         }
                     }
                     .thinCard()
@@ -776,11 +773,11 @@ struct RuntimeInspectorSheet: View {
                 .padding(16)
             }
             .background(AppTheme.canvas.ignoresSafeArea())
-            .navigationTitle("Runtime Inspector")
+            .navigationTitle("Runtime & ASLR")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Close") { dismiss() }
+                    Button("Đóng") { dismiss() }
                 }
             }
         }

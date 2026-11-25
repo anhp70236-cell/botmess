@@ -2,7 +2,7 @@ import Foundation
 
 public struct StorageUsageSnapshot: Equatable, Sendable {
     public static let minimumSupportedQuotaBytes: Int64 = 3 * 1_073_741_824 // 3.00 GB minimum design guarantee
-    public static let defaultWorkspaceQuotaBytes: Int64 = 6 * 1_073_741_824 // 6.00 GB default workspace budget
+    public static let defaultWorkspaceQuotaBytes: Int64 = 8 * 1_073_741_824 // 8.00 GB default workspace budget
 
     public let ipaBytes: Int64
     public let cacheBytes: Int64
@@ -32,11 +32,13 @@ public struct StorageUsageSnapshot: Equatable, Sendable {
     }
 }
 
-/// Manages IPA archives, intermediate extraction cache, offset databases, and exported reports.
-/// Engineered to handle >= 3 GB+ workspaces cleanly on iOS while keeping discovered offsets intact when raw IPAs are deleted.
+/// Stores workspace directly inside the app's `Documents/` directory so that on any iPhone
+/// (`UIFileSharingEnabled = YES`), all game folders, exported single/multi offset files, and
+/// drop-in `ImportIPA/` files are immediately visible in **Tệp (Files) -> Trên iPhone của tôi -> DEVNVIOS IPA ANALYZER**.
 public final class StorageManagerService: @unchecked Sendable {
     public let rootDirectoryURL: URL
     public let ipasDirectoryURL: URL
+    public let dropInImportDirectoryURL: URL
     public let cacheDirectoryURL: URL
     public let gamesDirectoryURL: URL
     public let exportsDirectoryURL: URL
@@ -48,18 +50,47 @@ public final class StorageManagerService: @unchecked Sendable {
         if let rootDirectoryURL {
             self.rootDirectoryURL = rootDirectoryURL
         } else {
-            let docs = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            self.rootDirectoryURL = docs.appendingPathComponent("DEVNVIOSWorkspace", isDirectory: true)
+            // Store directly in Documents so iOS Files app displays everything clearly!
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            self.rootDirectoryURL = docs
         }
 
         self.ipasDirectoryURL = self.rootDirectoryURL.appendingPathComponent("IPAs", isDirectory: true)
-        self.cacheDirectoryURL = self.rootDirectoryURL.appendingPathComponent("Cache", isDirectory: true)
+        self.dropInImportDirectoryURL = self.rootDirectoryURL.appendingPathComponent("Bo_File_IPA_Vao_Day", isDirectory: true)
         self.gamesDirectoryURL = self.rootDirectoryURL.appendingPathComponent("Games", isDirectory: true)
-        self.exportsDirectoryURL = self.rootDirectoryURL.appendingPathComponent("Exports", isDirectory: true)
+        self.exportsDirectoryURL = self.rootDirectoryURL.appendingPathComponent("KetQuaOffset", isDirectory: true)
 
-        for dir in [self.rootDirectoryURL, ipasDirectoryURL, cacheDirectoryURL, gamesDirectoryURL, exportsDirectoryURL] {
+        // Keep temporary extraction cache inside Library/Caches when running in default sandbox so iOS Files stays clean
+        if rootDirectoryURL == nil,
+           let sysCaches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            self.cacheDirectoryURL = sysCaches.appendingPathComponent("DEVNVIOSExtractionCache", isDirectory: true)
+        } else {
+            self.cacheDirectoryURL = self.rootDirectoryURL.appendingPathComponent("Cache", isDirectory: true)
+        }
+
+        for dir in [
+            self.rootDirectoryURL,
+            ipasDirectoryURL,
+            dropInImportDirectoryURL,
+            cacheDirectoryURL,
+            gamesDirectoryURL,
+            exportsDirectoryURL
+        ] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        // Write a small Vietnamese README file so the folder is immediately visible in iOS Files even before the first scan
+        let readmeURL = self.rootDirectoryURL.appendingPathComponent("HUONG_DAN_LUU_TRU.txt")
+        if !FileManager.default.fileExists(atPath: readmeURL.path) {
+            let guide = """
+            DEVNVIOS IPA ANALYZER — THƯ MỤC DỮ LIỆU TRÊN IPHONE
+            ==================================================
+            1. KetQuaOffset/ : Chứa các tệp Offset xuất ra (Gom 1 tệp duy nhất hoặc tách nhiều tệp).
+            2. Games/        : Cơ sở dữ liệu chi tiết từng Game (metadata, offsets, symbols, runtime, report, history).
+            3. Bo_File_IPA_Vao_Day/ : Bạn có thể chép trực tiếp tệp .ipa vào thư mục này trong ứng dụng Tệp (Files), sau đó mở DEVNVIOS bấm "Quét IPA trong Thư mục Tệp".
+            4. IPAs/         : Lưu bản sao IPA đã nhập (có thể xóa trong mục Bộ nhớ mà vẫn giữ nguyên toàn bộ Offset).
+            """
+            try? Data(guide.utf8).write(to: readmeURL, options: .atomic)
         }
     }
 
@@ -75,6 +106,32 @@ public final class StorageManagerService: @unchecked Sendable {
             let clamped = max(StorageUsageSnapshot.minimumSupportedQuotaBytes, newValue)
             UserDefaults.standard.set(Int(clamped), forKey: userDefaultsKey)
         }
+    }
+
+    /// Scans `Documents/`, `Bo_File_IPA_Vao_Day/`, and `Documents/Inbox/` for `.ipa` / `.tipa` files placed via iOS Files or Share Sheet.
+    public func discoverDropInIPAFiles() -> [URL] {
+        let candidateDirs = [
+            dropInImportDirectoryURL,
+            rootDirectoryURL,
+            rootDirectoryURL.appendingPathComponent("Inbox", isDirectory: true)
+        ]
+        var found: [URL] = []
+        for dir in candidateDirs {
+            guard let items = try? FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for url in items {
+                let ext = url.pathExtension.lowercased()
+                if ext == "ipa" || ext == "tipa" || ext == "zip" {
+                    if !found.contains(where: { $0.standardizedFileURL == url.standardizedFileURL }) {
+                        found.append(url)
+                    }
+                }
+            }
+        }
+        return found
     }
 
     public func computeUsageSnapshot() -> StorageUsageSnapshot {
@@ -112,7 +169,6 @@ public final class StorageManagerService: @unchecked Sendable {
 
     public func verifyCapacityForImport(fileSizeBytes: Int64) throws {
         let snapshot = computeUsageSnapshot()
-        // Require at least the incoming IPA size plus 32 MB headroom on physical volume
         let needed = fileSizeBytes + (32 * 1_048_576)
         if snapshot.deviceFreeBytes > 0 && snapshot.deviceFreeBytes < needed {
             throw AnalysisError.insufficientStorage(
@@ -132,20 +188,18 @@ public final class StorageManagerService: @unchecked Sendable {
         return folder
     }
 
-    /// Clears temporary extraction cache and exported staging files while preserving all IPAs and Offset Databases.
+    /// Clears temporary extraction cache without deleting saved Offset files or Games database.
     public func clearCache() throws {
         lock.lock()
         defer { lock.unlock() }
 
-        for target in [cacheDirectoryURL, exportsDirectoryURL] {
-            if FileManager.default.fileExists(atPath: target.path) {
-                try FileManager.default.removeItem(at: target)
-            }
-            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: cacheDirectoryURL.path) {
+            try FileManager.default.removeItem(at: cacheDirectoryURL)
         }
+        try FileManager.default.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
     }
 
-    /// Deletes only the raw `.ipa` file for a game while preserving `Games/<GameName>/*.json` offsets and reports.
+    /// Deletes only the raw `.ipa` file for a game while preserving `Games/<GameName>/*.json` and exported offset files.
     public func deleteStoredIPA(
         for record: GameRecord,
         database: OffsetDatabaseService

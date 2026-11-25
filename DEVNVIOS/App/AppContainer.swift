@@ -24,6 +24,7 @@ public final class AppContainer: ObservableObject {
     @Published public var games: [GameRecord] = []
     @Published public var activeGameForDetails: GameRecord?
     @Published public var storageSnapshot: StorageUsageSnapshot
+    @Published public var dropInIPACount: Int = 0
     @Published public var isShowingFileImporter: Bool = false
     @Published public var alertMessage: String?
 
@@ -61,6 +62,7 @@ public final class AppContainer: ObservableObject {
         self.runtimeInspector = inspector
         self.pipeline = coordinator
         self.storageSnapshot = storage.computeUsageSnapshot()
+        self.dropInIPACount = storage.discoverDropInIPAFiles().count
         self.games = db.loadAllRecords()
         self.activeGameForDetails = self.games.first
 
@@ -72,6 +74,7 @@ public final class AppContainer: ObservableObject {
     public func refreshAll() {
         games = databaseService.loadAllRecords()
         storageSnapshot = storageManager.computeUsageSnapshot()
+        dropInIPACount = storageManager.discoverDropInIPAFiles().count
         if let active = activeGameForDetails {
             activeGameForDetails = games.first(where: { $0.id == active.id }) ?? games.first
         } else {
@@ -79,8 +82,26 @@ public final class AppContainer: ObservableObject {
         }
     }
 
+    public func openIPAPicker() {
+        guard !isShowingFileImporter else { return }
+        isShowingFileImporter = true
+    }
+
     public func handleImportedURLs(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
+        guard !urls.isEmpty else {
+            alertMessage = "Không nhận được tệp IPA nào từ trình chọn tệp. Hãy thử lại hoặc chép tệp vào thư mục 'Trên iPhone của tôi -> DEVNVIOS IPA ANALYZER -> Bo_File_IPA_Vao_Day'."
+            return
+        }
+        selectedTab = .analysis
+        pipeline.importAndAnalyzeIPAs(urls: urls)
+    }
+
+    public func scanDropInFolderIPAs() {
+        let urls = storageManager.discoverDropInIPAFiles()
+        if urls.isEmpty {
+            alertMessage = "Chưa có tệp .ipa nào trong thư mục ứng dụng.\n\nBạn có thể mở ứng dụng Tệp (Files) trên iPhone -> 'Trên iPhone của tôi' -> 'DEVNVIOS IPA ANALYZER' -> 'Bo_File_IPA_Vao_Day' rồi dán tệp .ipa vào đó, hoặc bấm 'Chọn tệp IPA từ Tệp (Files)'."
+            return
+        }
         selectedTab = .analysis
         pipeline.importAndAnalyzeIPAs(urls: urls)
     }

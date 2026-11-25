@@ -1,11 +1,13 @@
 import Foundation
 
-/// Enforces research compliance boundaries:
-/// 1. Never collect or index offsets related to real-money payments, billing, StoreKit transactions, wallets, or financial accounts.
-/// 2. Never bypass encryption (FairPlay DRM), anti-cheat, or third-party application protections.
+/// Enforces strict research compliance boundaries:
+/// 1. Blocks all identifiers related to real-money payments, IAP, StoreKit, billing, top-ups, wallets, or financial accounts.
+/// 2. Never bypasses DRM, FairPlay, anti-cheat, or third-party application protections.
 public enum SafetyPolicyFilter {
     private static let excludedFinancialTokens: [String] = [
         "storekit",
+        "skpayment",
+        "skproduct",
         "inapppurchase",
         "iapmanager",
         "iapservice",
@@ -25,13 +27,16 @@ public enum SafetyPolicyFilter {
         "realmoney",
         "cashout",
         "checkout",
-        "financial"
-    ]
-
-    private static let thirdPartyProtectionIndicators: [String] = [
-        "fairplay",
-        "appattest",
-        "devicecheck"
+        "financial",
+        "topup",
+        "napthe",
+        "tienmat",
+        "diamondpack",
+        "gempack",
+        "purchaseitem",
+        "buyproduct",
+        "restorepurchase",
+        "subscription"
     ]
 
     public static func isPermittedIdentifier(_ identifier: String) -> Bool {
@@ -42,15 +47,5 @@ public enum SafetyPolicyFilter {
             }
         }
         return true
-    }
-
-    public static func isProtectionIndicator(_ identifier: String) -> Bool {
-        let normalized = identifier.lowercased()
-        for indicator in thirdPartyProtectionIndicators {
-            if normalized.contains(indicator) {
-                return true
-            }
-        }
-        return false
     }
 }

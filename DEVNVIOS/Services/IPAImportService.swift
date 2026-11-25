@@ -15,8 +15,8 @@ public struct ImportedIPAInspection: Sendable {
     public let hasGlobalMetadata: Bool
 }
 
-/// Imports `.ipa` files from iOS Files (including large multi-GB archives via streaming chunked I/O)
-/// and inspects `Payload/*.app/Info.plist` without unpacking unnecessary asset files.
+/// Imports `.ipa` / `.tipa` / `.zip` files from iOS Files (`UIDocumentPickerViewController` copy, `Documents/Inbox`,
+/// or drop-in `Bo_File_IPA_Vao_Day/`), coordinating FileProvider reads safely on all sideloaded/signed iPhones.
 public final class IPAImportService: Sendable {
     private let storageManager: StorageManagerService
 
@@ -36,25 +36,52 @@ public final class IPAImportService: Sendable {
             }
         }
 
-        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-            throw AnalysisError.fileNotFound(sourceURL.path)
-        }
-
-        let attrs = try FileManager.default.attributesOfItem(atPath: sourceURL.path)
-        let fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
-        guard fileSize >= 22 else {
-            throw AnalysisError.invalidIPAArchive("Selected file is empty or not a valid IPA archive.")
-        }
-
-        try storageManager.verifyCapacityForImport(fileSizeBytes: fileSize)
-
-        let rawBaseName = sourceURL.deletingPathExtension().lastPathComponent
+        let rawBaseName = Self.cleanUploadedStem(sourceURL.deletingPathExtension().lastPathComponent)
         let cleanStem = HexFormatters.sanitizeDirectoryName(rawBaseName)
         let uniqueFileName = "\(cleanStem)_\(UUID().uuidString.prefix(8)).ipa"
         let destinationURL = storageManager.storedIPAURL(for: uniqueFileName)
 
-        // Stream-copy in 1 MB chunks so 3 GB+ IPAs never spike memory
-        try streamCopyFile(from: sourceURL, to: destinationURL, totalBytes: fileSize, progress: copyProgress)
+        // Materialize & stream-copy using direct handle first, falling back to NSFileCoordinator for iCloud/FileProvider URLs
+        var copiedSuccess = false
+        if FileManager.default.fileExists(atPath: sourceURL.path) {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: sourceURL.path)
+            let fileSize = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            if fileSize >= 22 {
+                try storageManager.verifyCapacityForImport(fileSizeBytes: fileSize)
+                try streamCopyFile(from: sourceURL, to: destinationURL, totalBytes: fileSize, progress: copyProgress)
+                copiedSuccess = true
+            }
+        }
+
+        if !copiedSuccess {
+            var coordError: NSError?
+            var innerThrow: Error?
+            let coordinator = NSFileCoordinator()
+            coordinator.coordinate(readingItemAt: sourceURL, options: .withoutChanges, error: &coordError) { coordinatedURL in
+                do {
+                    let attrs = try FileManager.default.attributesOfItem(atPath: coordinatedURL.path)
+                    let fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+                    guard fileSize >= 22 else {
+                        throw AnalysisError.invalidIPAArchive("Tệp rỗng hoặc nhỏ hơn kích thước tối thiểu 22 bytes.")
+                    }
+                    try storageManager.verifyCapacityForImport(fileSizeBytes: fileSize)
+                    try streamCopyFile(from: coordinatedURL, to: destinationURL, totalBytes: fileSize, progress: copyProgress)
+                    copiedSuccess = true
+                } catch {
+                    innerThrow = error
+                }
+            }
+            if let innerThrow { throw innerThrow }
+            if !copiedSuccess {
+                throw AnalysisError.fileNotFound(sourceURL.lastPathComponent)
+            }
+        }
+
+        // Clean up temporary picker staging copy if source came from Staging or Inbox
+        let sourcePath = sourceURL.path
+        if sourcePath.contains("DEVNVIOS_PickedStaging") || sourcePath.contains("/Inbox/") {
+            try? FileManager.default.removeItem(at: sourceURL)
+        }
 
         do {
             return try inspectStoredIPA(
@@ -78,14 +105,16 @@ public final class IPAImportService: Sendable {
         let reader = try IPAZipArchiveReader(archiveURL: ipaURL)
         let entries = try reader.listEntries()
 
-        // Locate Payload/<App>.app/Info.plist
+        // Locate Payload/<App>.app/Info.plist (case-insensitive check for Payload/)
         guard let infoPlistEntry = entries.first(where: { entry in
-            !entry.isDirectory
-                && entry.path.hasPrefix("Payload/")
-                && entry.path.hasSuffix(".app/Info.plist")
-                && entry.path.components(separatedBy: "/").count == 3
+            guard !entry.isDirectory else { return false }
+            let parts = entry.path.components(separatedBy: "/")
+            return parts.count == 3
+                && parts[0].lowercased() == "payload"
+                && parts[1].lowercased().hasSuffix(".app")
+                && parts[2] == "Info.plist"
         }) else {
-            if entries.contains(where: { $0.path.hasPrefix("Payload/") && $0.path.contains(".app/") }) {
+            if entries.contains(where: { $0.path.lowercased().hasPrefix("payload/") && $0.path.lowercased().contains(".app/") }) {
                 throw AnalysisError.missingInfoPlist
             }
             throw AnalysisError.missingAppBundle
@@ -99,17 +128,18 @@ public final class IPAImportService: Sendable {
             options: [],
             format: nil
         ) as? [String: Any] else {
-            throw AnalysisError.invalidInfoPlist("Root object is not a dictionary.")
+            throw AnalysisError.invalidInfoPlist("Cấu trúc gốc Info.plist không phải kiểu từ điển.")
         }
 
         let executableName = (plistObj["CFBundleExecutable"] as? String)
             ?? URL(fileURLWithPath: String(appBundlePrefix.dropLast())).deletingPathExtension().lastPathComponent
 
-        let displayName = preferredGameName
+        let rawDisplay = preferredGameName
             ?? (plistObj["CFBundleDisplayName"] as? String)
             ?? (plistObj["CFBundleName"] as? String)
             ?? fallbackName
             ?? executableName
+        let displayName = rawDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? executableName : rawDisplay
 
         let bundleID = (plistObj["CFBundleIdentifier"] as? String) ?? "unknown.bundle.id"
         let shortVersion = (plistObj["CFBundleShortVersionString"] as? String) ?? "1.0"
@@ -142,6 +172,15 @@ public final class IPAImportService: Sendable {
         )
     }
 
+    private static func cleanUploadedStem(_ stem: String) -> String {
+        // Strip staging UUID prefix if present (e.g. "A1B2C3_MyGame" -> "MyGame")
+        let parts = stem.split(separator: "_", maxSplits: 1)
+        if parts.count == 2 && parts[0].count == 6 {
+            return String(parts[1])
+        }
+        return stem
+    }
+
     private func streamCopyFile(
         from sourceURL: URL,
         to destinationURL: URL,
@@ -162,7 +201,7 @@ public final class IPAImportService: Sendable {
         let outHandle = try FileHandle(forWritingTo: destinationURL)
         defer { try? outHandle.close() }
 
-        let chunkSize = 1_048_576 // 1 MB
+        let chunkSize = 1_048_576
         var copied: Int64 = 0
         let denom = Double(max(totalBytes, 1))
 

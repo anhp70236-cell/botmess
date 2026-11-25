@@ -16,20 +16,20 @@ public enum OffsetCategory: String, Codable, CaseIterable, Identifiable, Sendabl
 
     public var id: String { rawValue }
 
-    public var sfSymbolName: String {
+    public var vietnameseTitle: String {
         switch self {
-        case .player: return "person.crop.circle"
-        case .playerHealth: return "heart.text.square"
-        case .playerState: return "waveform.path.ecg"
-        case .position: return "location.north.line"
-        case .movement: return "figure.walk.motion"
-        case .rotation: return "gyroscope"
-        case .camera: return "video.badge.Checkmark"
-        case .character: return "person.text.rectangle"
-        case .animation: return "sparkles.rectangle.stack"
-        case .gameObjects: return "cube.transparent"
-        case .gameState: return "flag.checkered.2.crossed"
-        case .gameplayVariables: return "slider.horizontal.3"
+        case .player: return "Người chơi (Player)"
+        case .playerHealth: return "Máu & Sinh lực (HP/Giáp)"
+        case .playerState: return "Trạng thái (Mana/Thể lực)"
+        case .position: return "Vị trí & Tọa độ"
+        case .movement: return "Di chuyển & Tốc độ"
+        case .rotation: return "Góc xoay & Hướng ngắm"
+        case .camera: return "Góc nhìn (Camera/FOV)"
+        case .character: return "Nhân vật & Khung xương"
+        case .animation: return "Hoạt ảnh (Animation)"
+        case .gameObjects: return "Thực thể & Kỹ năng"
+        case .gameState: return "Trạng thái Trận đấu"
+        case .gameplayVariables: return "Thông số Gameplay"
         }
     }
 
@@ -61,12 +61,25 @@ public enum OffsetDataType: String, Codable, CaseIterable, Identifiable, Sendabl
     case objcSelector = "ObjC Selector"
 
     public var id: String { rawValue }
+
+    public var vietnameseTitle: String {
+        switch self {
+        case .classType: return "Lớp (Class)"
+        case .method: return "Hàm (Method RVA)"
+        case .field: return "Trường (Field Offset)"
+        case .staticData: return "Dữ liệu tĩnh (__DATA)"
+        case .runtimeData: return "Địa chỉ Runtime"
+        case .symbolFunction: return "Hàm Symbol"
+        case .objcSelector: return "Phương thức ObjC"
+        }
+    }
 }
 
 public enum DiscoverySource: String, Codable, CaseIterable, Identifiable, Sendable {
     case machOSymbolTable = "Mach-O Symbol Table"
+    case il2cppCodeGen = "IL2CPP CodeGenModule RVA"
     case il2cppMetadata = "IL2CPP Metadata"
-    case objcRuntimeMetadata = "ObjC Metadata"
+    case objcRuntimeMetadata = "ObjC Class/IMP Metadata"
     case arm64PatternAnalysis = "ARM64 XRef / Prologue"
     case stringCrossReference = "String Cross-Reference"
     case runtimeInspection = "Runtime Inspection"
@@ -86,9 +99,9 @@ public enum OffsetVerificationStatus: String, Codable, CaseIterable, Identifiabl
     public var vietnameseLabel: String {
         switch self {
         case .verified: return "Đã xác minh"
-        case .probable: return "Có khả năng đúng"
+        case .probable: return "Khả năng đúng cao"
         case .unverified: return "Chưa xác minh"
-        case .undetermined: return "Không thể xác định"
+        case .undetermined: return "Cần bản không mã hóa"
         }
     }
 }
@@ -145,7 +158,10 @@ public struct DiscoveredOffset: Identifiable, Codable, Equatable, Hashable, Send
     }
 
     public var rvaFormatted: String {
-        rva > 0 ? HexFormatters.rvaHex(rva) : "N/A"
+        if dataType == .field {
+            return String(format: "+0x%llX", rva)
+        }
+        return rva > 0 ? HexFormatters.rvaHex(rva) : "N/A"
     }
 
     public var vaFormatted: String {
@@ -156,7 +172,7 @@ public struct DiscoveredOffset: Identifiable, Codable, Equatable, Hashable, Send
         if let fileOffset {
             return HexFormatters.rvaHex(fileOffset)
         }
-        return "Undetermined"
+        return "N/A"
     }
 
     public func runtimeAddress(withASLRSlide slide: UInt64) -> UInt64? {

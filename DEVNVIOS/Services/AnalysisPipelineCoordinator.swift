@@ -5,11 +5,12 @@ import Combine
 public final class AnalysisPipelineCoordinator: ObservableObject {
     @Published public private(set) var isAnalyzing: Bool = false
     @Published public private(set) var currentGameName: String = ""
-    @Published public private(set) var currentStageTitle: String = "Idle"
+    @Published public private(set) var currentStageTitle: String = "Sẵn sàng phân tích"
     @Published public private(set) var progress: Double = 0.0
     @Published public private(set) var queuedCount: Int = 0
     @Published public private(set) var logEntries: [AnalysisLogEntry] = []
     @Published public private(set) var latestCompletedBundle: GameAnalysisBundle?
+    @Published public var pendingExportPromptBundle: GameAnalysisBundle?
     @Published public private(set) var lastErrorMessage: String?
 
     nonisolated private let storageManager: StorageManagerService
@@ -37,6 +38,10 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
         activeTask?.cancel()
         lastErrorMessage = nil
         queuedCount = urls.count
+        isAnalyzing = true
+        progress = 0.02
+        currentGameName = urls[0].deletingPathExtension().lastPathComponent
+        currentStageTitle = "Đã nhận tệp IPA — đang khởi tạo bộ đọc..."
 
         activeTask = Task { [weak self] in
             guard let self else { return }
@@ -52,12 +57,12 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
 
     public func reanalyze(record: GameRecord, authorizedTrace: AuthorizedRuntimeTracePayload? = nil) {
         guard let ipaName = record.storedIPAFileName else {
-            lastErrorMessage = "Original IPA file was deleted to save space. Stored offsets remain available in Game Details, or re-import the IPA to run a fresh binary scan."
+            lastErrorMessage = "Tệp IPA gốc đã được xóa để giải phóng bộ nhớ. Toàn bộ Offset đã dò vẫn được giữ nguyên trong mục Kho Game."
             return
         }
         let ipaURL = storageManager.storedIPAURL(for: ipaName)
         guard FileManager.default.fileExists(atPath: ipaURL.path) else {
-            lastErrorMessage = "Stored IPA archive is no longer present on disk."
+            lastErrorMessage = "Không tìm thấy tệp IPA lưu trữ trên ổ đĩa."
             return
         }
 
@@ -78,12 +83,11 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
         activeTask = nil
         isAnalyzing = false
         queuedCount = 0
-        currentStageTitle = "Cancelled"
-        let cancelEntry = AnalysisLogEntry(level: .warning, stage: "Pipeline", message: "Analysis cancelled by user.")
+        currentStageTitle = "Đã dừng phân tích"
+        let cancelEntry = AnalysisLogEntry(level: .warning, stage: "Pipeline", message: "Người dùng đã hủy tiến trình phân tích.")
         logEntries.append(cancelEntry)
     }
 
-    /// Synchronous/async testable pipeline entry point used by both UI coordinator and XCTest suite.
     nonisolated public func executeFullPipeline(
         ipaSourceURL: URL,
         preferredGameName: String? = nil,
@@ -92,14 +96,14 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
         progressHandler: (@Sendable (Double, String) -> Void)? = nil
     ) throws -> GameAnalysisBundle {
         let startTime = Date()
-        progressHandler?(0.05, "Importing IPA Archive")
-        logger?.stage("Import", "Importing IPA archive '\(ipaSourceURL.lastPathComponent)'...")
+        progressHandler?(0.05, "Đang nạp tệp IPA vào bộ nhớ làm việc...")
+        logger?.stage("Nhập IPA", "Đang đọc tệp IPA '\(ipaSourceURL.lastPathComponent)'...")
 
         let inspection = try importService.importIPA(
             from: ipaSourceURL,
             preferredGameName: preferredGameName
         ) { copyFrac in
-            progressHandler?(0.05 + copyFrac * 0.15, "Copying IPA (\(Int(copyFrac * 100))%)")
+            progressHandler?(0.05 + copyFrac * 0.15, "Đang sao chép luồng IPA (\(Int(copyFrac * 100))%)")
         }
 
         return try executeStoredInspectionPipeline(
@@ -126,11 +130,11 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
         }
 
         logger?.info(
-            stage: "Import",
-            "App: \(inspection.gameName) (\(inspection.bundleIdentifier) v\(inspection.bundleShortVersion)) | Size: \(HexFormatters.formatBytes(inspection.ipaFileSize))"
+            stage: "Thông tin",
+            "Tên Game: \(inspection.gameName) (\(inspection.bundleIdentifier) v\(inspection.bundleShortVersion)) | Dung lượng: \(HexFormatters.formatBytes(inspection.ipaFileSize))"
         )
 
-        progressHandler?(0.25, "Extracting Mach-O Executable")
+        progressHandler?(0.25, "Đang giải nén tệp nhị phân thực thi Mach-O...")
         let reader = try IPAZipArchiveReader(archiveURL: inspection.storedIPAURL)
         let entries = try reader.listEntries()
 
@@ -150,11 +154,11 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
 
         let extractedBinaryURL = tempFolder.appendingPathComponent(analysisModuleName)
         try reader.extractEntryToFile(binaryEntry, destinationURL: extractedBinaryURL) { frac in
-            progressHandler?(0.25 + frac * 0.20, "Extracting \(analysisModuleName) (\(Int(frac * 100))%)")
+            progressHandler?(0.25 + frac * 0.20, "Giải nén \(analysisModuleName) (\(Int(frac * 100))%)")
         }
 
         let binaryData = try Data(contentsOf: extractedBinaryURL, options: .mappedIfSafe)
-        progressHandler?(0.50, "Analyzing Mach-O & ARM64 Instructions")
+        progressHandler?(0.50, "Đang phân tích sâu cấu trúc Mach-O, ObjC IMP & lệnh ARM64...")
 
         let staticOutput = try StaticBinaryAnalyzer.analyze(
             binaryData: binaryData,
@@ -162,7 +166,7 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
             logger: logger
         )
 
-        progressHandler?(0.68, "Analyzing IL2CPP Metadata")
+        progressHandler?(0.68, "Đang giải mã cấu trúc IL2CPP Metadata & CodeGenModule...")
         let il2cppResult: IL2CPPAnalysisResult
         let metadataPath = "\(inspection.appBundlePrefix)Data/Managed/Metadata/global-metadata.dat"
         if let metaEntry = entries.first(where: { $0.path == metadataPath && !$0.isDirectory }) {
@@ -178,11 +182,11 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
                 methods: [],
                 fields: [],
                 relevantStringLiterals: [],
-                diagnostics: ["global-metadata.dat not present (native Swift/ObjC/C++ application or non-IL2CPP engine)."]
+                diagnostics: ["Không có global-metadata.dat (Ứng dụng/Game gốc C++, Swift, Objective-C hoặc Unreal)."]
             )
         }
 
-        progressHandler?(0.82, "Discovering & Validating Offsets")
+        progressHandler?(0.82, "Đang dò tìm, phân loại & xác minh độ chính xác Offset...")
         let priorHistory = databaseService.loadHistory(for: inspection.directoryName)
         let discovery = try discoveryEngine.discoverOffsets(
             staticOutput: staticOutput,
@@ -194,7 +198,7 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
             logger: logger
         )
 
-        progressHandler?(0.93, "Saving Per-Game Offset Database")
+        progressHandler?(0.93, "Đang lưu cơ sở dữ liệu Offset vào thư mục máy...")
         let machO = staticOutput.machO
         let encState: BinaryEncryptionState = {
             if machO.encryptionInfo.isEncrypted {
@@ -291,22 +295,22 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
             report: report
         )
 
-        progressHandler?(1.0, "Completed")
+        progressHandler?(1.0, "Hoàn tất phân tích chuyên sâu!")
         logger?.success(
-            stage: "Database",
-            "Saved \(inspection.directoryName)/{metadata,offsets,symbols,runtime,report,history}.json (\(String(format: "%.2fs", elapsed)))."
+            stage: "Hoàn tất",
+            "Đã lưu vào Games/\(inspection.directoryName)/ trong \(String(format: "%.2fs", elapsed)). Đang mở tùy chọn xuất 1 tệp hoặc tách nhiều tệp..."
         )
 
         return try databaseService.loadGameBundle(for: savedRecord)
     }
 
-    // MARK: - Async UI Execution Wrappers
+    // MARK: - Async UI Wrappers
 
     private func runSingleURLImportAndAnalysis(url: URL) async {
         isAnalyzing = true
-        progress = 0.02
+        progress = 0.03
         currentGameName = url.deletingPathExtension().lastPathComponent
-        currentStageTitle = "Preparing Import..."
+        currentStageTitle = "Đang đọc tệp IPA..."
         logEntries.removeAll()
 
         let logger = AnalysisLogger { [weak self] entries in
@@ -332,17 +336,18 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
 
             currentGameName = bundle.record.gameName
             latestCompletedBundle = bundle
-            currentStageTitle = "Analysis Complete"
+            pendingExportPromptBundle = bundle
+            currentStageTitle = "Phân tích thành công — Chọn chế độ lưu tệp"
             progress = 1.0
             onDatabaseUpdated?()
         } catch is CancellationError {
-            currentStageTitle = "Cancelled"
+            currentStageTitle = "Đã hủy phân tích"
         } catch let err as AnalysisError where err == .cancelled {
-            currentStageTitle = "Cancelled"
+            currentStageTitle = "Đã hủy phân tích"
         } catch {
             lastErrorMessage = error.localizedDescription
-            currentStageTitle = "Failed"
-            logger.error(stage: "Pipeline", error.localizedDescription)
+            currentStageTitle = "Phân tích thất bại"
+            logger.error(stage: "Lỗi", error.localizedDescription)
         }
     }
 
@@ -354,7 +359,7 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
         isAnalyzing = true
         progress = 0.10
         currentGameName = record.gameName
-        currentStageTitle = "Re-analyzing \(record.gameName)..."
+        currentStageTitle = "Đang phân tích lại \(record.gameName)..."
         logEntries.removeAll()
 
         let logger = AnalysisLogger { [weak self] entries in
@@ -385,13 +390,14 @@ public final class AnalysisPipelineCoordinator: ObservableObject {
             }.value
 
             latestCompletedBundle = bundle
-            currentStageTitle = "Re-analysis Complete"
+            pendingExportPromptBundle = bundle
+            currentStageTitle = "Phân tích lại hoàn tất!"
             progress = 1.0
             onDatabaseUpdated?()
         } catch {
             lastErrorMessage = error.localizedDescription
-            currentStageTitle = "Failed"
-            logger.error(stage: "Pipeline", error.localizedDescription)
+            currentStageTitle = "Phân tích thất bại"
+            logger.error(stage: "Lỗi", error.localizedDescription)
         }
     }
 }

@@ -21,37 +21,37 @@ public enum AnalysisError: LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .fileNotFound(let path):
-            return "File not found: \(path)"
+            return "Không tìm thấy tệp IPA tại đường dẫn: \(path)"
         case .securityScopeDenied(let name):
-            return "iOS denied read access to selected file: \(name)"
+            return "iOS từ chối quyền đọc tệp đã chọn: \(name). Hãy thử chép tệp vào thư mục 'Trên iPhone của tôi -> DEVNVIOS IPA ANALYZER'."
         case .invalidIPAArchive(let reason):
-            return "Invalid IPA archive: \(reason)"
+            return "Tệp IPA không hợp lệ: \(reason)"
         case .corruptedArchive(let reason):
-            return "Corrupted ZIP/IPA data stream: \(reason)"
+            return "Dữ liệu nén ZIP/IPA bị lỗi: \(reason)"
         case .missingAppBundle:
-            return "No Payload/*.app bundle found inside IPA archive."
+            return "Không tìm thấy thư mục Payload/*.app bên trong tệp IPA."
         case .missingInfoPlist:
-            return "Info.plist is missing from application bundle."
+            return "Thiếu tệp Info.plist bên trong gói ứng dụng."
         case .invalidInfoPlist(let reason):
-            return "Unable to parse Info.plist: \(reason)"
+            return "Không thể đọc cấu trúc Info.plist: \(reason)"
         case .missingExecutable(let name):
-            return "Main binary executable '\(name)' was not found inside bundle."
+            return "Không tìm thấy tệp thực thi nhị phân '\(name)' trong gói IPA."
         case .invalidMachOBinary(let reason):
-            return "Invalid Mach-O binary format: \(reason)"
+            return "Định dạng nhị phân Mach-O không hợp lệ: \(reason)"
         case .unsupportedArchitecture(let arch):
-            return "Unsupported CPU architecture: \(arch)"
+            return "Kiến trúc CPU không được hỗ trợ: \(arch) (Yêu cầu ARM64 64-bit)."
         case .metadataUnavailable(let reason):
-            return "IL2CPP metadata unavailable: \(reason)"
+            return "Metadata IL2CPP không khả dụng: \(reason)"
         case .insufficientStorage(let requiredBytes, let availableBytes):
-            return "Insufficient storage space. Required: \(HexFormatters.formatBytes(requiredBytes)), available: \(HexFormatters.formatBytes(availableBytes))."
+            return "Không đủ dung lượng bộ nhớ. Cần ít nhất \(HexFormatters.formatBytes(requiredBytes)), còn trống \(HexFormatters.formatBytes(availableBytes))."
         case .cancelled:
-            return "Analysis operation was cancelled by user."
+            return "Đã hủy quá trình phân tích theo yêu cầu."
         case .databaseError(let reason):
-            return "Offset database error: \(reason)"
+            return "Lỗi cơ sở dữ liệu Offset: \(reason)"
         case .exportError(let reason):
-            return "Export failed: \(reason)"
+            return "Lỗi xuất tệp kết quả: \(reason)"
         case .runtimeSnapshotInvalid(let reason):
-            return "Invalid runtime inspection snapshot: \(reason)"
+            return "Dữ liệu Runtime JSON không hợp lệ: \(reason)"
         }
     }
 }

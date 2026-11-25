@@ -138,6 +138,41 @@ public enum ARM64InstructionAnalyzer {
         )
     }
 
+    /// Profiles up to `maxInstructions` of a resolved ARM64 function (until `RET`) to extract verified prologue hex
+    /// and exact `X0` (`this` instance pointer) field load/store offsets (`+0x10..+0x800`).
+    public static func profileFunctionBody(
+        sliceCursor: BinaryCursor,
+        machO: ParsedMachOImage,
+        functionVA: UInt64,
+        maxInstructions: Int = 48
+    ) -> (prologueHex: String?, thisFieldOffsets: [UInt32], validCode: Bool) {
+        guard machO.isARM64,
+              (functionVA & 0x3) == 0,
+              let startOff = machO.virtualAddressToSliceFileOffset(functionVA),
+              !machO.isSliceRangeEncrypted(offset: startOff, length: 16),
+              let firstInsn = sliceCursor.readUInt32LE(at: Int(startOff)),
+              isValidARM64Instruction(firstInsn) else {
+            return (nil, [], false)
+        }
+
+        let prologueBytes = sliceCursor.slice(offset: Int(startOff), length: min(12, sliceCursor.count - Int(startOff)))
+        let prologueHex = prologueBytes?.map { String(format: "%02X", $0) }.joined(separator: " ")
+
+        var fields: [UInt32] = []
+        let limit = min(maxInstructions, (sliceCursor.count - Int(startOff)) / 4)
+        for i in 0..<limit {
+            guard let insn = sliceCursor.readUInt32LE(at: Int(startOff) + i * 4) else { break }
+            if insn == 0xD65F_03C0 { break } // RET
+            let rn = (insn >> 5) & 0x1F
+            // Focus specifically on X0 (`this` / `self` instance pointer in ARM64 ABI) for high-precision field extraction
+            if rn == 0, let off = decodeFieldLoadOffset(insn), !fields.contains(off) {
+                fields.append(off)
+                if fields.count >= 6 { break }
+            }
+        }
+        return (prologueHex, fields, true)
+    }
+
     public static func performDeepCodeScan(
         sliceCursor: BinaryCursor,
         machO: ParsedMachOImage,

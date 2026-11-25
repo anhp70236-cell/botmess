@@ -17,11 +17,10 @@ public struct StorageView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    // Main Storage Capacity Card (>= 3 GB support)
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text("STORAGE WORKSPACE")
+                                Text("DUNG LƯỢNG ĐANG SỬ DỤNG")
                                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                                     .foregroundStyle(AppTheme.textMuted)
                                 Text(HexFormatters.formatBytes(snap.totalUsedBytes))
@@ -30,7 +29,7 @@ public struct StorageView: View {
                             }
                             Spacer()
                             VStack(alignment: .trailing, spacing: 3) {
-                                Text(snap.supportsThreeGigabyteTarget ? "3 GB+ READY" : "LOW DISK")
+                                Text(snap.supportsThreeGigabyteTarget ? "HỖ TRỢ 3 GB+" : "BỘ NHỚ THẤP")
                                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                                     .foregroundStyle(snap.supportsThreeGigabyteTarget ? AppTheme.statusVerified : AppTheme.statusProbable)
                                     .padding(.horizontal, 8)
@@ -38,7 +37,7 @@ public struct StorageView: View {
                                     .background((snap.supportsThreeGigabyteTarget ? AppTheme.statusVerified : AppTheme.statusProbable).opacity(0.14))
                                     .clipShape(Capsule())
 
-                                Text("Device Free: \(HexFormatters.formatBytes(snap.deviceFreeBytes))")
+                                Text("Máy còn trống: \(HexFormatters.formatBytes(snap.deviceFreeBytes))")
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(AppTheme.textSecondary)
                             }
@@ -70,22 +69,21 @@ public struct StorageView: View {
                         }
                         .frame(height: 10)
 
-                        Text("Configured Workspace Quota: \(HexFormatters.formatBytes(snap.configuredQuotaBytes)) (Minimum 3.00 GB supported)")
+                        Text("Thư mục lưu trực tiếp trên iPhone: Tệp (Files) -> Trên iPhone của tôi -> DEVNVIOS IPA ANALYZER (KetQuaOffset/ & Games/).")
                             .font(.system(size: 11))
                             .foregroundStyle(AppTheme.textSecondary)
                     }
                     .thinCard(padding: 15, cornerRadius: 13, elevated: true)
 
-                    // Breakdown List
                     VStack(spacing: 10) {
-                        usageRow("IPA Archives", bytes: snap.ipaBytes, subtitle: "\(snap.ipaFileCount) stored .ipa packages", color: AppTheme.accent, icon: "doc.zipper")
-                        usageRow("Offset Databases", bytes: snap.databaseBytes, subtitle: "\(snap.gameDatabaseCount) game folders (JSON)", color: AppTheme.statusVerified, icon: "cylinder.split.1x2")
-                        usageRow("Cache & Exports", bytes: snap.cacheBytes + snap.exportsBytes, subtitle: "\(snap.cachedItemCount) temporary items", color: AppTheme.statusProbable, icon: "clock.arrow.circlepath")
+                        usageRow("Tệp IPA lưu trữ", bytes: snap.ipaBytes, subtitle: "\(snap.ipaFileCount) tệp .ipa trong IPAs/", color: AppTheme.accent, icon: "doc.zipper")
+                        usageRow("Cơ sở dữ liệu Offset", bytes: snap.databaseBytes, subtitle: "\(snap.gameDatabaseCount) thư mục Game trong Games/", color: AppTheme.statusVerified, icon: "cylinder.split.1x2")
+                        usageRow("Tệp Kết quả đã xuất", bytes: snap.exportsBytes, subtitle: "Nằm trong KetQuaOffset/ (Tệp gộp & tách)", color: AppTheme.statusProbable, icon: "doc.text")
+                        usageRow("Bộ nhớ đệm giải nén", bytes: snap.cacheBytes, subtitle: "\(snap.cachedItemCount) tệp tạm thời", color: AppTheme.textSecondary, icon: "clock.arrow.circlepath")
                     }
 
-                    // Storage Maintenance Actions
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("MAINTENANCE ACTIONS")
+                        Text("QUẢN LÝ & DỌN DẸP AN TOÀN")
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(AppTheme.textMuted)
 
@@ -93,8 +91,8 @@ public struct StorageView: View {
                             confirmClearCache = true
                         } label: {
                             actionButtonRow(
-                                title: "Clear Temporary Cache & Exports",
-                                subtitle: "Frees extraction staging files without affecting IPAs or Offset Databases",
+                                title: "Dọn Bộ Nhớ Đệm Giải Nén (Clear Cache)",
+                                subtitle: "Giữ nguyên 100% các tệp Offset đã xuất và cơ sở dữ liệu Game",
                                 icon: "sparkles",
                                 destructive: false
                             )
@@ -105,8 +103,8 @@ public struct StorageView: View {
                             confirmClearHistory = true
                         } label: {
                             actionButtonRow(
-                                title: "Delete Analysis History Logs",
-                                subtitle: "Clears history.json snapshots while keeping active offsets.json intact",
+                                title: "Xóa Nhật Ký Lịch Sử Cũ",
+                                subtitle: "Làm sạch history.json, vẫn giữ nguyên toàn bộ offsets.json",
                                 icon: "clock.badge.xmark",
                                 destructive: true
                             )
@@ -114,11 +112,10 @@ public struct StorageView: View {
                         .buttonStyle(.plain)
                     }
 
-                    // Selective IPA Deletion (Keep Offsets)
                     let storedIPAGames = container.games.filter(\.hasStoredIPA)
                     if !storedIPAGames.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("STORED IPA ARCHIVES (DELETE IPA • KEEP OFFSETS)")
+                            Text("XÓA TỆP IPA GỐC • GIỮ NGUYÊN OFFSET")
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(AppTheme.textMuted)
 
@@ -128,7 +125,7 @@ public struct StorageView: View {
                                         Text(item.gameName)
                                             .font(.system(size: 14, weight: .semibold))
                                             .foregroundStyle(AppTheme.textPrimary)
-                                        Text("\(HexFormatters.formatBytes(item.ipaFileSize)) • \(item.totalOffsets) offsets preserved on delete")
+                                        Text("\(HexFormatters.formatBytes(item.ipaFileSize)) • Giữ lại \(item.totalOffsets) offset sau khi xóa IPA")
                                             .font(.system(size: 11, design: .monospaced))
                                             .foregroundStyle(AppTheme.textSecondary)
                                     }
@@ -154,23 +151,23 @@ public struct StorageView: View {
                 .padding(.vertical, 12)
             }
             .background(AppTheme.canvas.ignoresSafeArea())
-            .navigationTitle("Storage Manager")
+            .navigationTitle("Quản lý Bộ nhớ")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear { container.refreshAll() }
-            .confirmationDialog("Clear Cache?", isPresented: $confirmClearCache, titleVisibility: .visible) {
-                Button("Clear Cache", role: .destructive) { container.clearCache() }
-                Button("Cancel", role: .cancel) {}
+            .confirmationDialog("Dọn Bộ Nhớ Đệm?", isPresented: $confirmClearCache, titleVisibility: .visible) {
+                Button("Dọn Ngay", role: .destructive) { container.clearCache() }
+                Button("Hủy", role: .cancel) {}
             } message: {
-                Text("Temporary extraction buffers and exported staging files will be removed. All game offsets remain untouched.")
+                Text("Xóa bộ đệm giải nén tạm thời. Mọi tệp Offset và cơ sở dữ liệu Game đều được bảo toàn.")
             }
-            .confirmationDialog("Delete History?", isPresented: $confirmClearHistory, titleVisibility: .visible) {
-                Button("Delete All History", role: .destructive) { container.clearAllHistory() }
-                Button("Cancel", role: .cancel) {}
+            .confirmationDialog("Xóa Lịch Sử Quét?", isPresented: $confirmClearHistory, titleVisibility: .visible) {
+                Button("Xóa Lịch Sử", role: .destructive) { container.clearAllHistory() }
+                Button("Hủy", role: .cancel) {}
             } message: {
-                Text("Resets historical run logs across games while preserving current metadata.json and offsets.json.")
+                Text("Chỉ xóa tệp history.json cũ, giữ nguyên toàn bộ Offset hiện tại.")
             }
             .confirmationDialog(
-                "Delete Stored IPA?",
+                "Xóa Tệp IPA Gốc?",
                 isPresented: Binding(
                     get: { recordPendingIPADeletion != nil },
                     set: { if !$0 { recordPendingIPADeletion = nil } }
@@ -178,14 +175,14 @@ public struct StorageView: View {
                 titleVisibility: .visible
             ) {
                 if let target = recordPendingIPADeletion {
-                    Button("Delete IPA (Keep Offsets)", role: .destructive) {
+                    Button("Xóa IPA • Giữ Nguyên Offset", role: .destructive) {
                         container.deleteStoredIPAOnly(for: target)
                         recordPendingIPADeletion = nil
                     }
                 }
-                Button("Cancel", role: .cancel) { recordPendingIPADeletion = nil }
+                Button("Hủy", role: .cancel) { recordPendingIPADeletion = nil }
             } message: {
-                Text("Reclaims IPA file space while keeping every discovered offset in the game database.")
+                Text("Giải phóng dung lượng IPA nhưng bảo toàn toàn bộ Offset đã tìm thấy.")
             }
         }
     }

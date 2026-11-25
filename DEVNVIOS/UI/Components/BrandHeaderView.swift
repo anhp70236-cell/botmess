@@ -1,18 +1,18 @@
 import SwiftUI
 
 public struct DEVNVIOSLogoMark: View {
-    public var size: CGFloat = 36
+    public var size: CGFloat = 38
 
-    public init(size: CGFloat = 36) {
+    public init(size: CGFloat = 38) {
         self.size = size
     }
 
     public var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-                .fill(AppTheme.surfaceElevated)
+            RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
+                .fill(AppTheme.surface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                    RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
                         .strokeBorder(AppTheme.hairline, lineWidth: 1)
                 )
 
@@ -35,13 +35,15 @@ public struct DEVNVIOSLogoMark: View {
                     return path
                 }
 
-                let outer = hexPath(radius: rOuter)
-                let inner = hexPath(radius: rInner)
+                context.stroke(hexPath(radius: rOuter), with: .color(AppTheme.accent), lineWidth: max(1.5, size * 0.05))
+                context.stroke(hexPath(radius: rInner), with: .color(AppTheme.textPrimary), lineWidth: max(1.2, size * 0.04))
 
-                context.stroke(outer, with: .color(AppTheme.accent), lineWidth: max(1.4, size * 0.05))
-                context.stroke(inner, with: .color(AppTheme.textPrimary), lineWidth: max(1.2, size * 0.04))
-
-                let dotRect = CGRect(x: center.x - size * 0.05, y: center.y - size * 0.05, width: size * 0.10, height: size * 0.10)
+                let dotRect = CGRect(
+                    x: center.x - size * 0.05,
+                    y: center.y - size * 0.05,
+                    width: size * 0.10,
+                    height: size * 0.10
+                )
                 context.fill(Path(ellipseIn: dotRect), with: .color(AppTheme.accent))
             }
         }
@@ -54,23 +56,23 @@ public struct BrandHeaderView: View {
 
     public var body: some View {
         HStack(spacing: 12) {
-            DEVNVIOSLogoMark(size: 40)
+            DEVNVIOSLogoMark(size: 42)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("DEVNVIOS")
-                    .font(.system(size: 18, weight: .bold, design: .default))
-                    .tracking(1.1)
+                    .font(.system(size: 18, weight: .bold))
+                    .tracking(1.0)
                     .foregroundStyle(AppTheme.textPrimary)
 
-                Text("IPA OFFSET ANALYZER")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                Text("PHÂN TÍCH OFFSET IPA CHUYÊN SÂU")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(AppTheme.textSecondary)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 6)
 
             Text("ARM64 • IL2CPP")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundStyle(AppTheme.accent)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -95,9 +97,9 @@ public struct StatMetricTile: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: iconName)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(AppTheme.accent)
                 Text(title)
                     .font(.system(size: 11, weight: .medium))
@@ -109,14 +111,14 @@ public struct StatMetricTile: View {
                 .font(.system(size: 17, weight: .bold, design: .rounded))
                 .foregroundStyle(AppTheme.textPrimary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .minimumScaleFactor(0.72)
 
             Text(subtitle)
-                .font(.system(size: 10, weight: .regular))
+                .font(.system(size: 10))
                 .foregroundStyle(AppTheme.textMuted)
                 .lineLimit(1)
         }
-        .thinCard(padding: 11, cornerRadius: 11)
+        .thinCard(padding: 11, cornerRadius: 12)
     }
 }
 
@@ -132,13 +134,13 @@ public struct VerificationBadge: View {
         Text(status.vietnameseLabel)
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(color)
-            .padding(.horizontal, 7)
+            .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(color.opacity(0.13))
             .clipShape(Capsule())
             .overlay(
                 Capsule()
-                    .strokeBorder(color.opacity(0.32), lineWidth: 0.7)
+                    .strokeBorder(color.opacity(0.32), lineWidth: 0.75)
             )
     }
 }
@@ -157,8 +159,8 @@ public struct EmptyStateCardView: View {
     public var body: some View {
         VStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 26, weight: .light))
-                .foregroundStyle(AppTheme.textMuted)
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(AppTheme.accent.opacity(0.85))
 
             Text(title)
                 .font(.system(size: 15, weight: .semibold))
@@ -166,9 +168,10 @@ public struct EmptyStateCardView: View {
                 .multilineTextAlignment(.center)
 
             Text(message)
-                .font(.system(size: 13))
+                .font(.system(size: 12))
                 .foregroundStyle(AppTheme.textSecondary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 6)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)

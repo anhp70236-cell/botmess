@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>en</string>
+	<string>vi</string>
 	<key>CFBundleDisplayName</key>
 	<string>DEVNVIOS IPA ANALYZER</string>
 	<key>CFBundleExecutable</key>
@@ -23,7 +23,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
+	<false/>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -47,7 +47,7 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>iOS App Store Package</string>
+			<string>iOS IPA Archive</string>
 			<key>LSHandlerRank</key>
 			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
@@ -55,6 +55,8 @@
 				<string>com.apple.itunes.ipa</string>
 				<string>public.zip-archive</string>
 				<string>public.archive</string>
+				<string>public.data</string>
+				<string>public.item</string>
 			</array>
 		</dict>
 	</array>
@@ -65,6 +67,7 @@
 			<array>
 				<string>public.zip-archive</string>
 				<string>public.data</string>
+				<string>public.item</string>
 			</array>
 			<key>UTTypeDescription</key>
 			<string>iOS Application Archive</string>
@@ -75,6 +78,7 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>ipa</string>
+					<string>tipa</string>
 				</array>
 			</dict>
 		</dict>

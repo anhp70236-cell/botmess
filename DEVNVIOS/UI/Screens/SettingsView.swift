@@ -2,7 +2,7 @@ import SwiftUI
 
 public struct SettingsView: View {
     @EnvironmentObject private var container: AppContainer
-    @State private var quotaGB: Double = 6.0
+    @State private var quotaGB: Double = 8.0
     @State private var indexRebuiltFeedback = false
 
     public init() {}
@@ -16,7 +16,7 @@ public struct SettingsView: View {
 
                     // Theme Settings
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionHeader("INTERFACE THEME")
+                        sectionHeader("GIAO DIỆN HIỂN THỊ")
 
                         ForEach(AppThemeMode.allCases) { mode in
                             Button {
@@ -39,10 +39,10 @@ public struct SettingsView: View {
 
                     // Storage Settings (>= 3 GB minimum)
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionHeader("STORAGE QUOTA SETTINGS (MIN 3.0 GB)")
+                        sectionHeader("HẠN MỨC LƯU TRỮ (TỐI THIỂU 3.0 GB)")
 
                         HStack {
-                            Text("Workspace Allocation")
+                            Text("Hạn mức cấp phát")
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(AppTheme.textPrimary)
                             Spacer()
@@ -57,11 +57,11 @@ public struct SettingsView: View {
                                 container.updateStorageQuotaGB(newValue)
                             }
 
-                        Text("Supports importing and managing multi-gigabyte IPA files (minimum 3 GB workspace floor, scaling up to 32 GB when iOS device storage permits).")
+                        Text("Hỗ trợ xử lý mượt các tệp IPA dung lượng lớn trên 3 GB (tối đa 32 GB tùy dung lượng trống thực tế của iPhone).")
                             .font(.system(size: 11))
                             .foregroundStyle(AppTheme.textSecondary)
 
-                        Divider().overlay(AppTheme.hairline)
+                        Rectangle().fill(AppTheme.hairline).frame(height: 0.8)
 
                         Button {
                             container.rebuildDatabaseIndex()
@@ -70,7 +70,7 @@ public struct SettingsView: View {
                             HStack {
                                 Image(systemName: "arrow.triangle.2.circlepath")
                                     .foregroundStyle(AppTheme.accent)
-                                Text(indexRebuiltFeedback ? "Database Index Verified & Rebuilt" : "Recover / Rebuild Offset Index from Disk")
+                                Text(indexRebuiltFeedback ? "Đã Khôi Phục Chỉ Mục Từ Ổ Đĩa!" : "Khôi Phục Dữ Liệu Offset Từ Thư Mục Máy")
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(AppTheme.textPrimary)
                                 Spacer()
@@ -82,14 +82,14 @@ public struct SettingsView: View {
 
                     // App Information
                     VStack(alignment: .leading, spacing: 8) {
-                        sectionHeader("APPLICATION INFORMATION")
-                        infoRow("Application", "DEVNVIOS IPA ANALYZER")
-                        infoRow("Bundle ID", "com.devnvios.ipaanalyzer")
-                        infoRow("Version", "2.0.0 (Build 1)")
-                        infoRow("Binary Engine", "Mach-O 64-bit • ARM64 A64 • IL2CPP v24–v31+")
-                        infoRow("ZIP Engine", "Streaming PKZIP / ZIP64 + zlib")
-                        infoRow("Research Scope", "Authorized Binary & Metadata Analysis Only")
-                        infoRow("Compliance", "No DRM/Anti-Cheat Bypass • No Financial Data")
+                        sectionHeader("THÔNG TIN HỆ THỐNG")
+                        infoRow("Tên ứng dụng", "DEVNVIOS IPA ANALYZER")
+                        infoRow("Định danh", "com.devnvios.ipaanalyzer")
+                        infoRow("Phiên bản", "2.1.0 (Bản Tiếng Việt Chuyên Sâu)")
+                        infoRow("Lõi phân tích", "Mach-O 64-bit • ARM64 A64 • IL2CPP CodeGen")
+                        infoRow("Đường dẫn Tệp", "Trên iPhone của tôi -> DEVNVIOS IPA ANALYZER")
+                        infoRow("Phạm vi dò", "Máu, Vị trí, Tốc độ, Camera, Thực thể...")
+                        infoRow("Chính sách", "Không dò tiền thật / thanh toán / ví")
                     }
                     .thinCard()
                 }
@@ -97,7 +97,7 @@ public struct SettingsView: View {
                 .padding(.vertical, 12)
             }
             .background(AppTheme.canvas.ignoresSafeArea())
-            .navigationTitle("Settings")
+            .navigationTitle("Cài đặt")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 let currentGB = Double(container.storageManager.configuredQuotaBytes) / 1_073_741_824.0

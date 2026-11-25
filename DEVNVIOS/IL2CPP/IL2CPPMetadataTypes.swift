@@ -1,10 +1,18 @@
 import Foundation
 
 public enum IL2CPPMetadataAvailability: String, Codable, Sendable {
-    case validStandard = "Valid IL2CPP Metadata"
-    case encryptedOrObfuscated = "Encrypted / Non-Standard Header"
-    case truncatedOrIncomplete = "Incomplete / Truncated Metadata"
-    case notPresent = "Not Unity IL2CPP"
+    case validStandard = "Hợp lệ (Chuẩn IL2CPP)"
+    case encryptedOrObfuscated = "Đã mã hóa / Bảo vệ Header"
+    case truncatedOrIncomplete = "Không đầy đủ / Cắt cụt"
+    case notPresent = "Không dùng Unity IL2CPP"
+}
+
+public struct IL2CPPImageRecord: Sendable, Equatable {
+    public let imageIndex: Int
+    public let assemblyName: String
+    public let typeStart: Int32
+    public let typeCount: UInt32
+    public let orderedMethodIndices: [Int]
 }
 
 public struct IL2CPPTypeRecord: Sendable, Equatable {
@@ -48,9 +56,30 @@ public struct IL2CPPStringLiteralRecord: Sendable, Equatable {
 public struct IL2CPPAnalysisResult: Sendable {
     public let availability: IL2CPPMetadataAvailability
     public let metadataVersion: Int?
+    public let images: [IL2CPPImageRecord]
     public let types: [IL2CPPTypeRecord]
     public let methods: [IL2CPPMethodRecord]
     public let fields: [IL2CPPFieldRecord]
     public let relevantStringLiterals: [IL2CPPStringLiteralRecord]
     public let diagnostics: [String]
+
+    public init(
+        availability: IL2CPPMetadataAvailability,
+        metadataVersion: Int?,
+        images: [IL2CPPImageRecord] = [],
+        types: [IL2CPPTypeRecord],
+        methods: [IL2CPPMethodRecord],
+        fields: [IL2CPPFieldRecord],
+        relevantStringLiterals: [IL2CPPStringLiteralRecord],
+        diagnostics: [String]
+    ) {
+        self.availability = availability
+        self.metadataVersion = metadataVersion
+        self.images = images
+        self.types = types
+        self.methods = methods
+        self.fields = fields
+        self.relevantStringLiterals = relevantStringLiterals
+        self.diagnostics = diagnostics
+    }
 }

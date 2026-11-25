@@ -286,4 +286,48 @@ final class DEVNVIOSAnalyzerTests: XCTestCase {
         let simdLdr: UInt32 = 0x3DC0_0C00
         XCTAssertEqual(ARM64InstructionAnalyzer.decodeFieldLoadOffset(simdLdr), 0x30)
     }
+
+    @MainActor
+    func testStrippedIL2CPPCodeGenModuleRVAAndSingleVsSplitExportModes() throws {
+        // Build a 100% stripped IL2CPP IPA (0 LC_SYMTAB symbols) and verify CodeGenModule still recovers exact RVAs & [X0+0x48] field offset
+        let dropInIPAURL = storageManager.dropInImportDirectoryURL.appendingPathComponent("HeoStrippedIL2CPP.ipa")
+        try TestIPABuilder.buildSyntheticIPA(
+            at: dropInIPAURL,
+            options: .init(gameName: "HeoPro", includeSymbols: false, includeIL2CPP: true)
+        )
+        XCTAssertEqual(storageManager.discoverDropInIPAFiles().count, 1)
+
+        let coordinator = AnalysisPipelineCoordinator(
+            storageManager: storageManager,
+            databaseService: databaseService,
+            importService: importService
+        )
+        let bundle = try coordinator.executeFullPipeline(ipaSourceURL: dropInIPAURL)
+
+        let getHealth = bundle.offsets.first { $0.name == "Heo.Gameplay.PlayerController.get_Health" }
+        XCTAssertNotNil(getHealth)
+        XCTAssertEqual(getHealth?.rva, 0x1000, "Il2CppCodeGenModule must resolve exact RVA even when LC_SYMTAB is stripped")
+        XCTAssertEqual(getHealth?.discoverySource, .il2cppCodeGen)
+        XCTAssertEqual(getHealth?.verificationStatus, .verified)
+
+        let healthField = bundle.offsets.first { $0.name == "Heo.Gameplay.PlayerController.m_Health" }
+        XCTAssertNotNil(healthField)
+        XCTAssertEqual(healthField?.rva, 0x48, "m_Health field offset must be upgraded to machine-code verified +0x48 from get_Health LDR S0, [X0, #0x48]")
+        XCTAssertEqual(healthField?.verificationStatus, .verified)
+
+        // Test Mode 1: Single Combined Master File
+        let singleExport = try exportService.exportByMode(mode: .singleCombinedFile, bundle: bundle)
+        XCTAssertEqual(singleExport.generatedFiles.count, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: singleExport.primaryShareURL.path))
+        let masterText = try String(contentsOf: singleExport.primaryShareURL, encoding: .utf8)
+        XCTAssertTrue(masterText.contains("Heo.Gameplay.PlayerController.get_Health"))
+        XCTAssertTrue(masterText.contains("+0x48"))
+
+        // Test Mode 2: Split Multiple Files by Category
+        let splitExport = try exportService.exportByMode(mode: .splitMultipleFiles, bundle: bundle)
+        XCTAssertGreaterThanOrEqual(splitExport.generatedFiles.count, 4)
+        for fileURL in splitExport.generatedFiles {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+        }
+    }
 }

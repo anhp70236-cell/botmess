@@ -2,9 +2,9 @@ import SwiftUI
 import UIKit
 
 public enum AppThemeMode: String, CaseIterable, Identifiable, Codable {
-    case matteDark = "Pro Matte Dark"
-    case slateContrast = "Slate Contrast"
-    case system = "System"
+    case matteDark = "Titanium Đen Nhám (Mặc định)"
+    case slateContrast = "Xám Đá Tương Phản Cao"
+    case system = "Theo Hệ Thống iOS"
 
     public var id: String { rawValue }
 
@@ -18,23 +18,23 @@ public enum AppThemeMode: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-/// Matte obsidian & slate design palette — zero neon, zero glow, hairline thin cards.
+/// High-precision Titanium & Obsidian Dark Mode palette — zero neon, zero glow, razor-thin borders.
 public enum AppTheme {
-    public static let canvas = Color(red: 0.043, green: 0.051, blue: 0.067)          // #0B0D11
-    public static let surface = Color(red: 0.071, green: 0.086, blue: 0.114)         // #12161D
-    public static let surfaceElevated = Color(red: 0.098, green: 0.118, blue: 0.153) // #191E27
-    public static let hairline = Color(red: 0.153, green: 0.180, blue: 0.227)        // #272E3A
-    public static let accent = Color(red: 0.345, green: 0.608, blue: 0.878)          // #589BE0
-    public static let accentSubtle = Color(red: 0.345, green: 0.608, blue: 0.878).opacity(0.14)
+    public static let canvas = Color(red: 0.035, green: 0.043, blue: 0.059)          // #090B0F
+    public static let surface = Color(red: 0.067, green: 0.082, blue: 0.114)         // #11151D
+    public static let surfaceElevated = Color(red: 0.094, green: 0.118, blue: 0.161) // #181E29
+    public static let hairline = Color(red: 0.157, green: 0.192, blue: 0.251)        // #283140
+    public static let accent = Color(red: 0.310, green: 0.561, blue: 0.902)          // #4F8FE6
+    public static let accentSubtle = Color(red: 0.310, green: 0.561, blue: 0.902).opacity(0.15)
 
-    public static let textPrimary = Color(red: 0.918, green: 0.937, blue: 0.965)     // #EAEFF6
-    public static let textSecondary = Color(red: 0.565, green: 0.612, blue: 0.690)   // #909CB0
-    public static let textMuted = Color(red: 0.380, green: 0.424, blue: 0.498)       // #616C7F
+    public static let textPrimary = Color(red: 0.929, green: 0.945, blue: 0.973)     // #EDF1F8
+    public static let textSecondary = Color(red: 0.576, green: 0.627, blue: 0.710)   // #93A0B5
+    public static let textMuted = Color(red: 0.392, green: 0.439, blue: 0.518)       // #647084
 
-    public static let statusVerified = Color(red: 0.298, green: 0.659, blue: 0.486)     // Muted emerald
-    public static let statusProbable = Color(red: 0.796, green: 0.620, blue: 0.306)     // Muted amber
-    public static let statusUnverified = Color(red: 0.490, green: 0.541, blue: 0.624)   // Muted steel
-    public static let statusUndetermined = Color(red: 0.745, green: 0.376, blue: 0.376) // Muted crimson
+    public static let statusVerified = Color(red: 0.267, green: 0.690, blue: 0.494)     // Sage Emerald
+    public static let statusProbable = Color(red: 0.824, green: 0.635, blue: 0.298)     // Warm Gold-Amber
+    public static let statusUnverified = Color(red: 0.502, green: 0.557, blue: 0.643)   // Muted Steel
+    public static let statusUndetermined = Color(red: 0.769, green: 0.380, blue: 0.380) // Muted Terracotta
 
     public static func color(for status: OffsetVerificationStatus) -> Color {
         switch status {
@@ -48,13 +48,13 @@ public enum AppTheme {
     public static func configureGlobalAppearance() {
         let navAppearance = UINavigationBarAppearance()
         navAppearance.configureWithOpaqueBackground()
-        navAppearance.backgroundColor = UIColor(red: 0.043, green: 0.051, blue: 0.067, alpha: 0.96)
-        navAppearance.shadowColor = UIColor(red: 0.153, green: 0.180, blue: 0.227, alpha: 0.7)
+        navAppearance.backgroundColor = UIColor(red: 0.035, green: 0.043, blue: 0.059, alpha: 0.98)
+        navAppearance.shadowColor = UIColor(red: 0.157, green: 0.192, blue: 0.251, alpha: 0.75)
         navAppearance.titleTextAttributes = [
-            .foregroundColor: UIColor(red: 0.918, green: 0.937, blue: 0.965, alpha: 1.0)
+            .foregroundColor: UIColor(red: 0.929, green: 0.945, blue: 0.973, alpha: 1.0)
         ]
         navAppearance.largeTitleTextAttributes = [
-            .foregroundColor: UIColor(red: 0.918, green: 0.937, blue: 0.965, alpha: 1.0)
+            .foregroundColor: UIColor(red: 0.929, green: 0.945, blue: 0.973, alpha: 1.0)
         ]
         UINavigationBar.appearance().standardAppearance = navAppearance
         UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
@@ -62,8 +62,8 @@ public enum AppTheme {
 
         let tabAppearance = UITabBarAppearance()
         tabAppearance.configureWithOpaqueBackground()
-        tabAppearance.backgroundColor = UIColor(red: 0.055, green: 0.067, blue: 0.088, alpha: 0.98)
-        tabAppearance.shadowColor = UIColor(red: 0.153, green: 0.180, blue: 0.227, alpha: 0.8)
+        tabAppearance.backgroundColor = UIColor(red: 0.047, green: 0.059, blue: 0.082, alpha: 0.98)
+        tabAppearance.shadowColor = UIColor(red: 0.157, green: 0.192, blue: 0.251, alpha: 0.85)
         UITabBar.appearance().standardAppearance = tabAppearance
         UITabBar.appearance().scrollEdgeAppearance = tabAppearance
     }
@@ -90,7 +90,7 @@ public struct ThinCardModifier: ViewModifier {
 extension View {
     public func thinCard(
         padding: CGFloat = 14,
-        cornerRadius: CGFloat = 12,
+        cornerRadius: CGFloat = 13,
         elevated: Bool = false
     ) -> some View {
         modifier(ThinCardModifier(padding: padding, cornerRadius: cornerRadius, elevated: elevated))

@@ -2,18 +2,59 @@ import Foundation
 
 public enum OffsetCategoryClassifier {
     private static let rules: [(category: OffsetCategory, tokens: [String])] = [
-        (.playerHealth, ["playerhealth", "maxhealth", "currenthealth", "healthcomponent", "sethealth", "get_health", "set_health", "takehealth", "hp", "hitpoint", "shield", "armor"]),
-        (.playerState, ["playerstate", "isalive", "isdead", "respawn", "stamina", "invulnerable", "combatstate", "buffstate", "statuscontroller"]),
-        (.position, ["position", "localposition", "worldposition", "get_position", "set_position", "teleport", "coordinates", "spawnpoint", "waypoint"]),
-        (.movement, ["movement", "locomotion", "velocity", "movespeed", "walkspeed", "runspeed", "sprint", "jump", "gravity", "charactercontroller", "rigidbody"]),
-        (.rotation, ["rotation", "localrotation", "quaternion", "eulerangles", "yaw", "pitch", "aimrotation", "lookrotation", "turnspeed"]),
-        (.camera, ["camera", "maincamera", "fieldofview", "fov", "camerafollow", "cameracontroller", "viewport", "worldtoscreen", "cinemachine"]),
-        (.animation, ["animator", "animation", "animstate", "crossfade", "blendtree", "skeleton", "ragdoll", "rootmotion"]),
-        (.character, ["character", "avatar", "humanoid", "hero", "skinmesh", "bone", "hitbox", "characterstats"]),
-        (.player, ["player", "localplayer", "playercontroller", "playermanager", "playerinput", "playerdata"]),
-        (.gameObjects, ["gameobject", "transform", "component", "instantiate", "entity", "actor", "prefab", "objectpool", "spawner"]),
-        (.gameState, ["gamestate", "gamemanager", "matchstate", "roundmanager", "levelmanager", "timescale", "sessionstate", "worldstate"]),
-        (.gameplayVariables, ["cooldown", "firerate", "range", "recoil", "difficulty", "experience", "score", "gameplay", "config", "settings"])
+        (.playerHealth, [
+            "playerhealth", "maxhealth", "currenthealth", "curhealth", "basehealth", "healthcomponent",
+            "sethealth", "get_health", "set_health", "takehealth", "addhealth", "heal", "regen",
+            "hitpoint", "maxhp", "curhp", "get_hp", "set_hp", "_hp", "shield", "maxshield",
+            "armor", "maxarmor", "takedamage", "applydamage", "ondamage", "vitality", "lifepoint"
+        ]),
+        (.playerState, [
+            "playerstate", "isalive", "isdead", "ondie", "respawn", "revive", "stamina", "maxstamina",
+            "energy", "maxenergy", "mana", "maxmana", "get_mp", "set_mp", "invulnerable", "invincible",
+            "immunity", "combatstate", "buff", "debuff", "statuscontroller", "stun", "freeze"
+        ]),
+        (.position, [
+            "position", "localposition", "worldposition", "get_position", "set_position",
+            "actorlocation", "teleport", "coordinates", "spawnpoint", "waypoint", "footposition", "headposition"
+        ]),
+        (.movement, [
+            "movement", "locomotion", "velocity", "movespeed", "walkspeed", "runspeed", "sprintspeed",
+            "sprint", "dash", "jump", "jumpforce", "jumpheight", "gravity", "acceleration",
+            "charactercontroller", "charactermovement", "rigidbody", "navmesh"
+        ]),
+        (.rotation, [
+            "rotation", "localrotation", "quaternion", "eulerangles", "yaw", "pitch", "roll",
+            "aimrotation", "lookrotation", "lookat", "turnspeed", "aiming", "orientation"
+        ]),
+        (.camera, [
+            "camera", "maincamera", "fieldofview", "get_fieldofview", "set_fieldofview", "fov",
+            "camerafollow", "cameracontroller", "springarm", "viewport", "worldtoscreen",
+            "screenpointtoray", "cinemachine", "zoom"
+        ]),
+        (.animation, [
+            "animator", "animation", "animstate", "animinstance", "crossfade", "blendtree",
+            "playspeed", "animspeed", "montage", "ragdoll", "rootmotion"
+        ]),
+        (.character, [
+            "character", "avatar", "humanoid", "hero", "skinmesh", "skeleton", "bone", "headbone",
+            "hitbox", "hurtbox", "capsule", "characterstats", "attributes"
+        ]),
+        (.player, [
+            "player", "localplayer", "mainplayer", "myplayer", "playercontroller",
+            "playermanager", "playerinput", "playerdata", "pawn"
+        ]),
+        (.gameObjects, [
+            "gameobject", "transform", "entity", "actor", "enemy", "monster", "boss", "npc",
+            "weapon", "gun", "ammo", "projectile", "bullet", "skill", "ability", "spawner"
+        ]),
+        (.gameState, [
+            "gamestate", "gamemanager", "matchstate", "roundmanager", "levelmanager",
+            "timescale", "set_timescale", "sessionstate", "worldstate", "wave", "mission"
+        ]),
+        (.gameplayVariables, [
+            "cooldown", "firerate", "attackspeed", "attackrange", "range", "recoil", "spread",
+            "crit", "critical", "defense", "difficulty", "experience", "exp", "gameplay"
+        ])
     ]
 
     public static func classify(identifier: String) -> OffsetCategory? {
@@ -41,16 +82,8 @@ public struct OffsetDiscoveryBundle: Sendable {
     public let limitations: [String]
 }
 
-/// Executes the 9-stage multi-source offset analysis pipeline:
-/// 1. Static Binary Analysis
-/// 2. Mach-O Analysis
-/// 3. IL2CPP Analysis
-/// 4. Metadata Analysis
-/// 5. Symbol-less Analysis (LC_FUNCTION_STARTS + ARM64 ADRP/ADD XRefs)
-/// 6. Runtime Inspection
-/// 7. Dynamic Address Mapping (ASLR VA <-> RVA <-> FileOffset)
-/// 8. Offset Validation
-/// 9. Cross-version Comparison
+/// Deep multi-source static & ASLR offset analysis engine (strictly excluding real-money/financial identifiers
+/// and never bypassing FairPlay DRM or third-party protections).
 public final class AdvancedOffsetDiscoveryEngine: Sendable {
     private let runtimeInspector: RuntimeInspectorService
 
@@ -77,19 +110,22 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
         var methodSummaries: [AnalysisMethodSummary] = []
 
         func appendUnique(_ offset: DiscoveredOffset) {
+            guard SafetyPolicyFilter.isPermittedIdentifier(offset.name) else { return }
             let dedupKey = "\(offset.moduleName)|\(offset.name)|\(offset.dataType.rawValue)|\(offset.rva)"
             guard !seenKeys.contains(dedupKey) else { return }
             seenKeys.insert(dedupKey)
             discovered.append(offset)
         }
 
-        // [1] & [2] Mach-O & Symbol Table Analysis
-        logger?.stage("OffsetDiscovery", "Running Mach-O symbol table discovery...")
+        // [1] & [2] Mach-O Symbol Table & C++/Swift Demangled Analysis
+        logger?.stage("OffsetDiscovery", "Đang quét bảng ký hiệu Mach-O & giải mã tên hàm C++/Swift...")
         var symbolFindings = 0
         let symbolLookupByCleanSuffix: [String: SymbolEntry] = {
             var map: [String: SymbolEntry] = [:]
             for sym in machO.symbols {
                 map[sym.cleanName.lowercased()] = sym
+                let rawTrim = sym.name.hasPrefix("_") ? String(sym.name.dropFirst()).lowercased() : sym.name.lowercased()
+                map[rawTrim] = sym
             }
             return map
         }()
@@ -104,48 +140,113 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                 expectExecutable: sym.isFunctionSymbol,
                 staticOutput: staticOutput
             )
+            let bodyProfile: (prologueHex: String?, thisFieldOffsets: [UInt32], validCode: Bool) = sym.isFunctionSymbol
+                ? ARM64InstructionAnalyzer.profileFunctionBody(
+                    sliceCursor: staticOutput.sliceCursor,
+                    machO: machO,
+                    functionVA: sym.virtualAddress
+                )
+                : (prologueHex: nil, thisFieldOffsets: [], validCode: false)
+
             let callers = staticOutput.incomingCallCountsByFuncVA[sym.virtualAddress] ?? 0
-            let callerSuffix = callers > 0 ? " | Direct BL callers: \(callers)." : ""
-            let off = DiscoveredOffset(
-                name: sym.cleanName,
-                value: HexFormatters.vaHex(sym.virtualAddress),
-                moduleName: moduleName,
-                rva: sym.rva,
-                virtualAddress: sym.virtualAddress,
-                fileOffset: sym.fileOffset,
-                category: category,
-                dataType: sym.isFunctionSymbol ? .symbolFunction : .staticData,
-                discoverySource: .machOSymbolTable,
-                verificationStatus: validation.status,
-                confidenceScore: validation.confidence,
-                signatureHint: validation.prologueHex,
-                notes: validation.note + callerSuffix
+            var noteParts: [String] = [validation.note]
+            if callers > 0 { noteParts.append("Số lời gọi BL trực tiếp: \(callers).") }
+            if !bodyProfile.thisFieldOffsets.isEmpty {
+                let fList = bodyProfile.thisFieldOffsets.map { String(format: "+0x%X", $0) }.joined(separator: ", ")
+                noteParts.append("Truy cập trường [X0]: \(fList).")
+            }
+
+            appendUnique(
+                DiscoveredOffset(
+                    name: sym.cleanName,
+                    value: HexFormatters.vaHex(sym.virtualAddress),
+                    moduleName: moduleName,
+                    rva: sym.rva,
+                    virtualAddress: sym.virtualAddress,
+                    fileOffset: sym.fileOffset,
+                    category: category,
+                    dataType: sym.isFunctionSymbol ? .symbolFunction : .staticData,
+                    discoverySource: .machOSymbolTable,
+                    verificationStatus: validation.status,
+                    confidenceScore: validation.confidence,
+                    signatureHint: bodyProfile.prologueHex ?? validation.prologueHex,
+                    notes: noteParts.joined(separator: " ")
+                )
             )
-            appendUnique(off)
             symbolFindings += 1
+
+            // Emit machine-code verified X0 field offsets discovered inside getter/setter functions
+            for fOff in bodyProfile.thisFieldOffsets.prefix(2) {
+                appendUnique(
+                    DiscoveredOffset(
+                        name: "\(sym.cleanName) -> [X0 + 0x\(String(fOff, radix: 16, uppercase: true))]",
+                        value: String(format: "0x%X", fOff),
+                        moduleName: moduleName,
+                        rva: UInt64(fOff),
+                        virtualAddress: sym.virtualAddress,
+                        fileOffset: sym.fileOffset,
+                        category: category,
+                        dataType: .field,
+                        discoverySource: .arm64PatternAnalysis,
+                        verificationStatus: .verified,
+                        confidenceScore: 0.93,
+                        signatureHint: "ARM64 LDR/STR [X0, #0x\(String(fOff, radix: 16, uppercase: true))]",
+                        notes: "Trường bộ nhớ thực tế đọc/ghi trực tiếp qua con trỏ đối tượng X0 bên trong hàm \(HexFormatters.rvaHex(sym.rva))."
+                    )
+                )
+                symbolFindings += 1
+            }
         }
 
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "1. Static Binary Analysis",
+                methodName: "1. Phân tích Nhị phân Tĩnh (Static Binary)",
                 executed: true,
-                status: machO.encryptionInfo.isEncrypted ? "Partial (Encrypted Pages Skipped)" : "Completed",
+                status: machO.encryptionInfo.isEncrypted ? "Một phần (Bỏ qua trang mã hóa)" : "Hoàn tất",
                 findingsCount: staticOutput.cStringsByVA.count + staticOutput.arm64StringXRefs.count,
-                details: "Indexed \(staticOutput.cStringsByVA.count) strings and \(staticOutput.arm64StringXRefs.count) ARM64 cross-references."
+                details: "Engine: \(staticOutput.detectedEngineSummary) | Chuỗi: \(staticOutput.cStringsByVA.count) | ARM64 XRefs: \(staticOutput.arm64StringXRefs.count)."
             )
         )
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "2. Mach-O Analysis",
+                methodName: "2. Phân tích Cấu trúc Mach-O 64-bit",
                 executed: true,
-                status: "Completed",
+                status: "Hoàn tất",
                 findingsCount: symbolFindings,
-                details: "Architecture \(machO.architectureName), \(machO.segments.count) segments, \(machO.symbols.count) symbols (\(staticOutput.symbolStripStatus.rawValue))."
+                details: "Kiến trúc \(machO.architectureName), \(machO.segments.count) phân vùng, \(machO.symbols.count) ký hiệu (\(staticOutput.symbolStripStatus.rawValue))."
             )
         )
 
-        // Objective-C Runtime Metadata inside Mach-O
+        // Objective-C Resolved IMPs & Class/Selector Metadata
         var objcFindings = 0
+        for resolvedIMP in staticOutput.objcResolvedMethods {
+            let fullSel = "-[\(resolvedIMP.className) \(resolvedIMP.selectorName)]"
+            guard let category = OffsetCategoryClassifier.classify(identifier: fullSel) else { continue }
+            let profile = ARM64InstructionAnalyzer.profileFunctionBody(
+                sliceCursor: staticOutput.sliceCursor,
+                machO: machO,
+                functionVA: resolvedIMP.impVirtualAddress
+            )
+            appendUnique(
+                DiscoveredOffset(
+                    name: fullSel,
+                    value: HexFormatters.vaHex(resolvedIMP.impVirtualAddress),
+                    moduleName: moduleName,
+                    rva: resolvedIMP.impRVA,
+                    virtualAddress: resolvedIMP.impVirtualAddress,
+                    fileOffset: resolvedIMP.impFileOffset,
+                    category: category,
+                    dataType: .method,
+                    discoverySource: .objcRuntimeMetadata,
+                    verificationStatus: profile.validCode ? .verified : .probable,
+                    confidenceScore: profile.validCode ? 0.97 : 0.85,
+                    signatureHint: profile.prologueHex ?? "__objc_const IMP",
+                    notes: "Địa chỉ hàm thực thi IMP giải mã trực tiếp từ cấu trúc __objc_classlist."
+                )
+            )
+            objcFindings += 1
+        }
+
         for (va, className) in staticOutput.objcMetadata.classNames {
             guard let category = OffsetCategoryClassifier.classify(identifier: className) else { continue }
             let rva = machO.rva(forVirtualAddress: va)
@@ -164,11 +265,12 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                     verificationStatus: fileOff != nil ? .verified : .probable,
                     confidenceScore: 0.90,
                     signatureHint: "__objc_classname",
-                    notes: "Objective-C class metadata entry in __TEXT,__objc_classname."
+                    notes: "Tên lớp Objective-C trong __TEXT,__objc_classname."
                 )
             )
             objcFindings += 1
         }
+
         for (va, selector) in staticOutput.objcMetadata.selectorNames {
             guard let category = OffsetCategoryClassifier.classify(identifier: selector) else { continue }
             let rva = machO.rva(forVirtualAddress: va)
@@ -187,13 +289,13 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                     verificationStatus: .probable,
                     confidenceScore: 0.80,
                     signatureHint: "__objc_methname",
-                    notes: "Objective-C selector name entry."
+                    notes: "Selector Objective-C trong __TEXT,__objc_methname."
                 )
             )
             objcFindings += 1
         }
 
-        // [3] & [4] IL2CPP & Metadata Analysis
+        // [3] & [4] Deep IL2CPP CodeGenModule RVA + Metadata Analysis
         var il2cppFindings = 0
         let xrefByString: [String: ARM64StringXRef] = {
             var map: [String: ARM64StringXRef] = [:]
@@ -207,7 +309,16 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
 
         switch il2cppResult.availability {
         case .validStandard:
-            logger?.stage("OffsetDiscovery", "Correlating IL2CPP classes, methods, and fields with binary addresses...")
+            logger?.stage("OffsetDiscovery", "Đang chạy quét sâu IL2CPP CodeGenModule & đối chiếu bảng MethodPointers...")
+            let codeGenMethodVAs = IL2CPPBinaryRegistrationScanner.resolveMethodVirtualAddresses(
+                machO: machO,
+                sliceCursor: staticOutput.sliceCursor,
+                images: il2cppResult.images,
+                logger: logger
+            )
+
+            // Track machine-code verified getter/setter field offsets by ClassName + Property stem!
+            var verifiedFieldOffsetByPropertyKey: [String: (offset: UInt32, methodRVA: UInt64)] = [:]
 
             for typeRec in il2cppResult.types {
                 guard let category = OffsetCategoryClassifier.classify(identifier: typeRec.fullName) else { continue }
@@ -231,38 +342,64 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                             verificationStatus: .verified,
                             confidenceScore: 0.96,
                             signatureHint: "TypeDef \(tokenHex)",
-                            notes: "IL2CPP TypeDefinition matched to Mach-O symbol \(matchedSym.cleanName)."
+                            notes: "Lớp IL2CPP khớp trực tiếp với ký hiệu nhị phân \(matchedSym.cleanName)."
                         )
                     )
-                } else {
-                    appendUnique(
-                        DiscoveredOffset(
-                            name: typeRec.fullName,
-                            value: tokenHex,
-                            moduleName: moduleName,
-                            rva: 0,
-                            virtualAddress: 0,
-                            fileOffset: nil,
-                            category: category,
-                            dataType: .classType,
-                            discoverySource: .il2cppMetadata,
-                            verificationStatus: machO.encryptionInfo.isEncrypted ? .undetermined : .unverified,
-                            confidenceScore: 0.65,
-                            signatureHint: "TypeDef \(tokenHex) (Methods: \(typeRec.methodCount), Fields: \(typeRec.fieldCount))",
-                            notes: machO.encryptionInfo.isEncrypted
-                                ? "Class verified in global-metadata.dat; code RVA requires unencrypted binary or authorized runtime trace."
-                                : "IL2CPP TypeDefinition metadata token (stripped code pointer table)."
-                        )
-                    )
+                    il2cppFindings += 1
                 }
-                il2cppFindings += 1
             }
 
             for methodRec in il2cppResult.methods {
+                if il2cppFindings > 12_000 { break }
                 let fullMethod = "\(methodRec.declaringClassFullName).\(methodRec.methodName)"
                 guard let category = OffsetCategoryClassifier.classify(identifier: fullMethod) else { continue }
                 let tokenHex = String(format: "0x%08X", methodRec.token)
 
+                // Priority 1: Exact RVA from Il2CppCodeGenModule.methodPointers!
+                if let codeGenVA = codeGenMethodVAs[methodRec.methodIndex] {
+                    let rva = machO.rva(forVirtualAddress: codeGenVA)
+                    let fileOff = machO.virtualAddressToSliceFileOffset(codeGenVA)
+                    let profile = ARM64InstructionAnalyzer.profileFunctionBody(
+                        sliceCursor: staticOutput.sliceCursor,
+                        machO: machO,
+                        functionVA: codeGenVA
+                    )
+
+                    if let firstField = profile.thisFieldOffsets.first {
+                        let propStem = Self.extractPropertyStem(from: methodRec.methodName)
+                        if !propStem.isEmpty {
+                            verifiedFieldOffsetByPropertyKey["\(methodRec.declaringClassFullName)|\(propStem.lowercased())"] = (firstField, rva)
+                        }
+                    }
+
+                    var note = "Giải mã chính xác RVA hàm từ bảng Il2CppCodeGenModule.methodPointers (Token \(tokenHex))."
+                    if !profile.thisFieldOffsets.isEmpty {
+                        let fl = profile.thisFieldOffsets.map { String(format: "+0x%X", $0) }.joined(separator: ", ")
+                        note += " Offset trường [X0] trong thân hàm: \(fl)."
+                    }
+
+                    appendUnique(
+                        DiscoveredOffset(
+                            name: fullMethod,
+                            value: HexFormatters.vaHex(codeGenVA),
+                            moduleName: moduleName,
+                            rva: rva,
+                            virtualAddress: codeGenVA,
+                            fileOffset: fileOff,
+                            category: category,
+                            dataType: .method,
+                            discoverySource: .il2cppCodeGen,
+                            verificationStatus: profile.validCode ? .verified : .probable,
+                            confidenceScore: profile.validCode ? 0.99 : 0.90,
+                            signatureHint: profile.prologueHex ?? "MethodDef \(tokenHex)",
+                            notes: note
+                        )
+                    )
+                    il2cppFindings += 1
+                    continue
+                }
+
+                // Priority 2: Exact RVA from Mach-O symbol table
                 if let matchedSym = matchIL2CPPSymbol(
                     className: methodRec.declaringClassFullName,
                     methodName: methodRec.methodName,
@@ -273,6 +410,18 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                         expectExecutable: true,
                         staticOutput: staticOutput
                     )
+                    let profile = ARM64InstructionAnalyzer.profileFunctionBody(
+                        sliceCursor: staticOutput.sliceCursor,
+                        machO: machO,
+                        functionVA: matchedSym.virtualAddress
+                    )
+                    if let firstField = profile.thisFieldOffsets.first {
+                        let propStem = Self.extractPropertyStem(from: methodRec.methodName)
+                        if !propStem.isEmpty {
+                            verifiedFieldOffsetByPropertyKey["\(methodRec.declaringClassFullName)|\(propStem.lowercased())"] = (firstField, matchedSym.rva)
+                        }
+                    }
+
                     appendUnique(
                         DiscoveredOffset(
                             name: fullMethod,
@@ -286,13 +435,18 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                             discoverySource: .il2cppMetadata,
                             verificationStatus: valCheck.status,
                             confidenceScore: valCheck.confidence,
-                            signatureHint: valCheck.prologueHex ?? "MethodDef \(tokenHex)",
-                            notes: "Resolved IL2CPP method RVA via Mach-O symbol linkage (\(matchedSym.cleanName))."
+                            signatureHint: profile.prologueHex ?? valCheck.prologueHex ?? "MethodDef \(tokenHex)",
+                            notes: "Giải mã RVA hàm IL2CPP thông qua liên kết ký hiệu Mach-O (\(matchedSym.cleanName))."
                         )
                     )
-                } else if let xref = xrefByString[methodRec.methodName] ?? xrefByString[methodRec.declaringClassFullName],
-                          let funcVA = xref.enclosingFunctionVA,
-                          let funcRVA = xref.enclosingFunctionRVA {
+                    il2cppFindings += 1
+                    continue
+                }
+
+                // Priority 3: ARM64 ADRP+ADD XRef correlation
+                if let xref = xrefByString[methodRec.methodName] ?? xrefByString[methodRec.declaringClassFullName],
+                   let funcVA = xref.enclosingFunctionVA,
+                   let funcRVA = xref.enclosingFunctionRVA {
                     let fileOff = machO.virtualAddressToSliceFileOffset(funcVA)
                     appendUnique(
                         DiscoveredOffset(
@@ -308,9 +462,10 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                             verificationStatus: .probable,
                             confidenceScore: 0.78,
                             signatureHint: xref.prologueHex ?? "MethodDef \(tokenHex)",
-                            notes: "Probable ARM64 function start correlated via ADRP+ADD reference to '\(xref.referencedString)'."
+                            notes: "Tương quan địa chỉ hàm ARM64 thông qua tham chiếu chuỗi ADRP+ADD tới '\(xref.referencedString)'."
                         )
                     )
+                    il2cppFindings += 1
                 } else {
                     appendUnique(
                         DiscoveredOffset(
@@ -325,45 +480,74 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                             discoverySource: .il2cppMetadata,
                             verificationStatus: .undetermined,
                             confidenceScore: 0.45,
-                            signatureHint: "MethodDef \(tokenHex) (\(methodRec.parameterCount) params)",
-                            notes: "Method definition exists in global-metadata.dat, but binary RVA is stripped/encrypted and cannot be statically proven."
+                            signatureHint: "MethodDef \(tokenHex) (\(methodRec.parameterCount) tham số)",
+                            notes: machO.encryptionInfo.isEncrypted
+                                ? "Hàm tồn tại trong global-metadata.dat nhưng phân vùng code đang mã hóa FairPlay (cryptid!=0)."
+                                : "Metadata Token hợp lệ trong global-metadata.dat."
+                        )
+                    )
+                    il2cppFindings += 1
+                }
+            }
+
+            // Fields — upgrade with machine-code verified [X0 + #offset] whenever getter/setter was disassembled!
+            for fieldRec in il2cppResult.fields {
+                if il2cppFindings > 16_000 { break }
+                let fullField = "\(fieldRec.declaringClassFullName).\(fieldRec.fieldName)"
+                guard let category = OffsetCategoryClassifier.classify(identifier: fullField) else { continue }
+
+                let normalizedFieldStem = Self.normalizeFieldStem(fieldRec.fieldName)
+                let lookupKey = "\(fieldRec.declaringClassFullName)|\(normalizedFieldStem)"
+
+                if let verifiedPair = verifiedFieldOffsetByPropertyKey[lookupKey] {
+                    let hexOff = String(format: "0x%X", verifiedPair.offset)
+                    appendUnique(
+                        DiscoveredOffset(
+                            name: fullField,
+                            value: hexOff,
+                            moduleName: moduleName,
+                            rva: UInt64(verifiedPair.offset),
+                            virtualAddress: 0,
+                            fileOffset: nil,
+                            category: category,
+                            dataType: .field,
+                            discoverySource: .il2cppCodeGen,
+                            verificationStatus: .verified,
+                            confidenceScore: 0.98,
+                            signatureHint: String(format: "FieldDef 0x%08X • Lệnh ARM64 tại RVA 0x%08llX", fieldRec.token, verifiedPair.methodRVA),
+                            notes: "Offset trường dữ liệu (\(hexOff)) được xác minh trực tiếp từ lệnh đọc/ghi thanh ghi [X0] trong hàm getter/setter!"
+                        )
+                    )
+                } else {
+                    let fieldHex = String(format: "0x%X", fieldRec.estimatedInstanceOffset)
+                    appendUnique(
+                        DiscoveredOffset(
+                            name: fullField,
+                            value: fieldHex,
+                            moduleName: moduleName,
+                            rva: UInt64(fieldRec.estimatedInstanceOffset),
+                            virtualAddress: 0,
+                            fileOffset: nil,
+                            category: category,
+                            dataType: .field,
+                            discoverySource: .il2cppMetadata,
+                            verificationStatus: .probable,
+                            confidenceScore: 0.82,
+                            signatureHint: String(format: "FieldDef 0x%08X (thứ tự #%d)", fieldRec.token, fieldRec.fieldOrdinalInClass),
+                            notes: "Offset trường đối tượng IL2CPP 64-bit (\(fieldHex) tính từ header Il2CppObject +0x10)."
                         )
                     )
                 }
                 il2cppFindings += 1
             }
 
-            for fieldRec in il2cppResult.fields {
-                let fullField = "\(fieldRec.declaringClassFullName).\(fieldRec.fieldName)"
-                guard let category = OffsetCategoryClassifier.classify(identifier: fullField) else { continue }
-                let fieldHex = String(format: "0x%X", fieldRec.estimatedInstanceOffset)
-                appendUnique(
-                    DiscoveredOffset(
-                        name: fullField,
-                        value: fieldHex,
-                        moduleName: moduleName,
-                        rva: UInt64(fieldRec.estimatedInstanceOffset),
-                        virtualAddress: 0,
-                        fileOffset: nil,
-                        category: category,
-                        dataType: .field,
-                        discoverySource: .il2cppMetadata,
-                        verificationStatus: .probable,
-                        confidenceScore: 0.82,
-                        signatureHint: String(format: "FieldDef 0x%08X (ordinal #%d)", fieldRec.token, fieldRec.fieldOrdinalInClass),
-                        notes: "ARM64 64-bit IL2CPP instance field layout offset (\(fieldHex) from Il2CppObject +0x10 header)."
-                    )
-                )
-                il2cppFindings += 1
-            }
-
         case .encryptedOrObfuscated:
-            warnings.append("IL2CPP global-metadata.dat header is encrypted or obfuscated. Per compliance rules, protection was not bypassed.")
-            limitations.append("IL2CPP class/method names cannot be statically read from encrypted global-metadata.dat; use an authorized debug build or runtime trace.")
+            warnings.append("Tệp global-metadata.dat đã bị mã hóa hoặc làm rối header (không vượt cơ chế bảo vệ).")
+            limitations.append("Không đọc tĩnh tên lớp/hàm từ global-metadata.dat bị mã hóa; vẫn thực hiện quét Mach-O, ObjC và ARM64.")
 
         case .truncatedOrIncomplete:
-            warnings.append("IL2CPP global-metadata.dat is incomplete or truncated.")
-            limitations.append("Incomplete metadata prevented full IL2CPP table reconstruction.")
+            warnings.append("Tệp global-metadata.dat bị cắt cụt hoặc không đầy đủ.")
+            limitations.append("Metadata không đầy đủ nên không thể tái tạo trọn vẹn bảng lớp IL2CPP.")
 
         case .notPresent:
             break
@@ -371,7 +555,7 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
 
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "3. IL2CPP Analysis",
+                methodName: "3. Phân tích Chuyên sâu IL2CPP & CodeGenModule",
                 executed: il2cppResult.availability != .notPresent,
                 status: il2cppResult.availability.rawValue,
                 findingsCount: il2cppFindings,
@@ -380,16 +564,16 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
         )
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "4. Metadata Analysis",
+                methodName: "4. Phân tích Metadata & Objective-C IMP",
                 executed: true,
-                status: "Completed",
+                status: "Hoàn tất",
                 findingsCount: objcFindings + il2cppResult.relevantStringLiterals.count,
-                details: "ObjC metadata entries: \(objcFindings), IL2CPP string literals: \(il2cppResult.relevantStringLiterals.count)."
+                details: "Hàm/Lớp ObjC: \(objcFindings), Chuỗi hằng IL2CPP: \(il2cppResult.relevantStringLiterals.count)."
             )
         )
 
-        // [5] Symbol-less Analysis (LC_FUNCTION_STARTS + ARM64 ADRP+ADD XRefs)
-        logger?.stage("OffsetDiscovery", "Running symbol-less ARM64 instruction & string cross-reference discovery...")
+        // [5] Symbol-less Analysis (LC_FUNCTION_STARTS + ARM64 ADRP+ADD / ADRP+LDR XRefs)
+        logger?.stage("OffsetDiscovery", "Đang quét hàm không ký hiệu (LC_FUNCTION_STARTS + ARM64 ADRP/ADD/LDR)...")
         var symbolLessFindings = 0
         for xref in staticOutput.arm64StringXRefs {
             guard let category = OffsetCategoryClassifier.classify(identifier: xref.referencedString) else {
@@ -400,13 +584,13 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                 let cleanLabel = sanitizeXRefLabel(xref.referencedString, rva: funcRVA)
                 let status: OffsetVerificationStatus = (xref.prologueHex != nil) ? .probable : .unverified
                 let callers = staticOutput.incomingCallCountsByFuncVA[funcVA] ?? 0
-                var note = "Symbol-less ARM64 function (\(HexFormatters.vaHex(funcVA))) referencing string \"\(xref.referencedString)\" at \(HexFormatters.vaHex(xref.instructionVA))."
+                var note = "Hàm ARM64 không ký hiệu (\(HexFormatters.vaHex(funcVA))) tham chiếu chuỗi \"\(xref.referencedString)\" tại \(HexFormatters.vaHex(xref.instructionVA))."
                 if !xref.structFieldOffsets.isEmpty {
                     let formattedFields = xref.structFieldOffsets.prefix(4).map { String(format: "+0x%X", $0) }.joined(separator: ", ")
-                    note += " Struct field accesses: [\(formattedFields)]."
+                    note += " Truy cập trường cấu trúc: [\(formattedFields)]."
                 }
                 if callers > 0 {
-                    note += " Incoming BL calls: \(callers)."
+                    note += " Số nơi gọi BL tới hàm này: \(callers)."
                 }
 
                 appendUnique(
@@ -421,14 +605,13 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                         dataType: .method,
                         discoverySource: .arm64PatternAnalysis,
                         verificationStatus: status,
-                        confidenceScore: 0.76,
+                        confidenceScore: 0.78,
                         signatureHint: xref.prologueHex,
                         notes: note
                     )
                 )
                 symbolLessFindings += 1
 
-                // Surface correlated __DATA global/singleton pointers accessed inside the same gameplay function
                 for dataRef in staticOutput.arm64DataXRefs where dataRef.enclosingFunctionVA == funcVA {
                     let dataFileOff = machO.virtualAddressToSliceFileOffset(dataRef.targetDataVA)
                     appendUnique(
@@ -443,9 +626,9 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                             dataType: .staticData,
                             discoverySource: .arm64PatternAnalysis,
                             verificationStatus: .probable,
-                            confidenceScore: 0.74,
+                            confidenceScore: 0.75,
                             signatureHint: dataRef.sectionDescription,
-                            notes: "Static global pointer in \(dataRef.sectionDescription) loaded via ADRP+LDR inside \(HexFormatters.vaHex(funcVA))."
+                            notes: "Con trỏ toàn cục trong \(dataRef.sectionDescription) được nạp qua ADRP+LDR bên trong hàm \(HexFormatters.vaHex(funcVA))."
                         )
                     )
                     symbolLessFindings += 1
@@ -455,7 +638,7 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                 let strFileOff = machO.virtualAddressToSliceFileOffset(xref.targetStringVA)
                 appendUnique(
                     DiscoveredOffset(
-                        name: "StringRef::\( sanitizeIdentifierToken(xref.referencedString) )",
+                        name: "StringRef::\(sanitizeIdentifierToken(xref.referencedString))",
                         value: HexFormatters.vaHex(xref.targetStringVA),
                         moduleName: moduleName,
                         rva: strRVA,
@@ -466,8 +649,8 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                         discoverySource: .stringCrossReference,
                         verificationStatus: .verified,
                         confidenceScore: 0.85,
-                        signatureHint: "Referenced at \(HexFormatters.vaHex(xref.instructionVA))",
-                        notes: "Verified read-only string literal cross-referenced by ARM64 ADRP+ADD."
+                        signatureHint: "Tham chiếu tại \(HexFormatters.vaHex(xref.instructionVA))",
+                        notes: "Chuỗi tĩnh được tham chiếu trực tiếp bởi cặp lệnh ARM64 ADRP+ADD."
                     )
                 )
                 symbolLessFindings += 1
@@ -476,28 +659,27 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
 
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "5. Symbol-less Analysis",
+                methodName: "5. Phân tích Binary Đã Strip Symbol (ARM64 XRef)",
                 executed: machO.isARM64 && !machO.encryptionInfo.isEncrypted,
-                status: machO.encryptionInfo.isEncrypted ? "Blocked by FairPlay Encryption" : "Completed",
+                status: machO.encryptionInfo.isEncrypted ? "Tạm dừng do FairPlay cryptid!=0" : "Hoàn tất",
                 findingsCount: symbolLessFindings,
-                details: "Decoded \(machO.functionStartRVAs.count) LC_FUNCTION_STARTS entries and \(symbolLessFindings) gameplay ARM64 XRefs."
+                details: "Quét \(machO.functionStartRVAs.count) hàm LC_FUNCTION_STARTS và \(symbolLessFindings) điểm tham chiếu gameplay."
             )
         )
 
         if machO.encryptionInfo.isEncrypted {
             warnings.append(
                 String(
-                    format: "Mach-O segment encryption active (cryptid=%u, range 0x%X..0x%X). Encrypted code pages were NOT parsed as instructions to prevent false offsets.",
+                    format: "Tệp thực thi đang bật mã hóa FairPlay từ App Store (cryptid=%u, vùng 0x%X..0x%X). Để dò RVA lệnh máy ARM64 đầy đủ, hãy dùng bản IPA chưa mã hóa (cryptid=0).",
                     machO.encryptionInfo.cryptID,
                     machO.encryptionInfo.cryptOffset,
                     machO.encryptionInfo.cryptOffset + machO.encryptionInfo.cryptSize
                 )
             )
-            limitations.append("Encrypted FairPlay code segments cannot be statically disassembled without an unencrypted development IPA or authorized runtime trace.")
+            limitations.append("Các trang mã máy đang mã hóa FairPlay không được giải mã giả lập nhằm đảm bảo tính chính xác 100% (không tạo offset ảo).")
         }
 
-        // [6] & [7] Runtime Inspection & Dynamic ASLR Address Mapping
-        logger?.stage("RuntimeInspector", "Computing ASLR-aware dynamic address mappings...")
+        // [6] & [7] Runtime Inspection & Dynamic ASLR Mapping
         let runtimeSnapshot = runtimeInspector.buildRuntimeSnapshot(
             machO: machO,
             discoveredOffsets: discovered,
@@ -522,7 +704,7 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                         verificationStatus: status,
                         confidenceScore: status == .verified ? 0.95 : 0.75,
                         signatureHint: "Runtime \(HexFormatters.vaHex(rtSym.runtimeAddress)) - Slide \(HexFormatters.hex(rtSym.aslrSlide))",
-                        notes: "Resolved dynamically from authorized runtime trace."
+                        notes: "Ánh xạ động từ bản ghi Runtime được cấp quyền."
                     )
                 )
                 runtimeAddedCount += 1
@@ -531,7 +713,7 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
 
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "6. Runtime Inspection",
+                methodName: "6. Quan sát Runtime & Dyld Slide",
                 executed: true,
                 status: runtimeSnapshot.observationMode,
                 findingsCount: runtimeAddedCount + runtimeSnapshot.hostDyldModulesSample.count,
@@ -540,24 +722,24 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
         )
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "7. Dynamic Address Mapping",
+                methodName: "7. Ánh xạ Địa chỉ Động ASLR (VA/RVA/FileOffset)",
                 executed: true,
-                status: "Completed",
+                status: "Hoàn tất",
                 findingsCount: runtimeSnapshot.mappedRuntimeSymbols.count,
-                details: "Mapped \(runtimeSnapshot.mappedRuntimeSymbols.count) entries with ASLR base \(HexFormatters.vaHex(machO.defaultBaseAddress)) + slide \(HexFormatters.hex(runtimeSnapshot.sampleASLRSlide))."
+                details: "Ánh xạ \(runtimeSnapshot.mappedRuntimeSymbols.count) địa chỉ với ASLR Base \(HexFormatters.vaHex(machO.defaultBaseAddress))."
             )
         )
 
-        // [8] Offset Validation Summary
+        // [8] Offset Validation
         let verifiedTotal = discovered.filter { $0.verificationStatus == .verified }.count
         let probableTotal = discovered.filter { $0.verificationStatus == .probable }.count
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "8. Offset Validation",
+                methodName: "8. Kiểm chứng Độ chính xác Offset",
                 executed: true,
-                status: "Completed",
+                status: "Hoàn tất",
                 findingsCount: verifiedTotal,
-                details: "Verified \(verifiedTotal) offsets via segment bounds + ARM64 alignment/prologue checks; \(probableTotal) probable."
+                details: "Đã xác minh \(verifiedTotal) offset (kiểm tra biên phân vùng + căn lề 4-byte ARM64 + prologue); \(probableTotal) khả năng cao."
             )
         )
 
@@ -597,17 +779,16 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
 
         methodSummaries.append(
             AnalysisMethodSummary(
-                methodName: "9. Cross-version Comparison",
+                methodName: "9. Đối chiếu Chênh lệch Xuyên Phiên bản",
                 executed: crossDelta != nil,
-                status: crossDelta != nil ? "Compared vs v\(crossDelta!.previousVersion)" : "Baseline Version Recorded",
+                status: crossDelta != nil ? "Đã so sánh với v\(crossDelta!.previousVersion)" : "Đã lưu mốc phiên bản đầu",
                 findingsCount: crossDelta?.shiftedRVAEntries.count ?? 0,
                 details: crossDelta.map {
-                    "Matched \($0.matchedCount) offsets, \($0.shiftedRVAEntries.count) shifted RVAs, \($0.newlyAddedCount) added, \($0.missingCount) removed."
-                } ?? "Initial baseline snapshot saved to history.json for future cross-version diffing."
+                    "Khớp \($0.matchedCount) offset, đổi địa chỉ RVA: \($0.shiftedRVAEntries.count), mới: \($0.newlyAddedCount), mất: \($0.missingCount)."
+                } ?? "Đã ghi nhận mốc cơ sở vào history.json để tự động so sánh khi cập nhật phiên bản mới."
             )
         )
 
-        // Sort deterministically: Verified first, then Probable, Unverified, Undetermined; then by category & name
         let rank: [OffsetVerificationStatus: Int] = [
             .verified: 0,
             .probable: 1,
@@ -624,7 +805,7 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
 
         logger?.success(
             stage: "OffsetDiscovery",
-            "Completed discovery: \(discovered.count) total offsets (Verified: \(verifiedTotal), Probable: \(probableTotal))."
+            "Hoàn tất dò chuyên sâu: \(discovered.count) offset (Đã xác minh: \(verifiedTotal), Khả năng cao: \(probableTotal))."
         )
 
         return OffsetDiscoveryBundle(
@@ -637,7 +818,27 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
         )
     }
 
-    // MARK: - Internal Validation & Matching Helpers
+    // MARK: - Helpers
+
+    private static func extractPropertyStem(from methodName: String) -> String {
+        let lower = methodName.lowercased()
+        for prefix in ["get_", "set_"] where lower.hasPrefix(prefix) {
+            return String(methodName.dropFirst(prefix.count))
+        }
+        return ""
+    }
+
+    private static func normalizeFieldStem(_ fieldName: String) -> String {
+        var s = fieldName
+        if s.hasPrefix("<"), let closeIdx = s.firstIndex(of: ">") {
+            return String(s[s.index(after: s.startIndex)..<closeIdx]).lowercased()
+        }
+        for p in ["m_", "_", "s_"] where s.hasPrefix(p) {
+            s = String(s.dropFirst(p.count))
+            break
+        }
+        return s.lowercased()
+    }
 
     private func validateExecutableOrDataAddress(
         va: UInt64,
@@ -646,22 +847,22 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
     ) -> (status: OffsetVerificationStatus, confidence: Double, prologueHex: String?, note: String) {
         let machO = staticOutput.machO
         guard va > 0, machO.isVirtualAddressValid(va, requireExecutable: expectExecutable) else {
-            return (.unverified, 0.40, nil, "Virtual address falls outside expected Mach-O segment bounds.")
+            return (.unverified, 0.40, nil, "Địa chỉ ảo nằm ngoài phân vùng Mach-O mong đợi.")
         }
         guard let fileOff = machO.virtualAddressToSliceFileOffset(va) else {
-            return (.probable, 0.70, nil, "Zero-fill VM address (valid in virtual memory, no static file backing).")
+            return (.probable, 0.70, nil, "Biến bộ nhớ ảo khởi tạo bằng 0 (__bss / zero-fill).")
         }
         if machO.isSliceRangeEncrypted(offset: fileOff, length: 4) {
             return (
                 .unverified,
                 0.60,
                 nil,
-                "Symbol table entry points into FairPlay encrypted region; instruction bytes cannot be statically verified."
+                "Ký hiệu trỏ vào phân vùng mã hóa FairPlay; không thể xác minh byte lệnh máy tĩnh."
             )
         }
         if expectExecutable && machO.isARM64 {
             if (va & 0x3) != 0 {
-                return (.unverified, 0.35, nil, "Address is not 4-byte aligned for ARM64 instruction execution.")
+                return (.unverified, 0.35, nil, "Địa chỉ không căn lề 4-byte của tập lệnh ARM64.")
             }
             if let sig = ARM64InstructionAnalyzer.readPrologueSignature(
                 sliceCursor: staticOutput.sliceCursor,
@@ -674,12 +875,12 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                     conf,
                     sig.hex,
                     sig.hasStandardPrologue
-                        ? "Verified ARM64 function prologue & Mach-O __TEXT mapping."
-                        : "Verified executable ARM64 instruction sequence in __TEXT."
+                        ? "Đã xác minh Prologue hàm ARM64 chuẩn & phân vùng __TEXT."
+                        : "Đã xác minh chuỗi lệnh thực thi ARM64 hợp lệ trong __TEXT."
                 )
             }
         }
-        return (.verified, 0.90, nil, "Verified static Mach-O segment & file offset mapping.")
+        return (.verified, 0.90, nil, "Đã xác minh ánh xạ phân vùng tĩnh Mach-O & File Offset.")
     }
 
     private func matchIL2CPPSymbol(
@@ -689,7 +890,6 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
     ) -> SymbolEntry? {
         let shortClass = className.split(separator: ".").last.map(String.init) ?? className
         if let methodName {
-            // Standard IL2CPP symbol naming convention: ClassName_MethodName_m... or ClassName_MethodName
             let candidates = [
                 "\(shortClass)_\(methodName)".lowercased(),
                 "\(className.replacingOccurrences(of: ".", with: "_"))_\(methodName)".lowercased()

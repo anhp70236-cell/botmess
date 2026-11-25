@@ -15,6 +15,7 @@ public struct StaticBinaryAnalysisOutput: Sendable {
     public let sliceCursor: BinaryCursor
     public let cStringsByVA: [UInt64: String]
     public let objcMetadata: ObjCDiscoveredMetadata
+    public let objcResolvedMethods: [ObjCResolvedMethodIMP]
     public let arm64StringXRefs: [ARM64StringXRef]
     public let arm64DataXRefs: [ARM64DataPointerXRef]
     public let incomingCallCountsByFuncVA: [UInt64: Int]
@@ -110,11 +111,20 @@ public enum StaticBinaryAnalyzer {
             )
         }
 
+        let objcResolvedIMPs = ObjCBinaryMetadataScanner.scanResolvedMethodIMPs(
+            machO: machO,
+            sliceCursor: sliceCursor
+        )
+        if !objcResolvedIMPs.isEmpty {
+            logger?.info(stage: "ObjC", "Giải mã \(objcResolvedIMPs.count) hàm IMP Objective-C trực tiếp từ __objc_classlist.")
+        }
+
         return StaticBinaryAnalysisOutput(
             machO: machO,
             sliceCursor: sliceCursor,
             cStringsByVA: cStrings,
             objcMetadata: ObjCDiscoveredMetadata(classNames: objcClasses, selectorNames: objcSelectors),
+            objcResolvedMethods: objcResolvedIMPs,
             arm64StringXRefs: deepScan.stringXRefs,
             arm64DataXRefs: deepScan.dataPointerXRefs,
             incomingCallCountsByFuncVA: deepScan.incomingCallCountsByFuncVA,

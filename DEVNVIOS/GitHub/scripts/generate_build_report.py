@@ -64,7 +64,7 @@ test_report = {
 build_report = {
     "application": "DEVNVIOS IPA ANALYZER",
     "bundleIdentifier": "com.devnvios.ipaanalyzer",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "generatedAt": now_iso,
     "gitCommit": os.environ.get("GITHUB_SHA", "local"),
     "gitRunId": os.environ.get("GITHUB_RUN_ID", "local"),

@@ -1,7 +1,8 @@
 import Foundation
 
-/// Parses Unity IL2CPP `global-metadata.dat` (header magic `0xFAB11BAF`, versions 24..31+).
-/// Accurately detects valid, truncated/incomplete, and encrypted/obfuscated metadata files without fabricating entries.
+/// Parses Unity IL2CPP `global-metadata.dat` (header magic `0xFAB11BAF`, versions 24..31+),
+/// including `Il2CppImageDefinition` assembly tables so `IL2CPPBinaryRegistrationScanner` can correlate
+/// `Il2CppCodeGenModule` method pointer tables directly to stripped ARM64 RVAs.
 public enum IL2CPPMetadataParser {
     public static let standardMagic: UInt32 = 0xFAB11BAF
 
@@ -14,7 +15,7 @@ public enum IL2CPPMetadataParser {
                 methods: [],
                 fields: [],
                 relevantStringLiterals: [],
-                diagnostics: ["global-metadata.dat is smaller than minimum header size (\(data.count) bytes)."]
+                diagnostics: ["global-metadata.dat nhỏ hơn kích thước header tối thiểu (\(data.count) bytes)."]
             )
         }
 
@@ -28,14 +29,14 @@ public enum IL2CPPMetadataParser {
                 methods: [],
                 fields: [],
                 relevantStringLiterals: [],
-                diagnostics: ["Unable to read global-metadata.dat header."]
+                diagnostics: ["Không đọc được header global-metadata.dat."]
             )
         }
 
         guard magic == standardMagic else {
             logger?.warning(
                 stage: "IL2CPP",
-                String(format: "Non-standard global-metadata.dat magic 0x%08X (metadata is encrypted or obfuscated). Static metadata parsing skipped without bypass.", magic)
+                String(format: "Header global-metadata.dat không chuẩn (0x%08X != 0xFAB11BAF) — metadata đã được mã hóa/bảo vệ.", magic)
             )
             return IL2CPPAnalysisResult(
                 availability: .encryptedOrObfuscated,
@@ -45,8 +46,7 @@ public enum IL2CPPMetadataParser {
                 fields: [],
                 relevantStringLiterals: [],
                 diagnostics: [
-                    String(format: "Header magic 0x%08X != 0xFAB11BAF. Metadata is protected/encrypted.", magic),
-                    "Requires authorized test/debug build or runtime inspection in permitted test environment."
+                    String(format: "Header magic 0x%08X != 0xFAB11BAF (Metadata đang được bảo vệ/mã hóa).", magic)
                 ]
             )
         }
@@ -60,7 +60,7 @@ public enum IL2CPPMetadataParser {
                 methods: [],
                 fields: [],
                 relevantStringLiterals: [],
-                diagnostics: ["Unsupported or obfuscated IL2CPP metadata version: \(version)."]
+                diagnostics: ["Phiên bản IL2CPP metadata không chuẩn: \(version)."]
             )
         }
 
@@ -83,11 +83,10 @@ public enum IL2CPPMetadataParser {
                 methods: [],
                 fields: [],
                 relevantStringLiterals: [],
-                diagnostics: ["Metadata header offset fields could not be read."]
+                diagnostics: ["Không đọc được bảng offset trong header metadata."]
             )
         }
 
-        // Validate table bounds against file size
         let requiredBounds = [
             (stringOffset, stringSize, "stringTable"),
             (methodsOffset, methodsSize, "methods"),
@@ -103,7 +102,7 @@ public enum IL2CPPMetadataParser {
                     methods: [],
                     fields: [],
                     relevantStringLiterals: [],
-                    diagnostics: ["Metadata table '\(label)' (offset=\(off), size=\(sz)) is truncated (file size=\(data.count))."]
+                    diagnostics: ["Bảng '\(label)' vượt quá kích thước tệp metadata."]
                 )
             }
         }
@@ -114,9 +113,9 @@ public enum IL2CPPMetadataParser {
             return cursor.readCString(at: stringOffset + idx, maxLength: min(512, stringSize - idx))
         }
 
-        var diagnostics: [String] = ["Parsed IL2CPP global-metadata.dat v\(version)."]
+        var diagnostics: [String] = ["Phân tích IL2CPP global-metadata.dat v\(version)."]
 
-        // Parse TypeDefinitions using self-verifying stride detection (88 for v27/v29/v31, 92/96/100 for v24 variants)
+        // Parse TypeDefinitions (keep complete unfiltered `typeByIndex` for assembly method correlation, filter `parsedTypes` by SafetyPolicyFilter)
         var parsedTypes: [IL2CPPTypeRecord] = []
         var typeByIndex: [Int: IL2CPPTypeRecord] = [:]
 
@@ -130,8 +129,8 @@ public enum IL2CPPMetadataParser {
                 candidates: candidateTypeStrides,
                 readIdentifier: readIdentifier
             ) {
-                let typeCount = min(typeDefsSize / typeStride, 80_000)
-                parsedTypes.reserveCapacity(min(typeCount, 8192))
+                let typeCount = min(typeDefsSize / typeStride, 120_000)
+                parsedTypes.reserveCapacity(min(typeCount, 16_384))
 
                 for i in 0..<typeCount {
                     if i & 4095 == 0 && Task.isCancelled { break }
@@ -165,14 +164,13 @@ public enum IL2CPPMetadataParser {
                         parsedTypes.append(record)
                     }
                 }
-                diagnostics.append("Decoded \(parsedTypes.count) IL2CPP classes (stride=\(typeStride)B).")
-            } else {
-                diagnostics.append("Could not verify TypeDefinition struct stride for version \(version).")
+                diagnostics.append("Giải mã \(parsedTypes.count) lớp (TypeDef stride=\(typeStride)B).")
             }
         }
 
-        // Parse Methods (stride 32 for v24.2..v29, 36 for v31, 52/56 for v24.0..v24.1)
+        // Parse Methods
         var parsedMethods: [IL2CPPMethodRecord] = []
+        var totalDecodedRawMethodCount = 0
         if methodsSize > 0 && !typeByIndex.isEmpty {
             let candidateMethodStrides = [32, 36, 52, 56]
             if let methodStride = detectMethodStride(
@@ -184,7 +182,10 @@ public enum IL2CPPMetadataParser {
                 candidates: candidateMethodStrides,
                 readIdentifier: readIdentifier
             ) {
-                let methodCount = min(methodsSize / methodStride, 200_000)
+                let methodCount = min(methodsSize / methodStride, 350_000)
+                totalDecodedRawMethodCount = methodCount
+                parsedMethods.reserveCapacity(min(methodCount, 32_768))
+
                 for i in 0..<methodCount {
                     if i & 8191 == 0 && Task.isCancelled { break }
                     let base = methodsOffset + i * methodStride
@@ -219,11 +220,23 @@ public enum IL2CPPMetadataParser {
                         )
                     )
                 }
-                diagnostics.append("Decoded \(parsedMethods.count) IL2CPP methods (stride=\(methodStride)B).")
+                diagnostics.append("Giải mã \(parsedMethods.count) hàm (MethodDef stride=\(methodStride)B).")
             }
         }
 
-        // Parse Fields (Il2CppFieldDefinition = 12 bytes in v24..v31: nameIndex(4), typeIndex(4), token(4))
+        // Parse Il2CppImageDefinition table (offset 0xA8/0xAC in v24.2..v31, or 0xB0/0xB4 in v24.0..v24.1)
+        let parsedImages = parseImagesTable(
+            cursor: cursor,
+            stringSize: stringSize,
+            typeByIndex: typeByIndex,
+            maxMethodCount: totalDecodedRawMethodCount,
+            readIdentifier: readIdentifier
+        )
+        if !parsedImages.isEmpty {
+            diagnostics.append("Ánh xạ \(parsedImages.count) DLL assemblies (CodeGenModule ready).")
+        }
+
+        // Parse Fields (12 bytes per Il2CppFieldDefinition)
         var parsedFields: [IL2CPPFieldRecord] = []
         if fieldsSize >= 12 && fieldsSize % 12 == 0 {
             let totalFields = fieldsSize / 12
@@ -242,7 +255,6 @@ public enum IL2CPPMetadataParser {
                     let combined = "\(typeRec.fullName).\(fName)"
                     guard SafetyPolicyFilter.isPermittedIdentifier(combined) else { continue }
                     let ordinal = fIdx - start
-                    // Standard ARM64 IL2CPP object header is 0x10 bytes (Il2CppObject: klass* + monitor*)
                     let estimatedOffset = UInt32(0x10 + ordinal * 8)
                     parsedFields.append(
                         IL2CPPFieldRecord(
@@ -256,15 +268,15 @@ public enum IL2CPPMetadataParser {
                     )
                 }
             }
-            diagnostics.append("Decoded \(parsedFields.count) IL2CPP class fields.")
+            diagnostics.append("Giải mã \(parsedFields.count) trường dữ liệu (Fields).")
         }
 
-        // Parse String Literals (8 bytes per descriptor: length(4), dataIndex(4))
+        // Parse String Literals
         var literals: [IL2CPPStringLiteralRecord] = []
         if stringLiteralSize >= 8,
            cursor.hasBytes(at: stringLiteralOffset, count: stringLiteralSize),
            cursor.hasBytes(at: stringLiteralDataOffset, count: stringLiteralDataSize) {
-            let litCount = min(stringLiteralSize / 8, 25_000)
+            let litCount = min(stringLiteralSize / 8, 30_000)
             for i in 0..<litCount {
                 let descOff = stringLiteralOffset + i * 8
                 guard let len = cursor.readUInt32LE(at: descOff).map(Int.init),
@@ -277,25 +289,104 @@ public enum IL2CPPMetadataParser {
                 let text = String(decoding: slice, as: UTF8.self)
                 if SafetyPolicyFilter.isPermittedIdentifier(text) {
                     literals.append(IL2CPPStringLiteralRecord(index: i, value: text))
-                    if literals.count >= 1000 { break }
+                    if literals.count >= 1500 { break }
                 }
             }
         }
 
         logger?.success(
             stage: "IL2CPP",
-            "Metadata v\(version) analyzed: \(parsedTypes.count) classes, \(parsedMethods.count) methods, \(parsedFields.count) fields."
+            "Metadata v\(version): \(parsedImages.count) DLLs, \(parsedTypes.count) lớp, \(parsedMethods.count) hàm, \(parsedFields.count) trường."
         )
 
         return IL2CPPAnalysisResult(
             availability: .validStandard,
             metadataVersion: version,
+            images: parsedImages,
             types: parsedTypes,
             methods: parsedMethods,
             fields: parsedFields,
             relevantStringLiterals: literals,
             diagnostics: diagnostics
         )
+    }
+
+    private static func parseImagesTable(
+        cursor: BinaryCursor,
+        stringSize: Int,
+        typeByIndex: [Int: IL2CPPTypeRecord],
+        maxMethodCount: Int,
+        readIdentifier: (Int32) -> String?
+    ) -> [IL2CPPImageRecord] {
+        let headerPairCandidates = [(0xA8, 0xAC), (0xB0, 0xB4)]
+        let imageStrides = [40, 44]
+
+        for (offField, sizeField) in headerPairCandidates {
+            guard let imgOff = cursor.readInt32LE(at: offField).map(Int.init),
+                  let imgSize = cursor.readInt32LE(at: sizeField).map(Int.init),
+                  imgOff > 0, imgSize >= 40,
+                  cursor.hasBytes(at: imgOff, count: imgSize) else {
+                continue
+            }
+
+            for stride in imageStrides where imgSize % stride == 0 {
+                let imgCount = imgSize / stride
+                guard imgCount > 0 && imgCount < 2000 else { continue }
+                let sampleCount = min(imgCount, 6)
+                var dllMatches = 0
+                for s in 0..<sampleCount {
+                    if let nameIdx = cursor.readInt32LE(at: imgOff + s * stride),
+                       nameIdx >= 0, Int(nameIdx) < stringSize,
+                       let name = readIdentifier(nameIdx),
+                       (name.hasSuffix(".dll") || name.hasSuffix(".exe") || name == "__Generated") {
+                        dllMatches += 1
+                    }
+                }
+                guard dllMatches == sampleCount else { continue }
+
+                var results: [IL2CPPImageRecord] = []
+                results.reserveCapacity(imgCount)
+                for i in 0..<imgCount {
+                    let b = imgOff + i * stride
+                    guard let nameIdx = cursor.readInt32LE(at: b),
+                          let typeStart = cursor.readInt32LE(at: b + 8),
+                          let typeCount = cursor.readUInt32LE(at: b + 12),
+                          let dllName = readIdentifier(nameIdx),
+                          !dllName.isEmpty else {
+                        continue
+                    }
+
+                    var orderedMethods: [Int] = []
+                    if typeStart >= 0 && typeCount > 0 && typeCount < 100_000 {
+                        let startT = Int(typeStart)
+                        let endT = startT + Int(typeCount)
+                        for tIdx in startT..<endT {
+                            if let tRec = typeByIndex[tIdx], tRec.methodCount > 0, tRec.methodStart >= 0 {
+                                let mStart = Int(tRec.methodStart)
+                                let mEnd = min(maxMethodCount, mStart + Int(tRec.methodCount))
+                                if mStart < mEnd {
+                                    for mIdx in mStart..<mEnd {
+                                        orderedMethods.append(mIdx)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    results.append(
+                        IL2CPPImageRecord(
+                            imageIndex: i,
+                            assemblyName: dllName,
+                            typeStart: typeStart,
+                            typeCount: typeCount,
+                            orderedMethodIndices: orderedMethods
+                        )
+                    )
+                }
+                return results
+            }
+        }
+        return []
     }
 
     private static func detectTypeStride(

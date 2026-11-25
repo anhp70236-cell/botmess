@@ -1,76 +1,80 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 public struct MainTabView: View {
     @EnvironmentObject private var container: AppContainer
+    @EnvironmentObject private var pipeline: AnalysisPipelineCoordinator
 
     public init() {}
-
-    private var supportedImportTypes: [UTType] {
-        var types: [UTType] = []
-        if let ipaType = UTType(filenameExtension: "ipa") {
-            types.append(ipaType)
-        }
-        types.append(.zip)
-        types.append(.archive)
-        types.append(.data)
-        return types
-    }
 
     public var body: some View {
         TabView(selection: $container.selectedTab) {
             HomeView()
                 .tabItem {
-                    Label("Home", systemImage: "square.grid.2x2")
+                    Label("Trang chủ", systemImage: "square.grid.2x2")
                 }
                 .tag(AppTab.home)
 
             AnalysisView()
                 .tabItem {
-                    Label("Analysis", systemImage: "waveform.path.ecg.rectangle")
+                    Label("Phân tích", systemImage: "waveform.path.ecg.rectangle")
                 }
                 .tag(AppTab.analysis)
 
             GameDetailRootView()
                 .tabItem {
-                    Label("Games", systemImage: "cylinder.split.1x2")
+                    Label("Kho Offset", systemImage: "cylinder.split.1x2")
                 }
                 .tag(AppTab.gameDetails)
 
             StorageView()
                 .tabItem {
-                    Label("Storage", systemImage: "internaldrive")
+                    Label("Bộ nhớ", systemImage: "internaldrive")
                 }
                 .tag(AppTab.storage)
 
             SettingsView()
                 .tabItem {
-                    Label("Settings", systemImage: "slider.horizontal.3")
+                    Label("Cài đặt", systemImage: "slider.horizontal.3")
                 }
                 .tag(AppTab.settings)
         }
         .tint(AppTheme.accent)
         .preferredColorScheme(container.themeMode.preferredColorScheme)
-        .fileImporter(
-            isPresented: $container.isShowingFileImporter,
-            allowedContentTypes: supportedImportTypes,
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                container.handleImportedURLs(urls)
-            case .failure(let error):
-                container.alertMessage = error.localizedDescription
+        .sheet(isPresented: $container.isShowingFileImporter) {
+            IPADocumentPicker(
+                onPickURLs: { pickedURLs in
+                    container.isShowingFileImporter = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        container.handleImportedURLs(pickedURLs)
+                    }
+                },
+                onCancel: {
+                    container.isShowingFileImporter = false
+                }
+            )
+            .ignoresSafeArea()
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { pipeline.pendingExportPromptBundle != nil },
+                set: { if !$0 { pipeline.pendingExportPromptBundle = nil } }
+            )
+        ) {
+            if let bundle = pipeline.pendingExportPromptBundle {
+                ExportModePromptSheet(bundle: bundle) {
+                    container.openGameDetails(bundle.record)
+                }
+                .environmentObject(container)
             }
         }
         .alert(
-            "Notice",
+            "Thông báo",
             isPresented: Binding(
                 get: { container.alertMessage != nil },
                 set: { if !$0 { container.alertMessage = nil } }
             )
         ) {
-            Button("OK", role: .cancel) { container.alertMessage = nil }
+            Button("Đã hiểu", role: .cancel) { container.alertMessage = nil }
         } message: {
             Text(container.alertMessage ?? "")
         }

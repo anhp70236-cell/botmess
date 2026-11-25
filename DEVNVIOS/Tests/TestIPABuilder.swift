@@ -76,15 +76,36 @@ enum TestIPABuilder {
         // Populate __cstring
         let str1 = "PlayerHealthComponent"
         let str2 = "MainCameraRotation"
+        let dllStr = "Assembly-CSharp.dll"
         let str1Off = Int(cstringFileOff)
         let str2Off = str1Off + str1.utf8.count + 1
+        let dllStrOff = str2Off + str2.utf8.count + 1
         writeCString(&bin, at: str1Off, str1)
         writeCString(&bin, at: str2Off, str2)
+        writeCString(&bin, at: dllStrOff, dllStr)
         let str1VA = cstringVA
         let str2VA = cstringVA + UInt64(str1.utf8.count + 1)
+        let dllStrVA = cstringVA + UInt64(dllStrOff - Int(cstringFileOff))
 
         // Populate __objc_classname
         writeCString(&bin, at: Int(objcClassFileOff), "GameMovementActor")
+
+        // Populate synthetic Il2CppCodeGenModule + methodPointers in __TEXT/__const area (0x2500) when unencrypted
+        let codeGenOff = 0x2500
+        let methodArrayOff = 0x2540
+        let methodArrayVA = baseVA + UInt64(methodArrayOff)
+        if !encryptText {
+            // Il2CppCodeGenModule { moduleName = dllStrVA, methodPointerCount = 3, methodPointers = methodArrayVA }
+            writeUInt64LE(&bin, at: codeGenOff + 0, dllStrVA)
+            writeUInt64LE(&bin, at: codeGenOff + 8, 3)
+            writeUInt64LE(&bin, at: codeGenOff + 16, methodArrayVA)
+
+            let f1VA = textSectVA
+            let f2VA = textSectVA + 0x20
+            writeUInt64LE(&bin, at: methodArrayOff + 0, f1VA)        // get_Health
+            writeUInt64LE(&bin, at: methodArrayOff + 8, f1VA + 0x10) // set_Position
+            writeUInt64LE(&bin, at: methodArrayOff + 16, f2VA)       // UpdateRotation
+        }
 
         // Populate __text with two valid ARM64 functions referencing str1 and str2
         let func1Off = Int(textSectFileOff)
@@ -159,8 +180,8 @@ enum TestIPABuilder {
         cmdPos += 72
         cmdCount += 1
 
-        // 2. LC_SEGMENT_64 __TEXT with 3 sections (72 + 3*80 = 312 bytes)
-        let textSegCmdSize: UInt32 = 72 + 3 * 80
+        // 2. LC_SEGMENT_64 __TEXT with 4 sections (72 + 4*80 = 392 bytes)
+        let textSegCmdSize: UInt32 = 72 + 4 * 80
         writeUInt32LE(&bin, at: cmdPos, MachOConstants.lcSegment64)
         writeUInt32LE(&bin, at: cmdPos + 4, textSegCmdSize)
         writeFixedString(&bin, at: cmdPos + 8, "__TEXT", length: 16)
@@ -170,7 +191,7 @@ enum TestIPABuilder {
         writeUInt64LE(&bin, at: cmdPos + 48, 0x4000)
         writeUInt32LE(&bin, at: cmdPos + 56, 5) // r-x
         writeUInt32LE(&bin, at: cmdPos + 60, 5) // r-x
-        writeUInt32LE(&bin, at: cmdPos + 64, 3) // 3 sections
+        writeUInt32LE(&bin, at: cmdPos + 64, 4) // 4 sections
 
         let secBase = cmdPos + 72
         // Section 1: __text
@@ -179,6 +200,8 @@ enum TestIPABuilder {
         writeSection64(&bin, at: secBase + 80, sect: "__cstring", seg: "__TEXT", addr: cstringVA, size: 0x200, offset: cstringFileOff, flags: 0x02)
         // Section 3: __objc_classname
         writeSection64(&bin, at: secBase + 160, sect: "__objc_classname", seg: "__TEXT", addr: objcClassVA, size: 0x100, offset: objcClassFileOff, flags: 0x02)
+        // Section 4: __const (holds Il2CppCodeGenModule & methodPointers table)
+        writeSection64(&bin, at: secBase + 240, sect: "__const", seg: "__TEXT", addr: baseVA + 0x2500, size: 0x100, offset: 0x2500, flags: 0x00)
         cmdPos += Int(textSegCmdSize)
         cmdCount += 1
 
@@ -262,6 +285,7 @@ enum TestIPABuilder {
 
         let emptyNS = addIdent("")
         let gameNS = addIdent("Heo.Gameplay")
+        let dllIdent = addIdent("Assembly-CSharp.dll")
         let playerCls = addIdent("PlayerController")
         let camCls = addIdent("CameraFollow")
         let payCls = addIdent("StoreKitBillingWallet")
@@ -271,7 +295,7 @@ enum TestIPABuilder {
         let mUpdateRot = addIdent("UpdateRotation")
         let mPay = addIdent("ProcessPayment")
 
-        let fMaxHealth = addIdent("m_MaxHealth")
+        let fMaxHealth = addIdent("m_Health")
         let fMoveSpeed = addIdent("m_MoveSpeed")
 
         // 3 TypeDefinitions (stride 88 bytes each in v29)
@@ -321,6 +345,14 @@ enum TestIPABuilder {
         writeUInt32LE(&literalTable, at: 0, UInt32(literalBytes.count))
         writeInt32LE(&literalTable, at: 4, 0)
 
+        // 1 ImageDefinition (40 bytes: Assembly-CSharp.dll covering typeStart=0, typeCount=2 -> 3 methods)
+        var imageDefs = Data(repeating: 0, count: 40)
+        writeInt32LE(&imageDefs, at: 0, dllIdent)
+        writeInt32LE(&imageDefs, at: 4, 0)
+        writeInt32LE(&imageDefs, at: 8, 0)
+        writeUInt32LE(&imageDefs, at: 12, 2)
+        writeUInt32LE(&imageDefs, at: 28, 0x2000_0001)
+
         let headerSize = 256
         var file = Data(repeating: 0, count: headerSize)
 
@@ -330,6 +362,7 @@ enum TestIPABuilder {
         let methOff = file.count; file.append(methodDefs)
         let fldOff = file.count; file.append(fieldDefs)
         let typOff = file.count; file.append(typeDefs)
+        let imgOff = file.count; file.append(imageDefs)
 
         writeUInt32LE(&file, at: 0x00, IL2CPPMetadataParser.standardMagic)
         writeInt32LE(&file, at: 0x04, 29)
@@ -345,6 +378,8 @@ enum TestIPABuilder {
         writeInt32LE(&file, at: 0x64, Int32(fieldDefs.count))
         writeInt32LE(&file, at: 0xA0, Int32(typOff))
         writeInt32LE(&file, at: 0xA4, Int32(typeDefs.count))
+        writeInt32LE(&file, at: 0xA8, Int32(imgOff))
+        writeInt32LE(&file, at: 0xAC, Int32(imageDefs.count))
 
         return file
     }
