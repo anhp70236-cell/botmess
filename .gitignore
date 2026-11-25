@@ -1,14 +1,53 @@
-# Xcode & Swift build artifacts
-build/
-DerivedData/
-*.xcodeproj/project.xcworkspace/
-*.xcodeproj/xcuserdata/
-xcuserdata/
-*.xcresult
-*.ipa
-*.dSYM.zip
-*.dSYM
+# Cấu hình bí mật & thông tin xác thực (TUYỆT ĐỐI KHÔNG COMMIT)
+config.php
+fk_config.php
+telegram_config.php
+.env
+.env.*
+*.key
+*.pem
+*secret*
+!config.example.php
+!fk_config.example.php
+!telegram_config.example.php
 
-# macOS & Windows OS files
+# Cơ sở dữ liệu & nhật ký (Logs / Databases)
+*.sql
+*.sql.gz
+*.sqlite
+*.sqlite3
+*.db
+*.log
+wget-log
+error_log
+
+# File sao lưu & file tạm (Backups / Anti-backup / Junk)
+*.bak
+*.bak*
+*.backup.*
+*.before_anti.php
+*.old
+*.orig
+*.swp
+*~
+_bak_*/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Dữ liệu bộ nhớ đệm & phiên hoạt động runtime
+cache/*
+!cache/.gitkeep
+ios_b/_data/*.json
+ios_b/_data/views.php
+ios_b/views_last.json
+peoeopoo/_data/
+
+# File rác hệ điều hành & mặc định máy chủ
+__MACOSX/
+._*
 .DS_Store
 Thumbs.db
+dashboard/
+xampp/

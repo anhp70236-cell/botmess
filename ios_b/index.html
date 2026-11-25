@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>@ios_b</title>
+<meta name="description" content="ob (@ios_b), maintainer of iosmods.xyz. IPA files and iOS tools in one place. Add me on Discord.">
+<meta name="theme-color" content="#0a0a0b">
+<!-- iosmods-profile v21 -->
+<style>
+:root{--bg:#0a0a0b;--panel:#111214;--panel2:#16171a;--line:#212328;--line2:#2d3036;--text:#ececee;--sub:#b5b9c0;--mute:#7d838d;--sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box;margin:0}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%;background:var(--bg)}
+body{background:radial-gradient(900px 420px at 50% -140px,rgba(130,140,172,.13),transparent 70%) no-repeat,var(--bg);color:var(--text);font:15px/1.65 var(--sans);-webkit-font-smoothing:antialiased;padding:max(14px,env(safe-area-inset-top)) 14px max(32px,env(safe-area-inset-bottom))}
+html.lock body{position:fixed;left:0;right:0;width:100%;overflow:hidden}
+a{color:inherit}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid #8b93a1;outline-offset:2px}
+.wrap{max-width:720px;margin:0 auto;display:grid;gap:14px}
+.wrap>*{animation:rise .6s cubic-bezier(.2,.8,.2,1) backwards}
+.wrap>:nth-child(2){animation-delay:.06s}
+.wrap>:nth-child(3){animation-delay:.12s}
+.wrap>:nth-child(4){animation-delay:.18s}
+.wrap>:nth-child(5){animation-delay:.24s}
+@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 18px 40px -22px rgba(0,0,0,.8)}
+.on{opacity:1!important}
+
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px;font:13px var(--mono);color:var(--mute)}
+.bar b{color:var(--text);font-weight:500}
+.views{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:5px 13px;color:var(--text);font-variant-numeric:tabular-nums}
+.views svg{color:var(--mute)}
+
+.banner{position:relative;height:150px;background:#0a0a0b;border-bottom:1px solid var(--line)}
+.banner img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .25s}
+.banner:after{content:"";position:absolute;left:0;right:0;bottom:0;height:55%;background:linear-gradient(transparent,rgba(17,18,20,.6));pointer-events:none}
+.head{position:relative;height:0}
+.av{position:absolute;left:22px;top:-50px;width:100px;height:100px;z-index:2}
+.ring{position:absolute;inset:0;border-radius:50%;border:4px solid var(--panel);overflow:hidden;background:var(--bg);display:grid;place-items:center;font-size:38px;font-weight:700;color:var(--mute);box-shadow:0 10px 26px rgba(0,0,0,.55)}
+.ring img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .25s}
+.deco{position:absolute;inset:-4.5%;width:109%;height:109%;opacity:0;pointer-events:none;transition:opacity .25s}
+.st{position:absolute;right:0;bottom:2px;width:26px;height:26px;border-radius:50%;border:4px solid var(--panel);background:#80848e}
+.info{padding:62px 22px 22px}
+h1{font-size:26px;line-height:1.2;font-weight:700;letter-spacing:-.015em}
+.handle{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--mute);font:13px var(--mono);margin-top:4px}
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:0 7px;border-radius:5px;background:var(--bg);border:1px solid var(--line2);color:var(--text);line-height:20px}
+.tag img{width:13px;height:13px}
+.pres{margin-top:18px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#0c0d0f,var(--bg));padding:11px 14px;font-size:14px}
+.row{display:flex;align-items:center;gap:9px}
+.dot{width:9px;height:9px;border-radius:50%;background:#80848e;flex:none}
+.line{color:var(--mute);margin-top:8px;padding-top:8px;border-top:1px solid var(--line);display:flex;align-items:center;gap:6px;font-size:13.5px}
+.line img{width:16px;height:16px}
+
+.acts{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;font-weight:600;font-size:14px;line-height:1;padding:14px 18px;border-radius:12px;border:1px solid var(--line2);background:var(--panel2);text-decoration:none;cursor:pointer;transition:background .15s,border-color .15s,transform .15s,box-shadow .15s;-webkit-tap-highlight-color:transparent}
+.btn svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.btn:hover{background:#1d1f23;border-color:#3a3e46;transform:translateY(-1px)}
+.btn:active{transform:scale(.98)}
+.btn.pri{background:var(--text);border-color:var(--text);color:#0a0a0b}
+.btn.pri:hover{background:#fff;box-shadow:0 10px 26px -10px rgba(255,255,255,.35)}
+.btn.grow{flex:1 1 200px}
+.btn:disabled,.x:disabled{opacity:.5;pointer-events:none;box-shadow:none}
+
+.tabs{display:flex;border-bottom:1px solid var(--line);background:rgba(255,255,255,.012)}
+.tab{font:13px var(--mono);color:var(--mute);background:none;border:0;padding:13px 20px;cursor:pointer;box-shadow:inset 0 -2px 0 transparent;transition:color .15s,box-shadow .2s}
+.tab:hover{color:var(--text)}
+.tab.sel{color:var(--text);box-shadow:inset 0 -2px 0 var(--text)}
+.pane{padding:24px 22px}
+
+.md h1{font-size:22px;letter-spacing:-.01em;margin-bottom:6px}
+.md h2{font:600 12px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--mute);margin:30px 0 12px;display:flex;align-items:center;gap:12px}
+.md h2:after{content:"";flex:1;height:1px;background:var(--line)}
+.md p{color:var(--sub);margin-bottom:12px}
+.md .lead{color:var(--mute);margin-bottom:16px}
+.md ul{list-style:none;padding:0}
+.md li{position:relative;padding-left:20px;color:var(--sub);margin:5px 0}
+.md li:before{content:"\203A";position:absolute;left:4px;color:var(--mute)}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 16px}
+.chips span{font:12px var(--mono);color:var(--sub);border:1px solid var(--line2);border-radius:6px;padding:1px 10px;background:rgba(255,255,255,.015)}
+.code{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font:13px/1.9 var(--mono);white-space:pre;color:var(--sub)}
+.code .pr{color:var(--mute)}.code .cm{color:#5c626c}
+.kv{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.kv div{display:flex;gap:14px;padding:11px 14px;border-top:1px solid var(--line);align-items:center;flex-wrap:wrap}
+.kv div:first-child{border-top:0}
+.kv span{width:84px;flex:none;color:var(--mute);font:13px var(--mono)}
+.kv a{color:var(--text);text-decoration:none;font-size:14px;word-break:break-all;border-bottom:1px solid var(--line2)}
+.kv a:hover{border-color:var(--sub)}
+
+#json{margin:0;padding:18px 0;overflow-x:auto;font:13px/1.85 var(--mono);counter-reset:n}
+.ln{display:block;white-space:pre;padding-right:16px}
+.ln:before{counter-increment:n;content:counter(n);display:inline-block;width:38px;margin-right:14px;text-align:right;color:#4a505a}
+.k{color:var(--text)}.s{color:var(--sub)}.n{color:var(--text)}.z{color:var(--mute)}.p{color:var(--mute)}
+
+.foot{text-align:center;color:var(--mute);font-size:12.5px;line-height:1.9}
+.foot a{color:var(--mute)}
+
+/* notice */
+#notice{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:16px;overscroll-behavior:contain;touch-action:none}
+#notice::before{content:"";position:absolute;inset:0;background:rgba(5,6,8,.64);-webkit-backdrop-filter:blur(12px) saturate(130%);backdrop-filter:blur(12px) saturate(130%);opacity:0;transition:opacity .4s}
+#notice.show::before{opacity:1}
+.nwrap{position:relative;width:100%;max-width:380px;margin-top:44px;opacity:0;transform:translateY(20px) scale(.97);transition:transform .5s cubic-bezier(.2,.9,.3,1.08),opacity .35s}
+#notice.show .nwrap{opacity:1;transform:none}
+.cat{position:absolute;right:26px;bottom:100%;margin-bottom:-14px;width:72px;height:72px;object-fit:contain;background:transparent;z-index:0;pointer-events:none}
+.dlg{position:relative;z-index:1;border-radius:22px;padding:22px 22px 16px;background:rgba(20,21,24,.84);-webkit-backdrop-filter:blur(26px) saturate(160%);backdrop-filter:blur(26px) saturate(160%);border:1px solid rgba(255,255,255,.1);box-shadow:0 32px 70px rgba(0,0,0,.62),inset 0 1px 0 rgba(255,255,255,.09);max-height:calc(100dvh - 130px);overflow:auto;touch-action:auto}
+.who{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding-right:44px}
+.nav{position:relative;width:46px;height:46px;flex:none;border-radius:50%;overflow:hidden;background:var(--bg);display:grid;place-items:center;font-weight:700;font-size:18px;color:var(--mute);border:1px solid rgba(255,255,255,.14)}
+.nav img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .25s}
+.wt{min-width:0;line-height:1.3}
+.wt b{display:block;font-size:15px;font-weight:600}
+.wt span{display:flex;align-items:center;gap:6px;color:var(--mute);font-size:12.5px;margin-top:2px}
+.wt i{width:8px;height:8px;border-radius:50%;background:#80848e;flex:none}
+.x{position:absolute;top:14px;right:14px;width:32px;height:32px;border-radius:50%;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);display:grid;place-items:center;cursor:pointer;transition:background .15s}
+.x:hover{background:rgba(255,255,255,.1)}
+.x svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.dlg h2{font-size:21px;line-height:1.25;letter-spacing:-.012em;margin-bottom:8px}
+.dlg p{color:rgba(236,236,238,.72);font-size:14.5px;line-height:1.6}
+.dlg p+p{margin-top:8px}
+.dlg .btn{width:100%;margin-top:18px;box-shadow:0 10px 28px -10px rgba(255,255,255,.3)}
+
+#toast{position:fixed;left:50%;bottom:max(90px,env(safe-area-inset-bottom));transform:translate(-50%,12px);background:var(--panel2);border:1px solid var(--line2);color:var(--text);font-size:13px;padding:10px 16px;border-radius:10px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:60}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+@media(max-width:440px){.banner{height:124px}.av{width:88px;height:88px;top:-44px}.info{padding:54px 18px 18px}h1{font-size:22px}.pane{padding:20px 16px}.kv span{width:100%}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+
+/* v14 notice: the page and the notice fade in together, no glow */
+#notice *{animation:none!important}
+#notice .btn,#notice .btn:hover,#notice .btn:focus,#notice .btn:focus-visible,#notice .btn:active,#ok,#ok:hover,#ok:focus,#ok:focus-visible,#ok:active{box-shadow:none!important;outline:none!important;border-color:transparent!important;filter:none!important;text-shadow:none!important;-webkit-tap-highlight-color:transparent}
+#ok::before,#ok::after{content:none!important;display:none!important}
+
+/* v18 veil */
+#ios-veil{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;background:#08080b;opacity:1;transition:opacity .5s ease;animation:iosVeilFailsafe 0s linear 3.5s forwards}
+#ios-veil.off{opacity:0;pointer-events:none;visibility:hidden;transition:opacity .5s ease,visibility 0s linear .5s}
+@keyframes iosVeilFailsafe{to{opacity:0;visibility:hidden;pointer-events:none}}
+/* end v18 */
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600&display=swap" rel="stylesheet"><style>#name{display:inline-block!important;font-family:"Fredoka",ui-rounded,sans-serif!important;font-size:26px!important;font-weight:600!important;letter-spacing:0!important;line-height:1.15!important;background:linear-gradient(90deg,#2AAEA6,#FFC490)!important;-webkit-background-clip:text!important;background-clip:text!important;-webkit-text-fill-color:transparent!important;color:transparent!important}</style><style>.wt b{display:block;width:fit-content;font-family:"Fredoka",ui-rounded,sans-serif!important;font-weight:600!important;font-size:17px!important;background:linear-gradient(90deg,#2AAEA6,#FFC490);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}</style><style>.nav{width:52px!important;height:52px!important;overflow:visible!important;border:0!important;background:transparent!important}.nav #nph{position:absolute;inset:0;display:grid;place-items:center;border-radius:50%;background:var(--bg);border:1px solid rgba(255,255,255,.14)}.nav #navatar{border-radius:50%}.nav img.ndeco{inset:-4.5%;width:109%;height:109%;object-fit:contain;pointer-events:none;border-radius:0}.nst{position:absolute;right:-2px;bottom:-2px;width:15px;height:15px;border-radius:50%;border:3px solid var(--panel,#121317);background:#80848e}</style><style>a.btn[href="https://iosmods.xyz/"],a.btn[href="https://t.me/crackpythonva"]{flex:0 0 auto!important;padding:13px 24px!important}:has(> a.btn[href="https://t.me/crackpythonva"]){display:flex;flex-wrap:wrap;gap:10px;justify-content:center}body{padding-bottom:max(10px,env(safe-area-inset-bottom))!important}</style><style>.acts a.btn.pri[href*="discord.com/users"]{background:#5865F2;border-color:#5865F2;color:#fff}.acts a.btn.pri[href*="discord.com/users"]:hover{background:#4752c4;border-color:#4752c4;box-shadow:0 10px 26px -10px rgba(88,101,242,.6)}.fav{width:24px;height:24px;border-radius:50%;object-fit:cover;flex:none}</style><style>.acts a.btn.pri[href*="discord.com/users"]{flex:0 0 auto!important;padding:13px 24px!important}</style><style>.acts a.btn.pri[href*="discord.com/users"]{padding:10px 18px!important;font-size:13.5px!important;gap:8px!important;border-radius:11px!important}.fav{width:20px;height:20px;border-radius:50%;object-fit:cover;flex:none}</style></head>
+<body><div id="ios-veil" aria-hidden="true"></div>
+<main class="wrap" id="app">
+
+  <div class="bar">
+    <span>iosmods.xyz / <b>ios_b</b></span>
+    <span class="views" title="Profile views">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+      <b id="views">&mdash;</b>
+    </span>
+  </div>
+
+  <section class="box">
+    <div class="banner" id="banner"><img id="bimg" alt=""></div>
+    <div class="head">
+      <div class="av">
+        <div class="ring"><span id="ph">o</span><img id="avatar" alt="Avatar"></div>
+        <img id="deco" class="deco" alt="">
+        <i class="st" id="dot"></i>
+      </div>
+    </div>
+    <div class="info">
+      <h1 id="name">ob</h1>
+      <div class="handle"><span id="user">@ios_b</span><span class="tag" id="gtag" hidden></span></div>
+      <div class="pres">
+        <div class="row"><i class="dot" id="dot2"></i><span id="stext">loading...</span></div>
+        <div class="line" id="custom" hidden></div>
+        <div class="line" id="activity" hidden></div>
+      </div>
+      <div class="acts">
+        <a class="btn pri grow" href="https://discord.com/users/1299694183099142160" target="_blank" rel="noopener"><img class="fav" src="fav.jpg?v=1" alt="">Add friend</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="box">
+    <div class="tabs">
+      <button class="tab sel" data-t="readme" type="button">README.md</button>
+      <button class="tab" data-t="json" type="button">profile.json</button>
+    </div>
+
+    <article id="readme" class="pane md">
+      <h1>iosmods</h1>
+      <p class="lead">IPA files and iOS tools in one place.</p>
+      <div class="chips"><span>ipa</span><span>ios</span><span>swift</span><span>c++</span><span>python</span><span>lua</span><span>unity</span><span>il2cpp</span><span>dylib</span><span>mod-menu</span></div>
+      <p>Hi, I'm ob. I maintain iosmods, a website that provides iOS apps, modded IPA files, games and useful tools. Every tool is tested before release and updated when the services it depends on change.</p>
+
+      <h2>Features</h2>
+      <ul>
+        <li>IPA files with premium features unlocked</li>
+        <li>iOS tools, games and utilities for iPhone and iPad</li>
+        <li>Free keys for Free tools, VIP keys for VIP tools</li>
+        <li>Direct support on Telegram from the people who build the tools</li>
+      </ul>
+
+      <h2>Quick start</h2>
+<div class="code"><span class="pr">$</span> open https://iosmods.xyz
+<span class="pr">$</span> login              <span class="cm"># create an account or log in</span>
+<span class="pr">$</span> activate &lt;key&gt;     <span class="cm"># Free key on the site, VIP key via Telegram</span>
+<span class="pr">$</span> run &lt;tool&gt;        <span class="cm"># open any tool from the menu</span></div>
+
+      <h2>Contact</h2>
+      <div class="kv">
+        <div><span>discord</span><a href="https://discord.com/users/1299694183099142160" target="_blank" rel="noopener">@ios_b (add friend)</a></div>
+        <div><span>telegram</span><a href="https://t.me/crackpythonva" target="_blank" rel="noopener">t.me/crackpythonva</a></div>
+        <div><span>website</span><a href="https://iosmods.xyz/">iosmods.xyz</a></div>
+      </div>
+    </article>
+
+    <pre id="json" class="pane" hidden></pre>
+  </section>
+
+  <div class="acts">
+    <a class="btn pri grow" href="https://iosmods.xyz/">Visit iosmods.xyz</a>
+    <a class="btn grow" href="https://t.me/crackpythonva" target="_blank" rel="noopener">Telegram group</a>
+  </div>
+
+  <div class="foot">Tools are provided for testing and entertainment purposes only.<br>&copy; iosmods &middot; <a href="https://iosmods.xyz/docs.php?doc=terms">Terms</a> &middot; <a href="https://iosmods.xyz/docs.php?doc=privacy">Privacy</a></div>
+</main>
+
+<div id="notice" hidden>
+  <div class="nwrap">
+    <img class="cat" src="/ios_b/cat.png" alt="" onerror="this.style.display='none'">
+    <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="nt">
+      <button class="x" id="xbtn" type="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <div class="who">
+        <div class="nav"><span id="nph">o</span><img id="navatar" alt=""><img id="ndeco" class="ndeco" alt=""><i class="nst" id="nst"></i></div>
+        <div class="wt"><b id="nname">ob</b><span><i id="ndot"></i><em id="ntxt" style="font-style:normal">loading...</em></span></div>
+      </div>
+      <h2 id="nt">Hey, you found my page</h2>
+      <p>This is my Discord card. It shows my live status, and right under it there's a short intro to iosmods.xyz, where I keep IPA files and iOS tools.</p>
+      <p>Want to talk? Send me a friend request on Discord.</p>
+      <button class="btn pri" id="ok" type="button">Got it</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<audio id="bgm" loop preload="auto" playsinline controlslist="nodownload noplaybackrate" disableremoteplayback src="bgm_track.m4a?v=1794770157">
+  
+  
+</audio>
+
+<script>
+const ID="1299694183099142160";
+const $=id=>document.getElementById(id);
+const KEY="ob_profile_v6";
+const LABEL={online:"Online",idle:"Idle",dnd:"Do not disturb",offline:"Offline"};
+const COLOR={online:"#23a55a",idle:"#f0b232",dnd:"#f23f43",offline:"#80848e"};
+const VERB={0:"Playing",1:"Streaming",2:"Listening to",3:"Watching",5:"Competing in"};
+let P=null,VIEWS=null;
+/* v20 views: each device is counted once, then remembered */
+const VKEY="ob_viewed_v1",VLAST="ob_views_last_v1";
+function viewsFetch(){
+  let seen=true,last=null;
+  try{seen=!!localStorage.getItem(VKEY);last=Number(localStorage.getItem(VLAST))||null}catch(e){}
+  const done=n=>{try{localStorage.setItem(VLAST,String(n))}catch(e){}return {json:()=>Promise.resolve({views:n})}};
+  if(!seen){
+    return fetch("/ios_b/counter.php",{method:"POST",cache:"no-store"})
+      .then(r=>r.json())
+      .then(j=>{const n=Number(j.views);if(!(n>0))throw 0;try{localStorage.setItem(VKEY,"1")}catch(e){}return done(n)});
+  }
+  return fetch("/ios_b/counter.php?peek=1",{cache:"no-store"})
+    .then(r=>r.json())
+    .then(j=>{const n=Number(j&&j.views);if(n>0)return done(n);if(last)return done(last);throw 0})
+    .catch(()=>{if(last)return done(last);throw 0});
+}
+try{localStorage.removeItem("ob_notice_next_v1")}catch(e){}
+
+function el(t,props){const e=document.createElement(t);Object.assign(e,props||{});return e}
+const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const devs=p=>(p&&p.devices&&p.devices.length)?["Computer"]:[];
+function setImg(img,url){
+  if(!url){img.removeAttribute("src");img.classList.remove("on");return}
+  if(img.getAttribute("src")!==url){
+    img.classList.remove("on");
+    img.onload=()=>img.classList.add("on");
+    img.onerror=()=>{img.classList.remove("on");if(String(url).slice(0,5)!=="data:"&&(img._rt=(img._rt||0)+1)<=3){setTimeout(()=>{img.addEventListener("load",()=>img.classList.add("on"),{once:true});img.src=url+(String(url).indexOf("?")<0?"?":"&")+"r="+Date.now()},900*img._rt)}};/*v20 avatar*/
+    img.src=url;
+  } else if(img.complete&&img.naturalWidth){img.classList.add("on")}
+}
+
+/* ---------- profile ---------- */
+function val(v){
+  if(v===null||v===undefined)return '<span class="z">null</span>';
+  if(typeof v==="number")return '<span class="n">'+v+'</span>';
+  if(Array.isArray(v))return '<span class="p">[</span>'+v.map(x=>'<span class="s">"'+esc(x)+'"</span>').join('<span class="p">, </span>')+'<span class="p">]</span>';
+  return '<span class="s">"'+esc(v)+'"</span>';
+}
+function renderJson(){
+  if(!P)return;
+  const rows=[
+    ["name",P.name],["username",P.username],["id",ID],
+    ["guild_tag",P.tag&&P.tag.text?P.tag.text:null],
+    ["status",P.status||"offline"],
+    ["platform",devs(P).map(d=>d.toLowerCase())],
+    ["project","iosmods.xyz"],["role","maintainer"],
+    ["add_friend","https://discord.com/users/"+ID],
+    ["views",VIEWS]
+  ];
+  let h='<span class="ln"><span class="p">{</span></span>';
+  rows.forEach((r,i)=>{
+    h+='<span class="ln">  <span class="k">"'+r[0]+'"</span><span class="p">: </span>'+val(r[1])+(i<rows.length-1?'<span class="p">,</span>':'')+'</span>';
+  });
+  h+='<span class="ln"><span class="p">}</span></span>';
+  $("json").innerHTML=h;
+}
+function render(p){
+  P=p;
+  const nm=p.name||p.username||"ob";
+  $("name").textContent=nm;
+  $("ph").textContent=nm.charAt(0).toLowerCase();
+  $("user").textContent=""+(p.username||"ios_b");
+  setImg($("avatar"),p.avatar);
+  setImg($("deco"),p.deco);
+  $("banner").style.backgroundColor=p.banner_color||"#0a0a0b";
+  setImg($("bimg"),p.banner);
+
+  const g=$("gtag");
+  if(p.tag&&p.tag.text){
+    g.textContent="";
+    if(p.tag.badge)g.append(el("img",{src:p.tag.badge,alt:""}));
+    g.append(p.tag.text);g.hidden=false;
+  } else g.hidden=true;
+
+  const s=p.status||"offline";
+  const d=devs(p);
+  const st=(LABEL[s]||"Offline")+(d.length?" \u00b7 "+d.join(", "):"");
+  $("dot").style.background=COLOR[s]||COLOR.offline;
+  $("dot2").style.background=COLOR[s]||COLOR.offline;
+  $("stext").textContent=st;
+
+  /* notice card mirrors the live profile */
+  $("nname").textContent=nm;
+  $("nph").textContent=nm.charAt(0).toLowerCase();
+  setImg($("navatar"),p.avatar);setImg($("ndeco"),p.deco);$("nst").style.background=COLOR[s]||COLOR.offline;
+  $("ndot").style.background=COLOR[s]||COLOR.offline;
+  $("ntxt").textContent=st;
+
+  const c=$("custom");c.textContent="";
+  if(p.custom&&(p.custom.text||p.custom.emoji)){
+    if(p.custom.emoji){
+      if(p.custom.emoji.url)c.append(el("img",{src:p.custom.emoji.url,alt:""}));
+      else if(p.custom.emoji.name)c.append(p.custom.emoji.name+" ");
+    }
+    c.append(p.custom.text||"");c.hidden=false;
+  } else c.hidden=true;
+
+  const a=$("activity");
+  if(p.activity&&p.activity.name){
+    a.textContent=(VERB[p.activity.type]||"")+" "+p.activity.name+(p.activity.details?" \u00b7 "+p.activity.details:"");
+    a.hidden=false;
+  } else a.hidden=true;
+  renderJson();
+}
+
+document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("sel",x===b));
+  $("readme").hidden=b.dataset.t!=="readme";
+  $("json").hidden=b.dataset.t!=="json";
+}));
+
+let tt;
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");clearTimeout(tt);tt=setTimeout(()=>t.classList.remove("show"),1800)}
+($("copy")||{addEventListener(){}}).addEventListener("click",async()=>{
+  const txt="ios_b";
+  try{await navigator.clipboard.writeText(txt)}
+  catch(e){const i=el("textarea",{value:txt});i.style.cssText="position:fixed;opacity:0";document.body.append(i);i.select();try{document.execCommand("copy")}catch(_){}i.remove()}
+  toast("Copied "+txt);
+});
+
+try{const c=JSON.parse(localStorage.getItem(KEY));if(c)render(c)}catch(e){}
+async function load(){
+  try{
+    const r=await fetch("/ios_b/api.php",{cache:"no-store"});
+    const p=await r.json();
+    if(p&&p.ok){render(p);try{localStorage.setItem(KEY,JSON.stringify(p))}catch(e){}}
+    else if(!P)$("stext").textContent="status unavailable";
+  }catch(e){if(!P)$("stext").textContent="status unavailable"}
+}
+/* v21 live status: refresh fast while visible, instantly when coming back */
+let _busy=0,_last=0;
+async function liveLoad(force){
+  const now=Date.now();
+  if(_busy&&now-_busy<10000)return;
+  if(!force&&now-_last<1500)return;
+  _busy=now;
+  try{await load()}catch(e){}
+  _busy=0;_last=Date.now();
+}
+liveLoad(true);
+setInterval(()=>{if(!document.hidden)liveLoad(true)},8000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)liveLoad(true)});
+window.addEventListener("focus",()=>liveLoad(false));
+window.addEventListener("online",()=>liveLoad(true));
+window.addEventListener("pageshow",()=>liveLoad(false));
+viewsFetch()
+  .then(r=>r.json()).then(j=>{VIEWS=Number(j.views);$("views").textContent=VIEWS.toLocaleString("en-US");renderJson()})
+  .catch(()=>{VIEWS=3490;$("views").textContent="3,490";renderJson()});
+
+/* ---------- music: local audio only, starts only from the Got it / close buttons, shows only iosmods.xyz/ios_b ---------- */
+const bgm=$("bgm");
+bgm.autoplay=false;bgm.loop=true;bgm.volume=.7;bgm.preload="auto";
+let wantPlay=true,started=false;
+function tag(){
+  try{
+    if("mediaSession" in navigator&&window.MediaMetadata)
+      navigator.mediaSession.metadata=new MediaMetadata({title:"iosmods.xyz/ios_b",artist:"",album:"",artwork:[]});
+  }catch(e){}
+}
+tag();
+bgm.addEventListener("play",tag);
+bgm.addEventListener("playing",()=>{started=true;tag()});
+function playLocal(){
+  if(!bgm.paused)return;
+  try{const r=bgm.play();if(r&&r.catch)r.catch(()=>{})}catch(e){}
+}
+function kick(){if(wantPlay&&!started)playLocal()}
+function startMusic(){wantPlay=true;kick()}
+function enableUI(){}
+function useLocal(){kick()}
+
+/* music starts only when the notice is dismissed with Got it (or its close button) */
+["ok","xbtn"].forEach(id=>{
+  const b=$(id);
+  if(b)["touchend","click"].forEach(t=>b.addEventListener(t,startMusic,{passive:true}));
+});
+
+/* ---------- notice: shows on every load, locked, blurred background ---------- */
+let isOpen=false,lastFocus=null,savedY=0;
+
+function openNotice(){
+  if(isOpen)return;isOpen=true;
+  lastFocus=document.activeElement;
+  savedY=window.scrollY||0;
+  document.body.style.top=(-savedY)+"px";
+  document.documentElement.classList.add("lock");
+  const app=$("app");app.inert=true;app.setAttribute("aria-hidden","true");
+  const n=$("notice");n.hidden=false;
+  requestAnimationFrame(()=>{n.classList.add("show");$("ok").focus({preventScroll:true})});
+}
+function closeNotice(){
+  if(!isOpen)return;
+  startMusic(); /* runs inside the tap, so the browser allows audio */
+  isOpen=false;
+  const n=$("notice");n.classList.remove("show");
+  setTimeout(()=>{if(!isOpen)n.hidden=true},400);
+  document.documentElement.classList.remove("lock");
+  document.body.style.top="";
+  window.scrollTo(0,savedY);
+  const app=$("app");app.inert=false;app.removeAttribute("aria-hidden");
+  try{lastFocus&&lastFocus.focus&&lastFocus.focus({preventScroll:true})}catch(e){}
+}
+$("ok").addEventListener("click",closeNotice);
+$("xbtn").addEventListener("click",closeNotice);
+
+/* nothing behind the notice can be scrolled, clicked or dismissed */
+const stop=e=>{if(isOpen&&!e.target.closest(".dlg"))e.preventDefault()};
+["wheel","touchmove"].forEach(t=>document.addEventListener(t,stop,{passive:false}));
+document.addEventListener("keydown",e=>{
+  if(!isOpen)return;
+  if(e.key==="Escape"){e.preventDefault();return}
+  if(e.key==="Tab"){
+    e.preventDefault();
+    const f=[$("xbtn"),$("ok")],i=f.indexOf(document.activeElement);
+    f[e.shiftKey?(i<=0?f.length-1:i-1):(i===f.length-1?0:i+1)].focus();return;
+  }
+  if(["PageUp","PageDown","Home","End","ArrowUp","ArrowDown"," ","Spacebar"].includes(e.key)&&document.activeElement.tagName!=="BUTTON")e.preventDefault();
+});
+window.addEventListener("pageshow",e=>{if(e.persisted)openNotice()});
+
+openNotice();
+</script>
+<script>/* v18 */
+(function(){
+  var T="@ios_b";
+  function keep(){}
+  keep();
+  try{var tt=document.querySelector("title");if(tt)new MutationObserver(keep).observe(tt,{childList:true,characterData:true,subtree:true})}catch(e){}
+
+  var v=document.getElementById("ios-veil");
+  if(!v)return;
+  var done=false,t0=Date.now();
+  function off(){
+    if(done)return;done=true;
+    v.classList.add("off");
+    setTimeout(function(){try{v.remove()}catch(e){}},900);
+  }
+  function shown(){
+    var n=document.getElementById("notice");
+    if(!n||n.hidden)return false;
+    var c=getComputedStyle(n);
+    return c.display!=="none"&&c.visibility!=="hidden"&&parseFloat(c.opacity)>0.02;
+  }
+  (function tick(){
+    if(done)return;
+    if(shown()){off();return}
+    if(Date.now()-t0>2500){off();return}
+    requestAnimationFrame(tick);
+  })();
+})();
+</script>
+<script>/* v19 */
+(function(){
+  var a=document.getElementById("bgm");
+  window.addEventListener("pagehide",function(){
+    try{if(a)a.pause()}catch(e){}
+  });
+  window.addEventListener("pageshow",function(e){
+    if(e.persisted){
+      try{if(a)a.pause()}catch(x){}
+      location.reload();
+    }
+  });
+})();
+</script>
+<script src="typing.js?v=2"></script></body>
+</html>

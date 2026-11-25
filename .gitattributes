@@ -1,5 +1,9 @@
 * text=auto eol=lf
 *.png binary
 *.jpg binary
-*.ipa binary
-*.dat binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.m4a binary
+*.wav binary
