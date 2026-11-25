@@ -460,29 +460,34 @@ function screen_home($note = '')
     $vault   = tg_emoji_vault_read();
     $emCnt   = count(isset($vault['picks']) && is_array($vault['picks']) ? $vault['picks'] : []);
 
-    $t = '🛡 <b>' . tg_e(tg_cfg('site_name', 'IOSMODS.XYZ')) . '</b> · <b>ADMIN CP</b>' . "\n";
+    $activeCases = function_exists('sh_list_active_cases') ? count(sh_list_active_cases(20)) : 0;
+
+    $t = '🛡 <b>' . tg_e(tg_cfg('site_name', 'IOSMODS.XYZ')) . '</b> · <b>TRUNG TÂM ĐIỀU HÀNH</b>' . "\n"
+        . '<i>' . ($maint ? '🔴 CHẾ ĐỘ BẢO TRÌ' : '🟢 HỆ THỐNG ĐANG MỞ') . ' · ' . (!empty($shCfg['enabled']) ? '🛡 KHIÊN BẢO VỆ TỐI CAO' : '⚠️ KHIÊN ĐANG TẮT') . '</i>' . "\n";
     if ($note !== '') {
-        $t .= $note . "\n";
+        $t .= '<blockquote>' . $note . '</blockquote>' . "\n";
     }
     $t .= '<blockquote>'
-        . '👥 Thành viên: <b>' . $users . '</b> · 🟢 Đang dùng Key: <b>' . ($aFree + $aVip) . '</b> <i>(F:' . $aFree . ' · V:' . $aVip . ')</i>' . "\n"
-        . '🔑 Kho Key: <b>FREE ' . $sFree . '</b> · <b>VIP ' . $sVip . '</b> · 📦 Sản phẩm: <b>' . $pTotal . '</b>'
+        . '👥 Thành viên: <b>' . $users . '</b> · 🟢 Đang dùng Key: <b>' . ($aFree + $aVip) . '</b> <i>(FREE ' . $aFree . ' · VIP ' . $aVip . ')</i>' . "\n"
+        . '🔑 Tồn kho Key: <b>FREE ' . $sFree . '</b> · <b>VIP ' . $sVip . '</b> · 📦 Sản phẩm: <b>' . $pTotal . '</b>'
         . '</blockquote>' . "\n"
         . '<blockquote>'
-        . '🧠 AI Chống DDoS: ' . (!empty($shCfg['enabled']) ? '🟢 <b>TỐI CAO</b>' : '🔴 <b>TẮT</b>') . ' · ☹️ Tạm khoá: <b>' . $bans['temp'] . '</b> · 🚫 Cấm: <b>' . $bans['perm'] . '</b>' . "\n"
-        . '🛠 Bảo trì: ' . ($maint ? '🔴 <b>ĐANG BẬT</b>' : '🟢 <b>Đang mở</b>') . ' · ⏱ Tự xoá lệnh: <b>' . ($adSec > 0 ? $adSec . 's' : 'Tắt') . '</b>'
-        . ($emCnt > 0 ? ' · 🎨 Emoji: <b>Đầy đủ</b>' : '')
-        . ($blocked > 0 ? ' · ⛔ User khoá: <b>' . $blocked . '</b>' : '')
+        . '🧠 AI Chống DDoS/Script: ' . (!empty($shCfg['enabled']) ? '🟢 <b>24/7</b>' : '🔴 <b>TẮT</b>')
+        . ' · ⏱ Đang tạm khoá: <b>' . $bans['temp'] . '</b> · 🚫 Cấm vĩnh viễn: <b>' . $bans['perm'] . '</b>' . "\n"
+        . '🔐 Mã IMX đang chờ xử lý: <b>' . $activeCases . '</b>'
+        . ' · 🧹 Tự xoá lệnh: <b>' . ($adSec > 0 ? $adSec . 's' : 'Tắt') . '</b>'
+        . ($emCnt > 0 ? ' · 🎨 Emoji: <b>Premium</b>' : '')
+        . ($blocked > 0 ? ' · ⛔ Khoá User: <b>' . $blocked . '</b>' : '')
         . '</blockquote>' . "\n"
-        . '<i>🕒 ' . tg_e(tg_now('H:i:s d/m/Y')) . '</i>';
+        . '<i>💡 Dán trực tiếp mã <code>IMX-...</code> hoặc địa chỉ IP vào khung chat để tra nguyên nhân &amp; gỡ khoá 1 chạm · ' . tg_e(tg_now('H:i:s d/m')) . '</i>';
 
     ui_send($t, kb([
-        [btn('🔄 Làm mới', 'home'), btn($maint ? '🟢 Tắt bảo trì ngay' : '🛠 Chế độ bảo trì', 'mt|menu')],
+        [btn('🔐 Tra mã xác minh IMX' . ($activeCases > 0 ? ' (' . $activeCases . ')' : ''), 'csx|menu'), btn($maint ? '🟢 Tắt bảo trì ngay' : '🛠 Chế độ bảo trì', 'mt|menu')],
         [btn('🔑 Kho Key & Tạo Key', 'ky'), btn('🔓 Mở khoá Get Key', 'uk|0')],
-        [btn('👥 Thành viên', cbd('us', '', 0)), btn('📦 Sản phẩm & Tool', 'pr|0')],
-        [btn('🛡 Chống DDoS & IP', 'bn|0'), btn('🧠 AI Giám sát VPN/Acc', 'aihub')],
+        [btn('🛡 Chống DDoS & Khoá IP', 'bn|0'), btn('🧠 AI Giám sát VPN/Acc', 'aihub')],
+        [btn('👥 Thành viên (' . $users . ')', cbd('us', '', 0)), btn('📦 Sản phẩm (' . $pTotal . ')', 'pr|0')],
         [btn('🎨 Emoji Premium', 'em|0'), btn('🔔 Thông báo & Tự xoá', 'al')],
-        [btn('⚙️ Cấu hình Web', 'cf|0'), btn('🗄 Database & SQL', 'db'), btn('🩺 Sức khoẻ', 'hc')],
+        [btn('⚙️ Cấu hình Web', 'cf|0'), btn('🗄 Database', 'db'), btn('🔄 Làm mới', 'home')],
     ]));
 }
 
@@ -1063,6 +1068,12 @@ function bot_quick_alert_action($act, $target, array $origMessage)
         $GLOBALS['CTX']['edit']         = false;
         $GLOBALS['CTX']['mid']          = 0;
         return screen_ip($target);
+    } elseif ($act === 'case') {
+        // Open full Case Verification Dossier in a separate panel while keeping the permanent alert intact!
+        $GLOBALS['CTX']['preserve_msg'] = false;
+        $GLOBALS['CTX']['edit']         = false;
+        $GLOBALS['CTX']['mid']          = 0;
+        return screen_case_lookup($target);
     }
 
     // Update the inline button label on the alert in-place (preserving the alert forever!)
@@ -1982,8 +1993,8 @@ function screen_bans($page = 0)
     $rows   = bq_all('SELECT id, ip, reason, active, hits' . $selExp . ' FROM ip_bans ORDER BY active DESC, id DESC LIMIT ' . $per . ' OFFSET ' . ($page * $per));
 
     $kbd = [
-        [btn('➕ Chặn IP thủ công', 'bi'), btn('🔍 Kiểm tra 1 IP', 'bs')],
-        [btn('🧠 Cài đặt Chống DDoS & Whitelist', 'aihub')],
+        [btn('🔐 Tra mã xác minh IMX', 'csx|menu'), btn('🔍 Kiểm tra 1 IP', 'bs')],
+        [btn('➕ Chặn IP thủ công', 'bi'), btn('🧠 Khiên AI & Whitelist', 'aihub')],
     ];
     foreach ($rows as $r) {
         $isAct  = (int) $r['active'] === 1;
@@ -2057,30 +2068,44 @@ function screen_ip($ip, $note = '')
     if ($ip === '') {
         return ui_error('Địa chỉ IP không hợp lệ', 'bn|0');
     }
-    $b     = ipg_find(bdb(), $ip);
-    $on    = $b && (int) $b['active'] === 1;
-    $users = bot_ip_users($ip);
+    $b         = ipg_find(bdb(), $ip);
+    $fastCache = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($ip) : null;
+    $on        = ($b && (int) $b['active'] === 1) || $fastCache !== null;
+    $users     = bot_ip_users($ip);
     list($canBan, $safeWhy) = ipg_can_ban($ip);
+    $intel     = function_exists('sh_inspect_ip_vpn') ? sh_inspect_ip_vpn($ip) : ['is_vpn' => false, 'isp' => '', 'country' => '', 'label' => ''];
 
-    $t = '🌐 <b>KIỂM TRA ĐỊA CHỈ IP</b> · <code>' . tg_e($ip) . "</code>\n";
+    $t = '🌐 <b>HỒ SƠ TRA CỨU ĐỊA CHỈ IP</b> · <code>' . tg_e($ip) . "</code>\n";
     if ($note !== '') {
-        $t .= $note . "\n";
+        $t .= '<blockquote>' . $note . "</blockquote>\n";
     }
     $t .= '<blockquote>';
-    $t .= '🛡 Trạng thái: ' . ($on ? '🚫 ĐANG BỊ KHOÁ' : (!$canBan ? '🟢 MIỄN TRỪ AN TOÀN (' . tg_e($safeWhy) . ')' : '🟢 Đang hoạt động bình thường')) . "\n";
-    if ($b) {
-        $t .= '📝 Lý do gần nhất: ' . tg_e($b['reason']) . "\n";
+    $t .= '🛡 Trạng thái: ' . ($on ? '🚫 <b>ĐANG BỊ KHOÁ BẢO MẬT</b>' : (!$canBan ? '🟢 <b>MIỄN TRỪ AN TOÀN</b> (' . tg_e($safeWhy) . ')' : '🟢 <b>Hoạt động bình thường</b>')) . "\n";
+    if (!empty($intel['isp']) || !empty($intel['country'])) {
+        $t .= '📡 Nhà mạng: <b>' . tg_e(trim($intel['isp'] . ($intel['country'] !== '' ? ' · ' . $intel['country'] : ''))) . '</b>'
+            . (!empty($intel['is_vpn']) ? ' · ⚠️ <b>' . tg_e($intel['label'] ?: 'VPN/Proxy') . '</b>' : '') . "\n";
     }
-    $t .= '👥 Thành viên trên IP: ' . ($users ? '<code>' . tg_e(implode(', ', $users)) . '</code>' : '<i>Chưa ghi nhận</i>');
+    if ($fastCache && !empty($fastCache['reason'])) {
+        $t .= '🔎 Nguyên nhân khoá: ' . tg_e($fastCache['reason']) . "\n";
+        if (!empty($fastCache['case_code'])) {
+            $t .= '🔐 Mã xác minh hiện tại: <code>' . tg_e($fastCache['case_code']) . "</code>\n";
+        }
+    } elseif ($b) {
+        $t .= '📝 Lịch sử gần nhất: ' . tg_e($b['reason']) . "\n";
+    }
+    $t .= '👥 Tài khoản liên kết: ' . ($users ? '<code>' . tg_e(implode(', ', $users)) . '</code>' : '<i>Chưa ghi nhận</i>');
     $t .= '</blockquote>';
 
     $kbd = [];
     if ($on) {
-        $kbd[] = [btn('🔓 Gỡ chặn ngay', 'bx|' . $ip, 'success')];
+        $kbd[] = [btn('🔓 Gỡ chặn sạch ngay', 'bx|' . $ip, 'success')];
+        if (!empty($fastCache['case_code'])) {
+            $kbd[] = [btn('🔐 Mở hồ sơ mã ' . $fastCache['case_code'], cbd('csx', 'view', $fastCache['case_code']))];
+        }
     } elseif ($canBan) {
-        $kbd[] = [btn('☹️ Tạm khoá 30p (Mặt buồn)', cbd('bt30', $ip)), btn('🚫 Chặn vĩnh viễn', 'bk|' . $ip)];
+        $kbd[] = [btn('⏱ Tạm khoá 30p', cbd('bt30', $ip)), btn('🚫 Chặn vĩnh viễn', 'bk|' . $ip)];
     }
-    $kbd[] = [btn('🔓 Mở khoá Get Key cho IP này', cbd('uk', 'run', $ip))];
+    $kbd[] = [btn('🔓 Mở khoá Get Key cho IP này', cbd('uk', 'run', $ip)), btn('🛡 Thêm vào Whitelist', cbd('csx', 'wl_ip', $ip))];
     $kbd[] = [btn('⬅ Quản lý IP', 'bn|0'), btn('🏠 Menu chính', 'home')];
     ui_send($t, kb($kbd));
 }
@@ -2589,38 +2614,273 @@ function bot_conv_input(array $conv, $text, array $m)
         case 'ip_info':
             return screen_ip($text);
 
+        case 'case_ask':
+            return screen_case_lookup($text);
+
         case 'block_reason':
             return bot_user_block((int) $d['id'], $text, true);
     }
     return screen_home();
 }
 
-function screen_case_lookup($rawCode)
+function screen_case_menu($note = '')
 {
-    if (!function_exists('sh_lookup_case_code')) {
+    $active = function_exists('sh_list_active_cases') ? sh_list_active_cases(6) : [];
+    $t      = '🔐 <b>TRUNG TÂM TRA CỨU MÃ XÁC MINH IMX</b>' . "\n";
+    if ($note !== '') {
+        $t .= '<blockquote>' . $note . "</blockquote>\n";
+    }
+    $t .= '<blockquote>'
+        . '📌 Bạn có thể <b>dán trực tiếp mã <code>IMX-...</code></b> (hoặc chuyển tiếp nguyên tin nhắn của khách có chứa mã <code>IMX-...</code>) vào khung chat bất kỳ lúc nào — Bot sẽ tự động tách mã, truy vết nguyên nhân gốc, thiết bị, nhà mạng và hiển thị đầy đủ nút xử lý.' . "\n"
+        . '🔒 <i>Bảo mật: Ngay khi gỡ chặn, mã xác minh của khách sẽ tự động huỷ vĩnh viễn.</i>'
+        . '</blockquote>';
+
+    $kbd = [
+        [btn('📋 Nhập / Dán mã IMX khách gửi', 'csx|ask')],
+    ];
+    if ($active) {
+        $t .= "\n⏳ <b>Các mã xác minh đang chờ xử lý (" . count($active) . "):</b>";
+        foreach ($active as $ac) {
+            $shortIp = isset($ac['ip']) ? $ac['ip'] : '?';
+            $btype   = function_exists('sh_ban_type_label') ? sh_ban_type_label(isset($ac['ban_type']) ? $ac['ban_type'] : '') : '';
+            $kbd[]   = [btn('🔐 ' . $ac['code'] . ' · ' . $shortIp, cbd('csx', 'view', $ac['code']))];
+        }
+    } else {
+        $t .= "\n<i>🟢 Hiện không có mã IMX nào đang bị khoá.</i>";
+    }
+    $kbd[] = [btn('🛡 Quản lý Khoá IP', 'bn|0'), btn('🏠 Menu chính', 'home')];
+    return ui_send($t, kb($kbd));
+}
+
+function screen_case_lookup($rawCode, $note = '')
+{
+    if (!function_exists('sh_enrich_case_dossier')) {
         return ui_error('Chưa nạp security_shield.php', 'home');
     }
-    $info = sh_lookup_case_code($rawCode);
+    $clean = function_exists('sh_extract_case_code') ? sh_extract_case_code($rawCode) : '';
+    $query = $clean !== '' ? $clean : trim((string) $rawCode);
+    $info  = sh_enrich_case_dossier(bdb(), $query);
+
     if (!$info || empty($info['active'])) {
-        return ui_send('🔒 <b>MÃ XÁC MINH KHÔNG TỒN TẠI HOẶC ĐÃ HẾT HIỆU LỰC</b>' . "\n"
-            . '<blockquote>Mã <code>' . tg_e(tg_clip($rawCode, 40)) . '</code> đã tự động huỷ sau khi người dùng được mở chặn (hoặc mã sai).</blockquote>',
-            kb([[btn('🛡 Quản lý IP', 'bn|0'), btn('🏠 Menu chính', 'home')]]));
+        $t = '🔒 <b>MÃ XÁC MINH ĐÃ HUỶ HOẶC KHÔNG TỒN TẠI</b>' . "\n";
+        if ($note !== '') {
+            $t .= '<blockquote>' . $note . "</blockquote>\n";
+        }
+        $t .= '<blockquote>'
+            . '🏷 Mã tra cứu: <code>' . tg_e(tg_clip($query, 40)) . "</code>\n"
+            . 'ℹ️ Mã xác minh này <b>đã tự động huỷ</b> ngay sau khi người dùng được mở khoá (hoặc khách gửi sai ký tự mã).'
+            . '</blockquote>';
+        return ui_send($t, kb([
+            [btn('📋 Tra mã IMX khác', 'csx|menu'), btn('🔍 Kiểm tra theo IP', 'bs')],
+            [btn('🛡 Danh sách IP khoá', 'bn|0'), btn('🏠 Menu chính', 'home')],
+        ]));
     }
-    $ip      = (string) $info['ip'];
-    $leftMin = !empty($info['expires_ts']) ? max(1, (int) ceil(((int) $info['expires_ts'] - time()) / 60)) : 0;
-    $t       = '🔐 <b>KẾT QUẢ GIẢI MÃ MÃ XÁC MINH</b>' . "\n"
-        . '<blockquote>'
-        . '🏷 Mã: <code>' . tg_e($info['code']) . "</code>\n"
-        . '🌐 IP thật: <code>' . tg_e($ip) . '</code>' . (!empty($info['stream_ip']) && $info['stream_ip'] !== $ip ? ' · Luồng: <code>' . tg_e($info['stream_ip']) . '</code>' : '') . "\n"
-        . (!empty($info['username']) ? '👤 Tài khoản: <code>' . tg_e($info['username']) . "</code>\n" : '')
-        . '📝 Nguyên nhân: ' . tg_e($info['reason']) . "\n"
-        . '⏱ Trạng thái: ' . ($leftMin > 0 ? 'Còn <b>' . $leftMin . ' phút</b> tự mở' : 'Khoá bảo mật')
+
+    $code     = (string) $info['code'];
+    $ip       = (string) $info['ip'];
+    $streamIp = !empty($info['stream_ip']) && $info['stream_ip'] !== $ip ? (string) $info['stream_ip'] : '';
+    $expTs    = isset($info['expires_ts']) ? (int) $info['expires_ts'] : 0;
+    $leftSec  = $expTs > 0 ? max(1, $expTs - time()) : 0;
+    $leftMin  = $leftSec > 0 ? (int) ceil($leftSec / 60) : 0;
+    $uname    = !empty($info['username']) ? (string) $info['username'] : '';
+    $linkedU  = bot_ip_users($ip, 5);
+    if ($uname !== '' && !in_array($uname, $linkedU, true)) {
+        array_unshift($linkedU, $uname);
+    }
+
+    // Check active Key status if a user account is associated
+    $userStateTxt = '';
+    $userId       = 0;
+    $primaryUser  = $uname !== '' ? $uname : ($linkedU ? $linkedU[0] : '');
+    if ($primaryUser !== '') {
+        try {
+            $uRow = bq_row('SELECT id, key_type, (expiry_date > NOW()) AS ok FROM users WHERE username = ? LIMIT 1', 's', [$primaryUser]);
+            if ($uRow) {
+                $userId       = (int) $uRow['id'];
+                $userStateTxt = ((int) $uRow['ok'] === 1 && !empty($uRow['key_type']) && $uRow['key_type'] !== 'NONE')
+                    ? ('Đang có Key <b>' . tg_e($uRow['key_type']) . '</b>')
+                    : 'Chưa có Key hợp lệ';
+            }
+        } catch (Throwable $e) {}
+    }
+
+    $t = '🔐 <b>HỒ SƠ ĐIỀU TRA MÃ XÁC MINH</b>' . "\n";
+    if ($note !== '') {
+        $t .= '<blockquote>' . $note . "</blockquote>\n";
+    }
+
+    $t .= '<blockquote>'
+        . '🏷 Mã: <code>' . tg_e($code) . "</code>\n"
+        . '📂 Phân loại: <b>' . tg_e($info['type_lbl']) . "</b>\n"
+        . '⏱ Thời hạn: ' . ($leftMin > 0
+            ? ('Còn <b>' . $leftMin . ' phút</b> <i>(tự mở lúc ' . tg_e(date('H:i:s', $expTs)) . ')</i>')
+            : '<b>Khoá vĩnh viễn</b> <i>(chờ Admin xử lý)</i>') . "\n"
+        . '🕒 Bị chặn lúc: <code>' . tg_e(isset($info['created_at']) ? $info['created_at'] : '—') . '</code>'
+        . '</blockquote>' . "\n";
+
+    $t .= '<blockquote>'
+        . '🔎 <b>Nguyên nhân gốc:</b> ' . tg_e($info['reason']) . "\n"
+        . (!empty($info['attack_detail']) && $info['attack_detail'] !== $info['reason']
+            ? '⚡ Chi tiết kỹ thuật: <code>' . tg_e(tg_clip($info['attack_detail'], 110)) . "</code>\n"
+            : '')
+        . '🌐 IP thật: <code>' . tg_e($ip) . '</code>'
+        . ($streamIp !== '' ? ' · 🖥 Luồng: <code>' . tg_e($streamIp) . '</code>' : '') . "\n"
+        . '📡 Mạng / ISP: <b>' . tg_e($info['isp']) . ($info['country'] !== '' ? ' (' . tg_e($info['country']) . ')' : '') . '</b>'
+        . (!empty($info['is_vpn']) ? ' · ⚠️ <b>' . tg_e($info['vpn_lbl'] ?: 'VPN/Proxy') . '</b>' : '') . "\n"
+        . '📱 Thiết bị: <b>' . tg_e($info['device']) . '</b>'
+        . (!empty($info['hw_fp']) ? ' · HW: <code>' . tg_e(substr((string) $info['hw_fp'], 0, 10)) . '</code>' : '') . "\n"
+        . '👥 Tài khoản: ' . ($linkedU ? '<code>' . tg_e(implode(', ', $linkedU)) . '</code>' : '<i>Khách chưa đăng nhập</i>')
+        . ($userStateTxt !== '' ? ' (' . $userStateTxt . ')' : '') . "\n"
+        . '📊 Cường độ: <b>' . (int) $info['hits'] . '</b> yêu cầu bị cản · Cố đổi IP/4G lách khoá: <b>' . (int) $info['evasion_attempts'] . ' lần</b>'
+        . '</blockquote>' . "\n";
+
+    $t .= '<blockquote>'
+        . '🧠 <b>Đánh giá AI:</b> ' . $info['risk_badge'] . "\n"
+        . '💡 <i>' . tg_e($info['ai_advice']) . '</i>'
         . '</blockquote>';
-    return ui_send($t, kb([
-        [btn('🔓 Mở khoá ngay & Huỷ mã này', 'bx|' . $ip, 'success')],
-        [btn('🚫 Chuyển sang Cấm vĩnh viễn', cbd('bo', $ip, (string) $info['username']), 'danger')],
-        home_row(),
-    ]));
+
+    $kbd = [
+        [btn('🔓 Gỡ chặn sạch ngay & Huỷ mã này', cbd('csx', 'unban', $code), 'success')],
+    ];
+    if ($primaryUser !== '') {
+        $kbd[] = [btn('🎁 Gỡ chặn + Mở khoá Get Key cho ' . tg_clip($primaryUser, 18), cbd('csx', 'unban_fk', $code), 'success')];
+    } else {
+        $kbd[] = [btn('🎁 Gỡ chặn + Cho phép IP qua lọc VPN/Get Key', cbd('csx', 'unban_fk', $code), 'success')];
+    }
+    $kbd[] = [
+        btn('🛡 Gỡ & Đưa vào Whitelist', cbd('csx', 'wl', $code)),
+        btn('⏱ +30 phút khoá', cbd('csx', 'ext30', $code)),
+    ];
+    $kbd[] = [
+        btn('🚫 Chuyển sang Cấm Vĩnh Viễn', cbd('csx', 'perm', $code), 'danger'),
+    ];
+    $navRow = [btn('🌐 Hồ sơ IP', cbd('csx', 'ip', $code))];
+    if ($userId > 0) {
+        $navRow[] = btn('👤 Hồ sơ User', cbd('dr', 'users', $userId));
+    }
+    $navRow[] = btn('🔄 Làm mới', cbd('csx', 'view', $code));
+    $kbd[]    = $navRow;
+    $kbd[]    = [btn('⬅ Tra mã khác', 'csx|menu'), btn('🏠 Menu chính', 'home')];
+
+    return ui_send($t, kb($kbd));
+}
+
+function bot_case_action($act, $code)
+{
+    $admin = $GLOBALS['CTX']['admin'];
+    if ($act === 'menu') {
+        return screen_case_menu();
+    }
+    if ($act === 'ask') {
+        conv_set($admin, 'case_ask');
+        return ui_send('🔐 <b>TRA CỨU MÃ XÁC MINH IMX</b>' . "\n" . hr() . "\n"
+            . "Hãy dán mã <code>IMX-...</code> (hoặc chuyển tiếp nguyên tin nhắn của khách) vào đây:",
+            kb([[btn('✖ Huỷ', 'csx|menu')]]));
+    }
+    if ($act === 'wl_ip' && $code !== '') {
+        $added = function_exists('sh_whitelist_add') ? sh_whitelist_add($code, 'tg:' . $admin) : false;
+        if ($added !== false && bot_ipg_ready()) {
+            ipg_unban(bdb(), $code, $admin);
+        }
+        toast($added !== false ? '🛡 Đã thêm Whitelist & gỡ khoá' : '❌ IP không hợp lệ');
+        return screen_ip($code, $added !== false ? '🛡 Đã đưa IP vào Whitelist miễn trừ an toàn.' : '');
+    }
+    if ($act === 'view') {
+        return screen_case_lookup($code);
+    }
+
+    $info = function_exists('sh_enrich_case_dossier') ? sh_enrich_case_dossier(bdb(), $code) : null;
+    if (!$info || empty($info['ip'])) {
+        toast('🔒 Mã xác minh đã hết hiệu lực');
+        return screen_case_lookup($code);
+    }
+    $ip    = (string) $info['ip'];
+    $uname = !empty($info['username']) ? (string) $info['username'] : '';
+
+    if ($act === 'ip') {
+        return screen_ip($ip);
+    }
+    if ($act === 'unban') {
+        if (bot_ipg_ready()) {
+            ipg_unban(bdb(), $ip, $admin);
+        } elseif (function_exists('sh_full_clean_slate_unban')) {
+            sh_full_clean_slate_unban(bdb(), $ip, $uname);
+        }
+        bot_log('tg_case_unban', $info['code'] . ' -> gỡ sạch IP ' . $ip);
+        tg_event('ip_unban', ['by' => $admin, 'ip' => $ip]);
+        toast('🔓 Đã gỡ chặn sạch & huỷ mã IMX');
+        return ui_send('✅ <b>ĐÃ GỠ CHẶN HOÀN TẤT &amp; HUỶ MÃ XÁC MINH</b>' . "\n"
+            . '<blockquote>'
+            . '🔓 IP được mở: <code>' . tg_e($ip) . "</code>\n"
+            . ($uname !== '' ? '👤 Tài khoản: <code>' . tg_e($uname) . "</code>\n" : '')
+            . '🗑 Mã đã huỷ vĩnh viễn: <code>' . tg_e($info['code']) . "</code>\n"
+            . '✨ Đã xoá sạch 100% khoá thiết bị, IP phụ &amp; bộ đếm cũ — khách vào lại web ngay lập tức mà không bị chặn lặp lại.'
+            . '</blockquote>',
+            kb([
+                [btn('🌐 Xem trạng thái IP', cbd('csx', 'ip_raw', $ip)), btn('🔐 Tra mã IMX khác', 'csx|menu')],
+                home_row(),
+            ]));
+    }
+    if ($act === 'unban_fk') {
+        if (bot_ipg_ready()) {
+            ipg_unban(bdb(), $ip, $admin);
+        }
+        $target = $uname !== '' ? $uname : $ip;
+        list(, $unlockMsg) = bot_unlock_all_locks($target);
+        bot_log('tg_case_unban_fk', $info['code'] . ' -> ' . $unlockMsg);
+        toast('🎁 Đã gỡ chặn + cấp quyền Get Key');
+        return ui_send('🎁 <b>ĐÃ GỠ CHẶN &amp; CẤP QUYỀN GET KEY THÀNH CÔNG</b>' . "\n"
+            . '<blockquote>'
+            . '🔓 IP: <code>' . tg_e($ip) . "</code>\n"
+            . '✅ Chi tiết: ' . tg_e($unlockMsg) . "\n"
+            . '🗑 Mã xác minh <code>' . tg_e($info['code']) . '</code> đã tự động huỷ.'
+            . '</blockquote>',
+            kb([[btn('🔐 Tra mã IMX khác', 'csx|menu'), btn('🏠 Menu chính', 'home')]]));
+    }
+    if ($act === 'wl') {
+        $added = function_exists('sh_whitelist_add') ? sh_whitelist_add($ip, 'case:' . $info['code']) : false;
+        if (bot_ipg_ready()) {
+            ipg_unban(bdb(), $ip, $admin);
+        }
+        bot_log('tg_case_wl', $info['code'] . ' -> Whitelist ' . $ip);
+        toast('🛡 Đã gỡ chặn & thêm vào Whitelist');
+        return screen_ip($ip, '🛡 <b>Đã gỡ chặn, huỷ mã <code>' . tg_e($info['code']) . '</code> và đưa IP vào danh sách miễn trừ an toàn!</b>');
+    }
+    if ($act === 'ext30') {
+        $curExp = !empty($info['expires_ts']) ? max(time(), (int) $info['expires_ts']) : time();
+        $addSec = ($curExp - time()) + 1800;
+        if (function_exists('ipg_temp_ban')) {
+            ipg_temp_ban(bdb(), $ip, $addSec, $info['reason'], $admin, $uname, isset($info['ban_type']) ? $info['ban_type'] : 'temp');
+        }
+        // Refresh expires_ts on case file as well
+        if (function_exists('sh_case_file')) {
+            sh_json_update(sh_case_file($info['code']), function ($d) use ($addSec) {
+                $d['expires_ts'] = time() + $addSec;
+                return $d;
+            });
+        }
+        bot_log('tg_case_ext30', $info['code'] . ' (+30p) ' . $ip);
+        toast('⏱ Đã cộng thêm 30 phút khoá');
+        return screen_case_lookup($info['code'], '⏱ <b>Đã gia hạn thêm 30 phút khoá cho đối tượng này.</b>');
+    }
+    if ($act === 'perm') {
+        if (bot_ipg_ready()) {
+            $res = ipg_ban(bdb(), $ip, $info['reason'] ?: 'Chặn vĩnh viễn theo hồ sơ mã ' . $info['code'], $admin, $uname);
+            if (!empty($res['ok'])) {
+                if (function_exists('sh_case_file')) {
+                    sh_json_update(sh_case_file($info['code']), function ($d) {
+                        $d['expires_ts'] = 0;
+                        $d['ban_type']   = 'manual';
+                        return $d;
+                    });
+                }
+                bot_log('tg_case_perm', $info['code'] . ' -> Cấm vĩnh viễn ' . $ip);
+                toast('🚫 Đã chuyển sang Cấm Vĩnh Viễn');
+                return screen_case_lookup($info['code'], '🚫 <b>Đã chuyển sang lệnh CẤM VĨNH VIỄN đối với IP này.</b>');
+            }
+        }
+    }
+    return screen_case_menu();
 }
 
 function bot_help()
@@ -2694,7 +2954,7 @@ function bot_on_message(array $m)
                 return bot_maintenance($arg === 'on' ? 'on' : ($arg === 'off' ? 'off' : 'menu'));
             case 'check':
                 conv_clear($from);
-                return $arg !== '' ? screen_case_lookup($arg) : ui_send('🔐 Dán trực tiếp mã xác minh <code>IMX-...</code> của khách vào khung chat để kiểm tra.', kb([home_row()]));
+                return $arg !== '' ? screen_case_lookup($arg) : screen_case_menu();
             case 'mokhoa':
                 conv_clear($from);
                 return $arg !== '' ? bot_unlock_route('run', $arg) : screen_unlock(0);
@@ -2759,13 +3019,25 @@ function bot_on_message(array $m)
         return bot_help();
     }
 
-    if ($convNow) {
-        return bot_conv_input($convNow, $text, $m);
+    // Smart Auto-Extraction: Paste or forward ANY message containing IMX-... (even inside a sentence!)
+    if (function_exists('sh_extract_case_code')) {
+        $extractedCode = sh_extract_case_code($text);
+        if ($extractedCode !== '') {
+            conv_clear($from);
+            return screen_case_lookup($extractedCode);
+        }
+    }
+    if (preg_match('/^IMX-[A-Z0-9-]{10,40}$/i', $text)) {
+        return screen_case_lookup($text);
     }
 
-    // Direct paste of encrypted IMX-... case verification code!
-    if (preg_match('/^IMX-[A-Z0-9-]{16,36}$/i', $text)) {
-        return screen_case_lookup($text);
+    // Smart Direct IP Lookup: Paste any raw IPv4/IPv6 address directly into chat!
+    if (!$convNow && filter_var($text, FILTER_VALIDATE_IP) !== false) {
+        return screen_ip($text);
+    }
+
+    if ($convNow) {
+        return bot_conv_input($convNow, $text, $m);
     }
 
     return screen_home();
@@ -2786,6 +3058,11 @@ function bot_route($data, array $origMessage = [])
             return;
         case 'qa':
             return bot_quick_alert_action($a, $b, $origMessage);
+        case 'csx':
+            if ($a === 'ip_raw') {
+                return screen_ip($b);
+            }
+            return bot_case_action($a, $b);
         case 'home':
             return screen_home();
         case 'cx':
@@ -3020,6 +3297,7 @@ function bot_setup()
 
     $cmds = [
         ['command' => 'menu',    'description' => 'Mở bảng điều khiển Admin CP'],
+        ['command' => 'check',   'description' => 'Tra cứu mã xác minh IMX khách gửi'],
         ['command' => 'baotri',  'description' => 'Bật / Tắt bảo trì website'],
         ['command' => 'mokhoa',  'description' => 'Mở khoá Get Key Free cho User / IP'],
         ['command' => 'ai',      'description' => 'AI Giám sát Chống DDoS & VPN'],

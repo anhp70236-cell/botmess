@@ -1154,20 +1154,31 @@ function tg_user_blocked($username)
 
 function tg_block_page(array $row)
 {
+    if (is_file(__DIR__ . '/security_shield.php')) {
+        require_once __DIR__ . '/security_shield.php';
+        if (function_exists('sh_render_sad_page')) {
+            ob_start();
+            sh_render_sad_page([
+                'reason'     => 'Tài khoản đã bị khoá truy cập: ' . (string) (isset($row['reason']) ? $row['reason'] : 'Vi phạm quy định của website'),
+                'ban_type'   => 'manual',
+                'username'   => isset($row['username']) ? (string) $row['username'] : '',
+                'expires_ts' => 0,
+            ], tg_ip(), 403);
+            return (string) ob_get_clean();
+        }
+    }
     $site    = htmlspecialchars((string) tg_cfg('site_name', 'IOSMODS.XYZ'), ENT_QUOTES, 'UTF-8');
     $reason  = htmlspecialchars((string) (isset($row['reason']) ? $row['reason'] : 'Vi phạm quy định của website'), ENT_QUOTES, 'UTF-8');
     $contact = htmlspecialchars((string) tg_cfg('contact_url', 'https://t.me/iosnea'), ENT_QUOTES, 'UTF-8');
     return '<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         . '<title>Tài khoản bị khoá · ' . $site . '</title><style>'
-        . 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0d12;color:#f2f4f7;font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;padding:20px}'
-        . '.c{max-width:410px;width:100%;background:#131720;border:1px solid #232936;border-radius:22px;padding:30px 24px;text-align:center}'
-        . 'h1{font-size:21px;margin:12px 0 6px}p{color:#98a2b3;margin:6px 0;font-size:14px}'
-        . '.r{margin:16px 0;padding:12px 14px;background:#271518;border:1px solid #552328;border-radius:13px;color:#fda29b;font-size:14px}'
-        . 'a{display:block;margin-top:16px;padding:13px 20px;border-radius:13px;background:#f2f4f7;color:#10131a;text-decoration:none;font-weight:650}'
-        . '</style></head><body><div class="c"><div style="font-size:44px;line-height:1">☹️</div><h1>Tài khoản đang bị khoá</h1>'
-        . '<p>Tài khoản của bạn tạm thời không thể sử dụng ' . $site . '.</p>'
-        . '<div class="r">Lý do: ' . $reason . '</div>'
-        . '<a href="' . $contact . '">Liên hệ Admin hỗ trợ</a></div></body></html>';
+        . 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#000;color:#fff;font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;padding:20px}'
+        . '.c{max-width:420px;width:100%;background:#0a0a0b;border:1px solid #1f1f23;border-radius:22px;padding:30px 24px;text-align:center}'
+        . 'h1{font-size:22px;margin:12px 0 8px}p{color:#9ca3af;margin:6px 0;font-size:14px}'
+        . 'a{display:block;margin-top:18px;padding:14px 20px;border-radius:14px;background:#0a84ff;color:#fff;text-decoration:none;font-weight:700}'
+        . '</style></head><body><div class="c"><h1>Tài khoản đang bị khoá</h1>'
+        . '<p>Nguyên nhân: ' . $reason . '</p>'
+        . '<a href="' . $contact . '">Liên hệ Admin kiểm tra</a></div></body></html>';
 }
 
 function tg_block_enforce($username, $role = 'member')
@@ -1547,24 +1558,31 @@ function tg_render($type, array $d)
             $mins     = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 3600) / 60));
             $streamIp = isset($d['stream_ip']) && $d['stream_ip'] !== '' && $d['stream_ip'] !== $ip ? (string) $d['stream_ip'] : '';
             $expAt    = !empty($d['expires_at']) ? substr((string) $d['expires_at'], 11, 8) : '';
-            $kb       = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
-                ['text' => '🔓 Gỡ khoá ngay', 'callback_data' => 'qa|unban|' . $ip],
-                ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
-            ]]) : null;
+            $cc       = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $kbRows   = [];
+            if ($ip !== '' && strlen($ip) <= 42) {
+                $kbRows[] = [
+                    ['text' => '🔓 Gỡ khoá ngay', 'callback_data' => 'qa|unban|' . $ip],
+                    ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+                ];
+            }
+            if ($cc !== '' && strlen($cc) <= 40) {
+                $kbRows[] = [['text' => '🔍 Tra nguyên nhân & Hồ sơ', 'callback_data' => 'qa|case|' . $cc]];
+            }
             $rows = [
                 '🎯 IP thật (người chạy): ' . $ipTag . ($streamIp !== '' ? ' · 🖥 Máy chủ luồng: ' . tg_c($streamIp) : ''),
                 '⚡ Loại tấn công: <b>' . tg_e(isset($d['detail']) ? $d['detail'] : 'HTTP Stream Flood') . '</b>',
                 '⏱ Khoá tự động: <b>' . $mins . ' phút</b>' . ($expAt !== '' ? ' (đến ' . tg_c($expAt) . ')' : '') . ' · 🧹 <b>Đã giải phóng sạch luồng</b>',
             ];
-            if (!empty($d['case_code'])) {
-                $rows[] = '🔐 Mã xác minh: ' . tg_c($d['case_code']);
+            if ($cc !== '') {
+                $rows[] = '🔐 Mã xác minh: ' . tg_c($cc);
             }
             return [
                 'cat'      => 'ddos',
                 'title'    => '🚨 <b>AI CHẶN & GIẢI PHÓNG LUỒNG DDOS</b>',
                 'throttle' => ['ddos:' . $ip, 90],
                 'rows'     => $rows,
-                'kb'       => $kb,
+                'kb'       => $kbRows ? tg_alert_kb($kbRows) : null,
             ];
 
         case 'script_bug_block':
@@ -1572,24 +1590,31 @@ function tg_render($type, array $d)
             $streamIp = isset($d['stream_ip']) && $d['stream_ip'] !== '' && $d['stream_ip'] !== $ip ? (string) $d['stream_ip'] : '';
             $hwFp     = !empty($d['hw_fp']) ? (string) $d['hw_fp'] : '';
             $evasions = isset($d['evasions']) ? (int) $d['evasions'] : 0;
-            $kb       = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
-                ['text' => '🔓 Gỡ khoá đa lớp', 'callback_data' => 'qa|unban|' . $ip],
-                ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
-            ]]) : null;
+            $cc       = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $kbRows   = [];
+            if ($ip !== '' && strlen($ip) <= 42) {
+                $kbRows[] = [
+                    ['text' => '🔓 Gỡ khoá đa lớp', 'callback_data' => 'qa|unban|' . $ip],
+                    ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+                ];
+            }
+            if ($cc !== '' && strlen($cc) <= 40) {
+                $kbRows[] = [['text' => '🔍 Tra nguyên nhân & Hồ sơ', 'callback_data' => 'qa|case|' . $cc]];
+            }
             $rows = [
                 '🎯 IP thật: ' . $ipTag . ($streamIp !== '' ? ' · 🖥 Luồng/VPN: ' . tg_c($streamIp) : '') . ($hwFp !== '' ? ' · 📱 HW: ' . tg_c($hwFp) : ''),
                 '🛡 Vi phạm: <b>' . tg_e(isset($d['detail']) ? $d['detail'] : 'Chạy Script / Xem mã nguồn / Bug-Buff') . '</b>',
                 '⏱ Phong toả đa lớp: <b>' . $mins . ' phút</b>' . ($evasions > 0 ? ' · ⚠️ Cố lách khoá: <b>' . $evasions . ' lần</b>' : ''),
             ];
-            if (!empty($d['case_code'])) {
-                $rows[] = '🔐 Mã xác minh: ' . tg_c($d['case_code']);
+            if ($cc !== '') {
+                $rows[] = '🔐 Mã xác minh: ' . tg_c($cc);
             }
             return [
                 'cat'      => 'ddos',
                 'title'    => '🛡 <b>CHẶN SCRIPT / XEM MÃ NGUỒN / BUG WEB</b>',
                 'throttle' => ['sbb:' . $ip . ':' . $hwFp, 60],
                 'rows'     => $rows,
-                'kb'       => $kb,
+                'kb'       => $kbRows ? tg_alert_kb($kbRows) : null,
             ];
 
         case 'ddos_surge_healed':
@@ -1603,25 +1628,32 @@ function tg_render($type, array $d)
             ];
 
         case 'key_spam_ban':
-            $mins  = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 300) / 60));
-            $fails = (int) (isset($d['fails']) ? $d['fails'] : 0);
-            $kb    = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
-                ['text' => '🔓 Gỡ ban ngay', 'callback_data' => 'qa|unban|' . $ip],
-                ['text' => '🚫 Chặn vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
-            ]]) : null;
+            $mins   = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 300) / 60));
+            $fails  = (int) (isset($d['fails']) ? $d['fails'] : 0);
+            $cc     = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $kbRows = [];
+            if ($ip !== '' && strlen($ip) <= 42) {
+                $kbRows[] = [
+                    ['text' => '🔓 Gỡ ban ngay', 'callback_data' => 'qa|unban|' . $ip],
+                    ['text' => '🚫 Chặn vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+                ];
+            }
+            if ($cc !== '' && strlen($cc) <= 40) {
+                $kbRows[] = [['text' => '🔍 Tra nguyên nhân & Hồ sơ', 'callback_data' => 'qa|case|' . $cc]];
+            }
             $kRows = [
                 '👤 ' . $uTag . ' · 🌐 ' . $ipTag,
                 '🛑 ' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : ('Spam thao tác / nhập sai ' . $fails . ' lần'), 150)),
             ];
-            if (!empty($d['case_code'])) {
-                $kRows[] = '🔐 Mã xác minh: ' . tg_c($d['case_code']);
+            if ($cc !== '') {
+                $kRows[] = '🔐 Mã xác minh: ' . tg_c($cc);
             }
             return [
                 'cat'      => 'ddos',
                 'title'    => '☹️ <b>TẠM KHOÁ SPAM HỆ THỐNG (' . $mins . ' PHÚT)</b>',
                 'throttle' => ['kspam:' . $ip, 45],
                 'rows'     => $kRows,
-                'kb'       => $kb,
+                'kb'       => $kbRows ? tg_alert_kb($kbRows) : null,
             ];
 
         case 'vpn_multi_acc':

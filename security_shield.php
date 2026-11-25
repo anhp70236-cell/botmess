@@ -218,11 +218,72 @@ function sh_b32_encode($bytes)
     return $out;
 }
 
+function sh_extract_case_code($rawText)
+{
+    $s = strtoupper((string) $rawText);
+    if (preg_match('/IMX[-\s]*([A-Z2-9]{6})[-\s]*([A-Z2-9]{6})[-\s]*([A-Z2-9]{6})[-\s]*([A-Z2-9]{6})/', $s, $m)) {
+        return 'IMX-' . $m[1] . '-' . $m[2] . '-' . $m[3] . '-' . $m[4];
+    }
+    return '';
+}
+
 function sh_case_file($code)
 {
     $norm = strtoupper(preg_replace('/[^A-Z0-9]/i', '', (string) $code));
     $h    = hash_hmac('sha256', 'case|' . $norm, sh_secret());
     return sh_dir() . '/cases/' . substr($h, 0, 2) . '/' . substr($h, 0, 32) . '.json';
+}
+
+function sh_summarize_ua($ua)
+{
+    $ua = trim((string) $ua);
+    if ($ua === '') {
+        return 'Không gửi User-Agent (Nghi công cụ tự động)';
+    }
+    if (preg_match('~(python-requests|python-urllib|aiohttp|httpx|curl/|wget/|Go-http-client|sqlmap|nikto|nuclei|wrk/|ab/\d|siege|HeadlessChrome|Playwright|Puppeteer|PhantomJS)~i', $ua, $m)) {
+        return 'Công cụ Script / Bot (' . $m[1] . ')';
+    }
+    $dev = 'Thiết bị khác';
+    if (preg_match('/iPhone.*OS (\d+[_\d]*)/i', $ua, $m)) {
+        $dev = 'iPhone · iOS ' . str_replace('_', '.', $m[1]);
+    } elseif (preg_match('/iPad.*OS (\d+[_\d]*)/i', $ua, $m)) {
+        $dev = 'iPad · iPadOS ' . str_replace('_', '.', $m[1]);
+    } elseif (preg_match('/Android\s+([0-9.]+)/i', $ua, $m)) {
+        $dev = 'Android ' . $m[1];
+    } elseif (stripos($ua, 'Windows NT') !== false) {
+        $dev = 'Máy tính Windows';
+    } elseif (stripos($ua, 'Macintosh') !== false) {
+        $dev = 'Máy tính Mac';
+    } elseif (stripos($ua, 'Linux') !== false) {
+        $dev = 'Máy chủ / Linux';
+    }
+    $br = '';
+    if (stripos($ua, 'Edg/') !== false) {
+        $br = 'Edge';
+    } elseif (stripos($ua, 'CriOS/') !== false || (stripos($ua, 'Chrome/') !== false && stripos($ua, 'Safari/') !== false)) {
+        $br = 'Chrome';
+    } elseif (stripos($ua, 'FxiOS/') !== false || stripos($ua, 'Firefox/') !== false) {
+        $br = 'Firefox';
+    } elseif (stripos($ua, 'Safari/') !== false) {
+        $br = 'Safari';
+    }
+    return $dev . ($br !== '' ? ' (' . $br . ')' : '');
+}
+
+function sh_ban_type_label($banType)
+{
+    $map = [
+        'ddos'       => 'Tấn công luồng DDoS',
+        'waf'        => 'Tấn công khai thác lỗ hổng Web (WAF)',
+        'bug_buff'   => 'Chạy Script Bug / Buff lượt trái phép',
+        'inspect'    => 'Mở công cụ soi mã nguồn PC / Chạy Script',
+        'prod_spam'  => 'Spam bấm lấy sản phẩm / Thao tác quá nhanh',
+        'key_spam'   => 'Spam nhập sai mã Key liên tục',
+        'vpn_abuse'  => 'Dùng VPN / Đa tài khoản vượt giới hạn Key',
+        'admin_temp' => 'Tạm khoá thủ công bởi Admin',
+        'manual'     => 'Khoá bảo mật vĩnh viễn bởi Admin',
+    ];
+    return isset($map[$banType]) ? $map[$banType] : 'Khoá bảo vệ tự động (' . $banType . ')';
 }
 
 /**
@@ -249,19 +310,28 @@ function sh_issue_case_code($ip, array $ban)
     $code = 'IMX-' . implode('-', str_split($b32, 6));
 
     if (empty($ban['is_preview']) && $ip !== '') {
+        $uaRaw = isset($ban['ua']) && $ban['ua'] !== ''
+            ? (string) $ban['ua']
+            : substr((string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''), 0, 180);
         $cf = sh_case_file($code);
-        sh_json_update($cf, function () use ($code, $ip, $ban) {
+        sh_json_update($cf, function () use ($code, $ip, $ban, $uaRaw) {
             return [
-                'code'       => $code,
-                'active'     => 1,
-                'ip'         => $ip,
-                'stream_ip'  => isset($ban['stream_ip']) ? (string) $ban['stream_ip'] : $ip,
-                'ban_type'   => isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'temp',
-                'reason'     => isset($ban['reason']) ? (string) $ban['reason'] : '',
-                'username'   => isset($ban['username']) ? (string) $ban['username'] : '',
-                'hw_fp'      => isset($ban['hw_fp']) ? (string) $ban['hw_fp'] : '',
-                'created_at' => date('Y-m-d H:i:s'),
-                'expires_ts' => isset($ban['expires_ts']) ? (int) $ban['expires_ts'] : 0,
+                'code'             => $code,
+                'active'           => 1,
+                'ip'               => $ip,
+                'stream_ip'        => isset($ban['stream_ip']) ? (string) $ban['stream_ip'] : $ip,
+                'ban_type'         => isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'temp',
+                'reason'           => isset($ban['reason']) ? (string) $ban['reason'] : '',
+                'attack_detail'    => isset($ban['attack_detail']) ? (string) $ban['attack_detail'] : '',
+                'username'         => isset($ban['username']) ? (string) $ban['username'] : '',
+                'hw_fp'            => isset($ban['hw_fp']) ? (string) $ban['hw_fp'] : '',
+                'lid'              => isset($ban['lid']) ? (string) $ban['lid'] : '',
+                'ua'               => $uaRaw,
+                'hits'             => isset($ban['hits']) ? (int) $ban['hits'] : 1,
+                'evasion_attempts' => isset($ban['evasion_attempts']) ? (int) $ban['evasion_attempts'] : 0,
+                'created_ts'       => isset($ban['created_ts']) ? (int) $ban['created_ts'] : time(),
+                'created_at'       => isset($ban['created_at']) ? (string) $ban['created_at'] : date('Y-m-d H:i:s'),
+                'expires_ts'       => isset($ban['expires_ts']) ? (int) $ban['expires_ts'] : 0,
             ];
         });
         // Link code to IP index so unbanning immediately destroys all codes for that IP
@@ -281,7 +351,9 @@ function sh_issue_case_code($ip, array $ban)
 /** Lookup encrypted Case Code from Telegram Bot. Returns array or null. */
 function sh_lookup_case_code($code)
 {
-    $cf = sh_case_file($code);
+    $extracted = sh_extract_case_code($code);
+    $target    = $extracted !== '' ? $extracted : $code;
+    $cf        = sh_case_file($target);
     if (!is_file($cf)) {
         return null;
     }
@@ -292,8 +364,109 @@ function sh_lookup_case_code($code)
     if (!empty($d['active']) && !empty($d['expires_ts']) && (int) $d['expires_ts'] <= time()) {
         $d['active'] = 0;
         @unlink($cf);
+        return null;
     }
     return $d;
+}
+
+/** Lists up to $limit currently active encrypted case dossiers for quick 1-tap selection in Telegram Bot. */
+function sh_list_active_cases($limit = 6)
+{
+    $out = [];
+    $now = time();
+    foreach (glob(sh_dir() . '/cases/*/*.json') ?: [] as $cf) {
+        $d = sh_json_read($cf);
+        if (empty($d['code']) || empty($d['active'])) {
+            continue;
+        }
+        if (!empty($d['expires_ts']) && (int) $d['expires_ts'] <= $now) {
+            @unlink($cf);
+            continue;
+        }
+        if (!empty($d['ip']) && sh_read_ban_cache($d['ip']) === null) {
+            // Double-check if DB ban is still active; if neither cache nor active ban exists, clean up stale case
+            $out[] = $d;
+            continue;
+        }
+        $out[] = $d;
+    }
+    usort($out, function ($a, $b) {
+        return ((int) (isset($b['created_ts']) ? $b['created_ts'] : 0)) - ((int) (isset($a['created_ts']) ? $a['created_ts'] : 0));
+    });
+    return array_slice($out, 0, max(1, (int) $limit));
+}
+
+/**
+ * Full Smart Forensic Dossier for Telegram Bot Case Investigation:
+ * Combines encrypted case record + live fast-ban cache + MySQL ip_bans + ISP/VPN intel + AI Risk Verdict!
+ */
+function sh_enrich_case_dossier($conn, $rawCode)
+{
+    $base = sh_lookup_case_code($rawCode);
+    if (!$base || empty($base['active'])) {
+        return null;
+    }
+    $ip   = sh_norm_ip(isset($base['ip']) ? $base['ip'] : '');
+    $live = $ip !== '' ? sh_read_ban_cache($ip) : null;
+    if (is_array($live)) {
+        $base['hits']             = max((int) (isset($base['hits']) ? $base['hits'] : 1), (int) (isset($live['hits']) ? $live['hits'] : 1));
+        $base['evasion_attempts'] = max((int) (isset($base['evasion_attempts']) ? $base['evasion_attempts'] : 0), (int) (isset($live['evasion_attempts']) ? $live['evasion_attempts'] : 0));
+        if (!empty($live['expires_ts'])) {
+            $base['expires_ts'] = (int) $live['expires_ts'];
+        }
+        if (!empty($live['reason'])) {
+            $base['reason'] = (string) $live['reason'];
+        }
+        if (empty($base['username']) && !empty($live['username'])) {
+            $base['username'] = (string) $live['username'];
+        }
+    }
+
+    if (($conn instanceof mysqli) && $ip !== '' && function_exists('ipg_find')) {
+        $dbRow = ipg_find($conn, $ip);
+        if ($dbRow) {
+            if ((int) $dbRow['active'] !== 1 && $live === null) {
+                sh_revoke_case_codes_for_ip($ip);
+                return null;
+            }
+            $base['hits'] = max((int) $base['hits'], (int) $dbRow['hits']);
+            if (empty($dbRow['expires_at']) && (int) $dbRow['active'] === 1 && $dbRow['ban_type'] === 'manual') {
+                $base['expires_ts'] = 0;
+                $base['ban_type']   = 'manual';
+            }
+            if (empty($base['username']) && !empty($dbRow['username'])) {
+                $base['username'] = (string) $dbRow['username'];
+            }
+        }
+    }
+
+    $intel            = $ip !== '' ? sh_inspect_ip_vpn($ip) : ['is_vpn' => false, 'label' => '', 'isp' => '', 'country' => ''];
+    $btype            = isset($base['ban_type']) ? (string) $base['ban_type'] : 'temp';
+    $evasions         = (int) (isset($base['evasion_attempts']) ? $base['evasion_attempts'] : 0);
+    $hits             = (int) (isset($base['hits']) ? $base['hits'] : 1);
+    $uaSummary        = sh_summarize_ua(isset($base['ua']) ? $base['ua'] : '');
+    $base['type_lbl'] = sh_ban_type_label($btype);
+    $base['device']   = $uaSummary;
+    $base['isp']      = !empty($intel['isp']) ? (string) $intel['isp'] : 'Chưa xác định';
+    $base['country']  = !empty($intel['country']) ? (string) $intel['country'] : '';
+    $base['is_vpn']   = !empty($intel['is_vpn']);
+    $base['vpn_lbl']  = !empty($intel['label']) ? (string) $intel['label'] : '';
+
+    // Smart AI Risk Assessment & Actionable Recommendation
+    if (in_array($btype, ['ddos', 'waf', 'bug_buff', 'inspect'], true) || $evasions >= 2 || strpos($uaSummary, 'Công cụ Script') === 0) {
+        $base['risk_badge'] = '🔴 NGHIÊM TRỌNG (Can thiệp / Tấn công trực tiếp)';
+        $base['ai_advice']  = $evasions > 0
+            ? 'Đối tượng đã cố tình đổi IP/thiết bị ' . $evasions . ' lần để lách khoá. Khuyến nghị GIỮ KHOÁ hoặc chuyển sang CẤM VĨNH VIỄN.'
+            : 'Phát hiện dấu hiệu chạy công cụ Script, soi mã nguồn hoặc gửi gói tin tấn công. Chỉ gỡ nếu xác nhận đúng người quen thao tác nhầm.';
+    } elseif ($btype === 'vpn_abuse' || !empty($intel['is_vpn']) || $evasions === 1) {
+        $base['risk_badge'] = '🟡 TRUNG BÌNH (Có dùng VPN / Đổi mạng)';
+        $base['ai_advice']  = 'Kết nối có sử dụng ' . ($base['vpn_lbl'] !== '' ? $base['vpn_lbl'] : 'VPN / đổi mạng') . '. Hãy nhắc người dùng tắt hẳn VPN / 1.1.1.1 trước khi bấm Gỡ chặn.';
+    } else {
+        $base['risk_badge'] = '🟢 MỨC NHẸ (Người dùng thao tác quá nhanh)';
+        $base['ai_advice']  = 'Người dùng mạng thông thường bấm lấy sản phẩm khi chưa có Key hoặc nhập sai Key liên tiếp (0 lần cố lách khoá). Có thể bấm «Gỡ chặn sạch ngay» an toàn.';
+    }
+
+    return $base;
 }
 
 /** Destroys / invalidates all encrypted Case Codes for an IP the instant they are unbanned! */
@@ -1201,59 +1374,240 @@ function sh_fmt_remaining($sec)
     return $h > 0 ? sprintf('%02d:%02d:%02d', $h, $m, $s) : sprintf('%02d:%02d', $m, $s);
 }
 
+function sh_resolve_brand_logo_file()
+{
+    $rel = '';
+    $c   = isset($GLOBALS['conn']) && ($GLOBALS['conn'] instanceof mysqli) ? $GLOBALS['conn'] : null;
+    if ($c === null) {
+        try {
+            if (is_file(__DIR__ . '/config.php')) {
+                require_once __DIR__ . '/config.php';
+            }
+            $h = defined('DB_HOST') ? DB_HOST : (getenv('DB_HOST') ?: 'localhost');
+            $u = defined('DB_USER') ? DB_USER : (getenv('DB_USER') ?: '');
+            $p = defined('DB_PASS') ? DB_PASS : (getenv('DB_PASS') ?: '');
+            $n = defined('DB_NAME') ? DB_NAME : (getenv('DB_NAME') ?: '');
+            if ($u !== '') {
+                $c = defined('DB_PORT') ? @mysqli_connect($h, $u, $p, $n, (int) DB_PORT) : @mysqli_connect($h, $u, $p, $n);
+            }
+        } catch (Throwable $e) {
+            $c = null;
+        }
+    }
+    if ($c instanceof mysqli) {
+        try {
+            $r = @$c->query("SELECT config_value FROM site_config WHERE config_key = 'brand_logo' LIMIT 1");
+            $row = $r ? $r->fetch_assoc() : null;
+            if ($row && !empty($row['config_value'])) {
+                $rel = trim((string) $row['config_value']);
+            }
+        } catch (Throwable $e) {}
+    }
+
+    if ($rel !== '' && !preg_match('#^https?://#i', $rel)) {
+        $cand = __DIR__ . '/' . ltrim($rel, '/\\');
+        if (is_file($cand)) {
+            return $cand;
+        }
+    }
+    // Fallback: pick newest dslogo_* in uploads/ (exact main theme logo), then uploads/logo.png
+    $dsLogos = glob(__DIR__ . '/uploads/dslogo_*.*') ?: [];
+    if ($dsLogos) {
+        usort($dsLogos, function ($a, $b) {
+            return ((int) @filemtime($b)) - ((int) @filemtime($a));
+        });
+        return $dsLogos[0];
+    }
+    if (is_file(__DIR__ . '/uploads/logo.png')) {
+        return __DIR__ . '/uploads/logo.png';
+    }
+    return '';
+}
+
+/**
+ * Auto-trims transparent padding around the main iosmods.xyz logo (e.g. dslogo_*.png)
+ * and caches a crisp 3x Retina inline data URI so the header logo renders FULL-SIZE & RAZOR-SHARP
+ * in 0ms even when the visitor's IP is completely blocked!
+ */
 function sh_logo_src()
 {
-    if (is_file(__DIR__ . '/uploads/logo.png')) {
-        return '/uploads/logo.png';
+    static $memo = null;
+    if ($memo !== null) {
+        return $memo;
     }
-    return '/index.php?brand_logo=1';
+    $cacheFile = sh_dir() . '/brand_logo_inline_v6.json';
+    $cached    = sh_json_read($cacheFile);
+
+    // Fast path: if cached within last 300s and source file hasn't changed, use in 0.03ms without DB!
+    if (!empty($cached['uri']) && !empty($cached['src']) && is_file($cached['src']) && (int) @filemtime($cached['src']) === (int) (isset($cached['mtime']) ? $cached['mtime'] : 0) && (time() - (int) (isset($cached['checked']) ? $cached['checked'] : 0)) < 600) {
+        return $memo = (string) $cached['uri'];
+    }
+
+    $file = sh_resolve_brand_logo_file();
+    if ($file === '' || !is_file($file)) {
+        return $memo = '/index.php?brand_logo=1';
+    }
+    $mtime = (int) @filemtime($file);
+    if (!empty($cached['uri']) && isset($cached['src'], $cached['mtime']) && $cached['src'] === $file && (int) $cached['mtime'] === $mtime) {
+        sh_json_update($cacheFile, function ($x) {
+            $x['checked'] = time();
+            return $x;
+        });
+        return $memo = (string) $cached['uri'];
+    }
+
+    $bytes = @file_get_contents($file);
+    if (!is_string($bytes) || $bytes === '') {
+        return $memo = '/uploads/' . basename($file);
+    }
+
+    $uri = '';
+    if (function_exists('imagecreatefromstring')) {
+        @ini_set('memory_limit', '256M');
+        $im = @imagecreatefromstring($bytes);
+        if ($im !== false) {
+            $w = imagesx($im);
+            $h = imagesy($im);
+            // Scan alpha bounding box (step=2 for speed) so ALL empty transparent padding around "iosmods.xyz" is stripped!
+            $minX = $w;
+            $minY = $h;
+            $maxX = 0;
+            $maxY = 0;
+            $step = ($w > 500 || $h > 500) ? 2 : 1;
+            for ($y = 0; $y < $h; $y += $step) {
+                for ($x = 0; $x < $w; $x += $step) {
+                    $rgba  = imagecolorat($im, $x, $y);
+                    $alpha = ($rgba >> 24) & 0x7F;
+                    if ($alpha < 122) {
+                        if ($x < $minX) $minX = $x;
+                        if ($y < $minY) $minY = $y;
+                        if ($x > $maxX) $maxX = $x;
+                        if ($y > $maxY) $maxY = $y;
+                    }
+                }
+            }
+            if ($maxX > $minX && $maxY > $minY) {
+                $pad = max(2, (int) round(min($w, $h) * 0.015));
+                $cx  = max(0, $minX - $pad);
+                $cy  = max(0, $minY - $pad);
+                $cw  = min($w - $cx, ($maxX - $minX) + 1 + $pad * 2);
+                $ch  = min($h - $cy, ($maxY - $minY) + 1 + $pad * 2);
+            } else {
+                $cx = 0; $cy = 0; $cw = $w; $ch = $h;
+            }
+
+            // Target 3x Retina height (144px -> displays at 46px-48px CSS height with ultra-sharp detail!)
+            $targetH = min(156, $ch);
+            $scale   = $targetH / max(1, $ch);
+            $dw      = max(1, (int) round($cw * $scale));
+            $dh      = max(1, (int) round($ch * $scale));
+            if ($dw > 660) {
+                $s2 = 660 / $dw;
+                $dw = 660;
+                $dh = max(1, (int) round($dh * $s2));
+            }
+
+            $dst = imagecreatetruecolor($dw, $dh);
+            imagealphablending($dst, false);
+            imagesavealpha($dst, true);
+            imagefill($dst, 0, 0, imagecolorallocatealpha($dst, 0, 0, 0, 127));
+            imagecopyresampled($dst, $im, 0, 0, $cx, $cy, $dw, $dh, $cw, $ch);
+            imagedestroy($im);
+
+            if (function_exists('imagewebp')) {
+                ob_start();
+                $ok   = @imagewebp($dst, null, 92);
+                $webp = (string) ob_get_clean();
+                if ($ok && $webp !== '') {
+                    $uri = 'data:image/webp;base64,' . base64_encode($webp);
+                }
+            }
+            if ($uri === '') {
+                ob_start();
+                @imagepng($dst, null, 8);
+                $png = (string) ob_get_clean();
+                if ($png !== '') {
+                    $uri = 'data:image/png;base64,' . base64_encode($png);
+                }
+            }
+            imagedestroy($dst);
+        }
+    }
+
+    if ($uri === '') {
+        $uri = '/uploads/' . basename($file);
+    }
+    sh_json_update($cacheFile, function () use ($uri, $file, $mtime) {
+        return ['uri' => $uri, 'src' => $file, 'mtime' => $mtime, 'checked' => time()];
+    });
+    return $memo = $uri;
 }
 
 function sh_native_shared_css()
 {
     return <<<'CSS'
-:root{color-scheme:dark;--bg:#000000;--card:#0a0a0b;--field:#121215;--line:#1e1e23;--line2:#27272d;--fg:#f5f5f7;--sub:#9ca3af;--mute:#6e6e77;--btn-bg:#ffffff;--btn-fg:#000000;--ghost-bg:#121215;--ghost-fg:#e5e7eb;--hd:54px;--font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-:root[data-theme="light"]{color-scheme:light;--bg:#f5f7fa;--card:#ffffff;--field:#f3f4f6;--line:#e5e7eb;--line2:#d1d5db;--fg:#111827;--sub:#4b5563;--mute:#6b7280;--btn-bg:#111827;--btn-fg:#ffffff;--ghost-bg:#f3f4f6;--ghost-fg:#111827}
+:root{color-scheme:dark;--ds-bg:#000000;--ds-card:#0a0a0b;--ds-field:#141416;--ds-line:#1f1f23;--ds-line2:#26262b;--ds-h:#ffffff;--ds-p:#9ca3af;--ds-mute:#8e8e93;--ds-hd-bg:#000000;--ds-hd-line:#1c1c1f;--ds-btn-bg:#0a0a0b;--ds-btn-line:#26262b;--ds-btn-fg:#ffffff;--blue:#0a84ff;--blue-press:#0070e0;--ok:#34c759;--hd:60px;--logo-h:46px;--hbtn:34px;--font:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+:root[data-theme="light"]{color-scheme:light;--ds-bg:#f5f7fa;--ds-card:#ffffff;--ds-field:#f3f4f6;--ds-line:#e5e7eb;--ds-line2:#d1d5db;--ds-h:#111827;--ds-p:#4b5563;--ds-mute:#6b7280;--ds-hd-bg:#ffffff;--ds-hd-line:#e5e7eb;--ds-btn-bg:#f3f4f6;--ds-btn-line:#d1d5db;--ds-btn-fg:#111827;--blue:#0a6cdc;--blue-press:#0858b6}
 *,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{min-height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);-webkit-font-smoothing:antialiased}
-body{display:flex;flex-direction:column;min-height:100dvh}
-.site-header{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;height:var(--hd);padding:0 16px;background:var(--bg);border-bottom:1px solid var(--line)}
-.brand-wrap{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg)}
-.brand-logo{height:36px;width:auto;max-width:190px;object-fit:contain;display:block}
-.brand-txt{font-size:15px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
-.hd-badge{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);border:1px solid var(--line2);padding:4px 9px;border-radius:8px}
-.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 16px calc(28px + env(safe-area-inset-bottom,0px))}
-.panel{width:100%;max-width:410px;background:var(--card);border:1px solid var(--line);border-radius:20px;padding:30px 22px 22px;text-align:center}
-.anim-icon{width:62px;height:62px;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;color:var(--fg)}
-.anim-icon svg{width:58px;height:58px;overflow:visible}
-h1{margin:0 0 10px;font-size:21px;font-weight:750;letter-spacing:-.02em;line-height:1.25;color:var(--fg)}
-.cause{margin:0 0 20px;font-size:14px;line-height:1.6;color:var(--sub);word-break:break-word}
-.cause strong{color:var(--fg);font-weight:650}
-.sep{height:1px;background:var(--line);margin:0 0 16px}
-.meta{text-align:left;margin-bottom:20px}
-.meta-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--line)}
-.meta-row:last-child{border-bottom:0;padding-bottom:0}
-.meta-row span:first-child{color:var(--mute);flex:none}
-.meta-row span:last-child{color:var(--fg);font-weight:600;text-align:right;word-break:break-all}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:.02em}
-.code-line{margin:0 0 18px;padding:11px 12px;background:var(--field);border:1px solid var(--line2);border-radius:12px;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:all}
-.code-line small{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);flex:none}
-.code-line code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;font-weight:650;color:var(--fg);word-break:break-all;text-align:right}
-.btn{display:block;width:100%;padding:14px 16px;border-radius:12px;background:var(--btn-bg);color:var(--btn-fg);text-decoration:none;font-size:14px;font-weight:700;border:0;cursor:pointer;transition:opacity .15s,transform .1s}
-.btn:active{transform:scale(.988);opacity:.85}
-.foot-policy{margin:14px 0 0;font-size:11.8px;line-height:1.5;color:var(--mute)}
-.site-foot{padding:12px 16px 18px;text-align:center;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
-@keyframes sh-sad-head{0%,100%{transform:translateY(0) rotate(0deg)}35%{transform:translateY(2px) rotate(-2.5deg)}70%{transform:translateY(1.5px) rotate(2.5deg)}}
+html,body{min-height:100%;margin:0;background:var(--ds-bg);color:var(--ds-h);font-family:var(--font);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
+body{display:flex;flex-direction:column;min-height:100dvh;overflow-x:hidden}
+.site-header{position:sticky;top:0;z-index:900;display:flex;align-items:center;justify-content:space-between;height:var(--hd);padding:0 14px;background:var(--ds-hd-bg);border-bottom:1px solid var(--ds-hd-line)}
+.brand{display:inline-flex;align-items:center;min-width:0;height:100%;text-decoration:none;line-height:0}
+.ds-logo{position:relative;display:inline-block;flex:0 1 auto;min-width:0;max-width:72vw;height:var(--logo-h);line-height:0;overflow:hidden;contain:paint;-webkit-transform:translateZ(0);transform:translateZ(0)}
+.brand__logo{display:block;width:auto;height:var(--logo-h);max-width:72vw;object-fit:contain}
+.ds-sw{position:absolute;top:0;left:0;display:block;width:100%;height:100%;pointer-events:none;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.5) 28%,#000 50%,rgba(0,0,0,.5) 72%,rgba(0,0,0,0) 92%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.5) 28%,#000 50%,rgba(0,0,0,.5) 72%,rgba(0,0,0,0) 92%);animation:ds-sw35 1.8s linear infinite}
+.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:.88;animation:ds-swi35 1.8s linear infinite}
+.ds-sw2,.ds-sw2 .ds-swi{animation-delay:-.9s}
+@keyframes ds-sw35{from{transform:translate3d(-80%,0,0)}to{transform:translate3d(80%,0,0)}}
+@keyframes ds-swi35{from{transform:translate3d(80%,0,0)}to{transform:translate3d(-80%,0,0)}}
+.ds-hd{display:flex;align-items:center;gap:7px;flex:0 0 auto}
+.ds-hbtn{display:flex;align-items:center;justify-content:center;min-width:var(--hbtn);height:var(--hbtn);padding:0 9px;font-size:12px;font-weight:800;letter-spacing:.02em;color:var(--ds-btn-fg);background:var(--ds-btn-bg);border:1px solid var(--ds-btn-line);border-radius:10px;cursor:pointer;user-select:none}
+.ds-hbtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round}
+.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px 28px}
+.panel{width:100%;max-width:420px;background:var(--ds-card);border:1px solid var(--ds-line);border-radius:22px;padding:28px 22px 22px;text-align:center}
+.anim-icon{width:68px;height:68px;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;color:var(--ds-h)}
+.anim-icon svg{width:64px;height:64px;overflow:visible}
+.panel-title{margin:0 0 10px;font-size:23px;font-weight:800;letter-spacing:-.025em;line-height:1.2;color:var(--ds-h)}
+.cause{margin:0 0 20px;font-size:14px;line-height:1.58;color:var(--ds-p);word-break:break-word}
+.cause strong{color:var(--ds-h);font-weight:700}
+.timer-card{margin:0 0 18px;padding:13px 15px 12px;background:var(--ds-field);border:1px solid var(--ds-line2);border-radius:14px;text-align:left}
+.timer-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:9px}
+.timer-lbl{font-size:12.5px;font-weight:600;color:var(--ds-p)}
+.timer-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:20px;font-weight:800;letter-spacing:.03em;font-variant-numeric:tabular-nums;color:var(--ds-h)}
+.meter-bar{height:3px;width:100%;background:var(--ds-line2);border-radius:2px;overflow:hidden}
+.meter-fill{height:100%;width:100%;background:var(--blue);border-radius:2px;transition:width 1s linear}
+.spec-title{margin:0 0 6px;font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ds-mute);text-align:left}
+.meta{text-align:left;margin-bottom:18px;border-top:1px solid var(--ds-line)}
+.meta-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;font-size:13.5px;border-bottom:1px solid var(--ds-line)}
+.meta-row span:first-child{color:var(--ds-p);flex:none}
+.meta-row span:last-child{color:var(--ds-h);font-weight:650;text-align:right;word-break:break-all}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;letter-spacing:.015em}
+.code-box{margin:0 0 14px;height:50px;padding:0 8px 0 14px;background:var(--ds-field);border:1px solid var(--ds-line2);border-radius:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
+.code-box:active{border-color:var(--blue)}
+.code-val{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:700;letter-spacing:.02em;color:var(--ds-h);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.code-copy{flex:none;height:34px;padding:0 11px;border-radius:10px;background:var(--ds-card);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.code-copy svg{width:13.5px;height:13.5px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.code-copy.is-copied{color:var(--ok);border-color:var(--ok)}
+.submit-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:50px;padding:0 18px;border-radius:14px;background:var(--blue);color:#ffffff;text-decoration:none;font-size:15.5px;font-weight:700;border:0;cursor:pointer;transition:transform .1s,background-color .15s}
+.submit-btn:active{transform:scale(.986);background:var(--blue-press)}
+.submit-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.foot-policy{margin:14px 0 0;font-size:12px;line-height:1.5;color:var(--ds-mute)}
+.site-footer{padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--ds-line);text-align:center;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ds-p)}
+.site-footer a{color:var(--blue);text-decoration:none;font-weight:700}
+.site-footer__heart{display:inline-block;width:12px;height:12px;vertical-align:-2px;color:#ff3b30;animation:sh-beat .8s infinite}
+.site-footer__year{display:block;margin-top:3px;font-weight:400;opacity:.72}
+@keyframes sh-beat{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+@keyframes sh-sad-head{0%,100%{transform:translateY(0) rotate(0deg)}35%{transform:translateY(2px) rotate(-2.2deg)}70%{transform:translateY(1.5px) rotate(2.2deg)}}
 @keyframes sh-eye-blink{0%,44%,48%,92%,96%,100%{transform:scaleY(1)}46%,94%{transform:scaleY(.12)}}
-@keyframes sh-mouth-sigh{0%,100%{transform:translateY(0)}50%{transform:translateY(1.2px)}}
-@keyframes sh-happy-bob{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-2.5px) scale(1.02)}}
+@keyframes sh-mouth-sigh{0%,100%{transform:translateY(0)}50%{transform:translateY(1.1px)}}
+@keyframes sh-happy-bob{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-2.5px) scale(1.025)}}
 @keyframes sh-shackle-open{0%{transform:translateY(0) rotate(0deg)}45%{transform:translateY(-4.5px) rotate(0deg)}100%{transform:translateY(-4.5px) rotate(16deg)}}
 .svg-sad{animation:sh-sad-head 4.2s ease-in-out infinite;transform-origin:12px 12px}
 .svg-eye{animation:sh-eye-blink 4.6s infinite;transform-origin:center}
 .svg-frown{animation:sh-mouth-sigh 4.2s ease-in-out infinite}
 .svg-happy{animation:sh-happy-bob 2.8s ease-in-out infinite;transform-origin:12px 12px}
 .svg-shackle{animation:sh-shackle-open 1.1s cubic-bezier(.22,1,.36,1) forwards;transform-origin:16px 10px}
-@media (prefers-reduced-motion:reduce){.svg-sad,.svg-eye,.svg-frown,.svg-happy,.svg-shackle{animation:none}}
+@media (prefers-reduced-motion:reduce){.ds-sw,.ds-swi,.svg-sad,.svg-eye,.svg-frown,.svg-happy,.svg-shackle,.site-footer__heart{animation:none}}
 CSS;
 }
 
@@ -1261,16 +1615,35 @@ function sh_header_html($e)
 {
     $logo = sh_logo_src();
     return '<header class="site-header">'
-        . '<span class="brand-wrap">'
-        . '<img class="brand-logo" src="' . $e($logo) . '" alt="IOSMODS" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline\'">'
-        . '<span class="brand-txt" style="display:none">IOSMODS.XYZ</span>'
+        . '<a class="brand" href="/" aria-label="iosmods.xyz">'
+        . '<span class="ds-logo">'
+        . '<img class="brand__logo" src="' . $e($logo) . '" alt="iosmods.xyz" fetchpriority="high" decoding="sync" draggable="false">'
+        . '<i class="ds-sw" aria-hidden="true"><img class="ds-swi" src="' . $e($logo) . '" alt="" decoding="async" draggable="false"></i>'
+        . '<i class="ds-sw ds-sw2" aria-hidden="true"><img class="ds-swi" src="' . $e($logo) . '" alt="" decoding="async" draggable="false"></i>'
         . '</span>'
-        . '<span class="hd-badge">SECURITY</span>'
-        . '</header>';
+        . '</a>'
+        . '<div class="ds-hd">'
+        . '<span class="ds-hbtn" style="cursor:default">VI</span>'
+        . '<button class="ds-hbtn" id="ds-theme-btn" type="button" aria-label="Đổi giao diện"></button>'
+        . '</div>'
+        . '</header>'
+        . '<script>(function(){var r=document.documentElement,b=document.getElementById("ds-theme-btn");if(!b)return;'
+        . 'var M=\'<svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>\','
+        . 'S=\'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4"/></svg>\';'
+        . 'function p(){b.innerHTML=r.getAttribute("data-theme")==="light"?S:M;}p();'
+        . 'b.addEventListener("click",function(){var l=r.getAttribute("data-theme")!=="light";if(l)r.setAttribute("data-theme","light");else r.removeAttribute("data-theme");try{localStorage.setItem("ds-theme",l?"light":"dark");}catch(e){}p();});'
+        . '})();</script>';
+}
+
+function sh_footer_html()
+{
+    return '<footer class="site-footer">Made with '
+        . '<svg class="site-footer__heart" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
+        . ' by <a href="/">iosmods</a><span class="site-footer__year">@2024</span></footer>';
 }
 
 /**
- * TIER 1 UI — Frameless Animated Happy Face (😊) in Pure iosmods.xyz Matte Style:
+ * TIER 1 UI — Frameless Animated Happy Face (😊) in Native iosmods.xyz Style + Full-Size Main Logo:
  * Triggered immediately when VPN / Fake-Region or passive browser Userscript/Extension is active.
  */
 function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
@@ -1302,6 +1675,7 @@ function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
 <meta name="robots" content="noindex, nofollow">
 <title>Kiểm tra kết nối · iosmods.xyz</title>
 <script>try{if(localStorage.getItem('ds-theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
@@ -1312,27 +1686,32 @@ function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 <main class="stage">
   <section class="panel" role="dialog">
     <div class="anim-icon" aria-hidden="true">
-      <svg class="svg-happy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="9.5"/>
-        <g class="svg-eye"><path d="M8.3 10.1c.35-.55.85-.82 1.4-.82s1.05.27 1.4.82"/></g>
-        <g class="svg-eye"><path d="M12.9 10.1c.35-.55.85-.82 1.4-.82s1.05.27 1.4.82"/></g>
-        <path d="M8.2 14.2c.95 1.65 2.25 2.45 3.8 2.45s2.85-.8 3.8-2.45"/>
+      <svg class="svg-happy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9.6"/>
+        <g class="svg-eye"><path d="M8.1 10.2c.38-.62.92-.92 1.5-.92s1.12.3 1.5.92"/></g>
+        <g class="svg-eye"><path d="M12.9 10.2c.38-.62.92-.92 1.5-.92s1.12.3 1.5.92"/></g>
+        <path d="M8.1 14.1c1 1.7 2.32 2.55 3.9 2.55s2.9-.85 3.9-2.55"/>
       </svg>
     </div>
-    <h1>Vui lòng tắt công cụ trung gian</h1>
-    <p class="cause">Hệ thống bảo mật <strong>iosmods.xyz</strong> phát hiện trình duyệt hoặc mạng của bạn đang bật <strong><?= $e($whatOff) ?></strong>. Vui lòng tắt hoàn toàn công cụ này trước khi truy cập website.</p>
-    <div class="sep"></div>
+    <h1 class="panel-title">Vui lòng tắt công cụ trung gian</h1>
+    <p class="cause">Hệ thống bảo mật <strong>iosmods.xyz</strong> ghi nhận kết nối của bạn đang bật <strong><?= $e($whatOff) ?></strong>. Hãy tắt hoàn toàn công cụ này rồi bấm truy cập lại.</p>
+
+    <div class="spec-title">Thông tin kiểm tra</div>
     <div class="meta">
-      <div class="meta-row"><span>Nguyên nhân</span><span>Đang bật <?= $e($whatOff) ?></span></div>
+      <div class="meta-row"><span>Công cụ phát hiện</span><span><?= $e($whatOff) ?></span></div>
       <div class="meta-row"><span>Địa chỉ kết nối</span><span class="mono"><?= $e($ip) ?></span></div>
-      <div class="meta-row"><span>Trạng thái bảo mật</span><span>Chưa bị khoá truy cập</span></div>
+      <div class="meta-row"><span>Trạng thái tài khoản</span><span>An toàn · Chưa bị khoá</span></div>
     </div>
-    <a class="btn" href="/" onclick="document.cookie='sh_vg_retry=1;path=/;max-age=20';">Đã tắt xong · Truy cập lại</a>
-    <p class="foot-policy">Chính sách bảo mật iosmods.xyz nghiêm cấm sử dụng VPN chuyển vùng hoặc tiện ích Script can thiệp vào hệ thống.</p>
+
+    <a class="submit-btn" href="/" onclick="document.cookie='sh_vg_retry=1;path=/;max-age=20';">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+      <span>Đã tắt xong · Truy cập lại</span>
+    </a>
+    <p class="foot-policy">Quy định bảo mật của iosmods.xyz nghiêm cấm sử dụng VPN chuyển vùng hoặc tiện ích Script can thiệp vào hệ thống.</p>
   </section>
   <?= $previewBarHtml ?>
 </main>
-<footer class="site-foot">IOSMODS.XYZ SECURITY</footer>
+<?= sh_footer_html() ?>
 </body>
 </html>
 <?php
@@ -1340,7 +1719,7 @@ function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 
 /**
  * TIER 2 UI — Frameless Animated Sad Face (☹️) + Animated Unlock Transition (🔓)
- * in Pure iosmods.xyz Matte Monochrome Style + Multi-Segment Encrypted Case Code!
+ * in Native iosmods.xyz Style + Full-Size Main Logo + Multi-Segment Encrypted Case Code!
  */
 function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = '')
 {
@@ -1359,8 +1738,11 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
             $expiresTs = (int) $parsed;
         }
     }
+    $createdTs = !empty($ban['created_ts']) ? (int) $ban['created_ts'] : ($expiresTs > 0 ? $now - 60 : $now);
+    $totalSec  = $expiresTs > 0 ? max(60, $expiresTs - $createdTs) : 0;
     $isTemp    = $expiresTs > 0;
     $left      = $isTemp ? max(1, $expiresTs - $now) : 0;
+    $pct       = ($isTemp && $totalSec > 0) ? max(2, min(100, (int) round(($left / $totalSec) * 100))) : 100;
     $banType   = isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'manual';
     $isSpam    = in_array($banType, ['key_spam', 'prod_spam'], true);
     $isPreview = !empty($ban['is_preview']);
@@ -1408,6 +1790,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
 <meta name="robots" content="noindex, nofollow">
 <title><?= $e($heading) ?> · iosmods.xyz</title>
 <script>try{if(localStorage.getItem('ds-theme')==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
@@ -1418,21 +1801,31 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
 <main class="stage">
   <section class="panel" role="alert">
     <div class="anim-icon" id="sh-icon-box" aria-hidden="true">
-      <svg class="svg-sad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="9.5"/>
-        <g class="svg-eye"><circle cx="9" cy="9.9" r="1" fill="currentColor" stroke="none"/></g>
-        <g class="svg-eye"><circle cx="15" cy="9.9" r="1" fill="currentColor" stroke="none"/></g>
-        <path class="svg-frown" d="M8.4 16.2c1-1.4 2.25-2.05 3.6-2.05s2.6.65 3.6 2.05"/>
+      <svg class="svg-sad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9.6"/>
+        <path d="M7.7 8.4c.7-.45 1.5-.55 2.3-.3"/>
+        <path d="M16.3 8.4c-.7-.45-1.5-.55-2.3-.3"/>
+        <g class="svg-eye"><circle cx="9.1" cy="10.5" r="1.05" fill="currentColor" stroke="none"/></g>
+        <g class="svg-eye"><circle cx="14.9" cy="10.5" r="1.05" fill="currentColor" stroke="none"/></g>
+        <path class="svg-frown" d="M8.3 16.3c1-1.45 2.3-2.15 3.7-2.15s2.7.7 3.7 2.15"/>
       </svg>
     </div>
-    <h1 id="sh-title"><?= $e($heading) ?></h1>
+    <h1 class="panel-title" id="sh-title"><?= $e($heading) ?></h1>
     <p class="cause" id="sh-cause"><strong>Nguyên nhân:</strong> <?= $e($reason) ?></p>
-    <div class="sep"></div>
 
-    <div class="meta">
 <?php if ($isTemp) { ?>
-      <div class="meta-row"><span>Thời gian tự gỡ khoá</span><span class="mono" id="sh-cd" data-left="<?= (int) $left ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span></div>
-<?php } else { ?>
+    <div class="timer-card">
+      <div class="timer-top">
+        <span class="timer-lbl">Tự động mở khoá sau</span>
+        <span class="timer-val" id="sh-cd" data-left="<?= (int) $left ?>" data-total="<?= (int) max($left, $totalSec) ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span>
+      </div>
+      <div class="meter-bar"><div class="meter-fill" id="sh-bar" style="width:<?= (int) $pct ?>%"></div></div>
+    </div>
+<?php } ?>
+
+    <div class="spec-title">Chi tiết bảo mật</div>
+    <div class="meta">
+<?php if (!$isTemp) { ?>
       <div class="meta-row"><span>Thời hạn khoá</span><span>Vĩnh viễn (Chờ Admin xét duyệt)</span></div>
 <?php } ?>
       <div class="meta-row"><span>Địa chỉ IP ghi nhận</span><span class="mono"><?= $e($ip) ?></span></div>
@@ -1442,23 +1835,48 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       <div class="meta-row"><span>Chế độ bảo vệ</span><span>Khoá đồng bộ IP &amp; Thiết bị</span></div>
     </div>
 
-    <div class="code-line" onclick="try{navigator.clipboard.writeText('<?= $e($caseCode) ?>');this.querySelector('small').textContent='ĐÃ SAO CHÉP';}catch(e){}" title="Chạm để sao chép mã xác minh">
-      <small>Mã xác minh</small>
-      <code><?= $e($caseCode) ?></code>
+    <div class="spec-title">Mã xác minh gửi Admin</div>
+    <div class="code-box" id="sh-code-box" data-code="<?= $e($caseCode) ?>" title="Chạm để sao chép mã xác minh">
+      <span class="code-val"><?= $e($caseCode) ?></span>
+      <button type="button" class="code-copy" id="sh-copy-btn">
+        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <span id="sh-copy-txt">Sao chép</span>
+      </button>
     </div>
 
-    <a class="btn" href="<?= $e($contact) ?>" rel="noopener">Liên hệ Admin kiểm tra</a>
-    <p class="foot-policy">Truy cập chỉ được mở lại khi hệ thống tự động hết hạn khoá hoặc khi Admin xác minh mã trên. Mã xác minh sẽ tự huỷ ngay khi mở chặn.</p>
+    <a class="submit-btn" id="sh-contact-btn" href="<?= $e($contact) ?>" rel="noopener">
+      <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+      <span>Gửi mã cho Admin mở khoá</span>
+    </a>
+    <p class="foot-policy">Bắt buộc đợi hết thời gian khoá hoặc gửi mã xác minh trên cho Admin kiểm tra. Mã xác minh sẽ tự động huỷ ngay khi mở chặn.</p>
   </section>
   <?= $previewBarHtml ?>
 </main>
-<footer class="site-foot">IOSMODS.XYZ SECURITY</footer>
-<?php if ($isTemp) { ?>
+<?= sh_footer_html() ?>
 <script>
 (function(){
+  var box = document.getElementById('sh-code-box'), btn = document.getElementById('sh-copy-btn'), txt = document.getElementById('sh-copy-txt'), cbtn = document.getElementById('sh-contact-btn');
+  function copyCode(){
+    if (!box) return;
+    var c = box.getAttribute('data-code') || '';
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(c);
+      } else {
+        var ta = document.createElement('textarea'); ta.value = c; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+      }
+      if (btn) btn.classList.add('is-copied');
+      if (txt) txt.textContent = 'Đã chép ✓';
+    } catch(e){}
+  }
+  if (box) box.addEventListener('click', copyCode);
+  if (cbtn) cbtn.addEventListener('click', copyCode);
+
   var el = document.getElementById('sh-cd');
   if (!el) return;
   var left = parseInt(el.getAttribute('data-left') || '0', 10);
+  var total = Math.max(left, parseInt(el.getAttribute('data-total') || '60', 10));
+  var bar = document.getElementById('sh-bar');
   var isPv = el.getAttribute('data-preview') === '1';
   function pad(n){ return n < 10 ? '0' + n : '' + n; }
   function fmt(s){
@@ -1468,10 +1886,11 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
   function showUnlockAndReload(){
     var ic = document.getElementById('sh-icon-box'), tt = document.getElementById('sh-title'), cs = document.getElementById('sh-cause');
     if (ic) {
-      ic.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.2"/><path class="svg-shackle" d="M8 11V7a4 4 0 0 1 8 0v2"/><circle cx="12" cy="16" r="1.1" fill="currentColor" stroke="none"/></svg>';
+      ic.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.4"/><path class="svg-shackle" d="M8 11V7a4 4 0 0 1 8 0v2"/><circle cx="12" cy="16" r="1.15" fill="currentColor" stroke="none"/></svg>';
     }
-    if (tt) tt.textContent = 'Đã gỡ khoá bảo mật';
-    if (cs) cs.innerHTML = 'Hệ thống đã hoàn tất kiểm tra và tự động mở khoá truy cập.';
+    if (tt) tt.textContent = 'Đã tự động mở khoá';
+    if (cs) cs.innerHTML = 'Hệ thống đã hoàn tất kiểm tra bảo mật và mở khoá kết nối.';
+    if (bar) bar.style.width = '0%';
     if (!isPv) setTimeout(function(){ window.location.reload(); }, 1100);
   }
   var iv = setInterval(function(){
@@ -1483,10 +1902,10 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       return;
     }
     el.textContent = fmt(left);
+    if (bar) bar.style.width = Math.max(1, Math.round((left / total) * 100)) + '%';
   }, 1000);
 })();
 </script>
-<?php } ?>
 </body>
 </html>
 <?php
@@ -1508,11 +1927,18 @@ function sh_handle_preview_showcase()
     $tok  = rawurlencode(sh_preview_token());
     $ip   = sh_client_ip() ?: '113.161.72.18';
 
-    $nav = '<div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:410px;width:100%">'
-        . '<a href="?sh_test_view=ban_ip&k=' . $tok . '" style="padding:7px 11px;border-radius:9px;font-size:11.5px;font-weight:650;text-decoration:none;border:1px solid #27272d;background:#121215;color:#e5e7eb">1. Bị chặn bảo mật</a>'
-        . '<a href="?sh_test_view=spam_sys&k=' . $tok . '" style="padding:7px 11px;border-radius:9px;font-size:11.5px;font-weight:650;text-decoration:none;border:1px solid #27272d;background:#121215;color:#e5e7eb">2. Khoá Spam (5p–30p)</a>'
-        . '<a href="?sh_test_view=happy_vpn&k=' . $tok . '" style="padding:7px 11px;border-radius:9px;font-size:11.5px;font-weight:650;text-decoration:none;border:1px solid #27272d;background:#121215;color:#e5e7eb">3. Mặt cười tắt VPN/Script</a>'
-        . '<a href="?sh_test_view=unlock_anim&k=' . $tok . '" style="padding:7px 11px;border-radius:9px;font-size:11.5px;font-weight:650;text-decoration:none;border:1px solid #27272d;background:#121215;color:#e5e7eb">4. Hiệu ứng Mở khoá</a>'
+    $pill = function ($m, $lbl) use ($mode, $tok) {
+        $act = ($mode === $m) || ($m === 'ban_ip' && !in_array($mode, ['spam_sys', 'happy_vpn', 'unlock_anim'], true));
+        $st  = $act
+            ? 'border:1px solid var(--blue);background:var(--blue);color:#fff'
+            : 'border:1px solid var(--ds-line2);background:var(--ds-field);color:var(--ds-h)';
+        return '<a href="?sh_test_view=' . $m . '&k=' . $tok . '" style="padding:8px 12px;border-radius:10px;font-size:12px;font-weight:700;text-decoration:none;' . $st . '">' . $lbl . '</a>';
+    };
+    $nav = '<div style="margin-top:16px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:420px;width:100%">'
+        . $pill('ban_ip', '1. Bị chặn bảo mật')
+        . $pill('spam_sys', '2. Khoá Spam (5p–30p)')
+        . $pill('happy_vpn', '3. Mặt cười tắt VPN/Script')
+        . $pill('unlock_anim', '4. Hiệu ứng Mở khoá')
         . '</div>';
 
     if ($mode === 'happy_vpn') {
