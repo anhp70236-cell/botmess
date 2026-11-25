@@ -1,19 +1,24 @@
-<?php /* UPGRADE-V2 */
+<?php /* UPGRADE-V3-SMART */
 /* ==========================================================================
-   telegram.php  —  Telegram alerts for DEVNVIOS (library)
-   Loaded by index.php and telegram_bot.php with require_once.
-   - Does NOTHING until telegram_config.php is filled in (the site keeps working exactly as before).
-   - Never deletes or alters any data. Never throws: a Telegram problem can not break the website.
-   - All function names start with tg_ so they can not clash with the rest of the site.
-   - Written for PHP 7.2+ (the host runs 7.2.34).
+   telegram.php  —  Smart Telegram Core, Permanent Premium Emoji Vault,
+   Compact Real-Time Alerts & Command Auto-Delete Engine for IOSMODS.XYZ
+   - Website notifications/alerts are NEVER auto-deleted.
+   - Admin commands & bot control panels auto-delete after a configurable delay.
+   - Custom emojis sent by Admin are auto-learned, applied across 100% of bot icons,
+     and stored permanently in MySQL site_config + JSON vault (survives Premium expiry).
+   - PHP 7.2 – 8.3+ compatible. Never throws fatal errors to the website.
    ========================================================================== */
 
 if (!defined('TG_LIB_LOADED')) {
     define('TG_LIB_LOADED', 1);
 }
 
+if (is_file(__DIR__ . '/security_shield.php')) {
+    require_once __DIR__ . '/security_shield.php';
+}
+
 /* ------------------------------------------------------------------
- * Config
+ * 1. Configuration & Admin Identity
  * ------------------------------------------------------------------ */
 
 function tg_cfg($key = null, $default = null)
@@ -29,11 +34,25 @@ function tg_cfg($key = null, $default = null)
             }
         }
         $cfg += [
-            'bot_token' => '', 'admin_ids' => [], 'webhook_secret' => '', 'setup_key' => '', 'webhook_url' => '',
-            'site_name' => 'DEVNVIOS', 'allow_destructive' => false, 'timezone' => 'Asia/Ho_Chi_Minh',
-            'scan_interval' => 10, 'api_base' => 'https://api.telegram.org',
-            'tag_user_id' => '', 'tag_name' => '', 'contact_url' => 'https://t.me/iosnea',
-            'emoji_enabled' => true, 'emoji_pack' => '', 'emoji_ids' => [], 'emoji_map' => [], 'button_colors' => true,
+            'bot_token'         => '',
+            'admin_ids'         => [],
+            'webhook_secret'    => '',
+            'setup_key'         => '',
+            'webhook_url'       => '',
+            'site_name'         => 'IOSMODS.XYZ',
+            'allow_destructive' => false,
+            'timezone'          => 'Asia/Ho_Chi_Minh',
+            'scan_interval'     => 10,
+            'api_base'          => 'https://api.telegram.org',
+            'tag_user_id'       => '',
+            'tag_name'          => '',
+            'contact_url'       => 'https://t.me/iosnea',
+            'emoji_enabled'     => true,
+            'emoji_pack'        => '',
+            'emoji_ids'         => [],
+            'emoji_map'         => [],
+            'button_colors'     => true,
+            'autodelete_sec'    => 120,
         ];
     }
     if ($key === null) {
@@ -42,7 +61,6 @@ function tg_cfg($key = null, $default = null)
     return array_key_exists($key, $cfg) ? $cfg[$key] : $default;
 }
 
-/** Admin chat IDs as strings (digits, may start with - for groups). */
 function tg_admin_ids()
 {
     $ids = [];
@@ -62,7 +80,7 @@ function tg_enabled()
 }
 
 /* ------------------------------------------------------------------
- * Small helpers
+ * 2. String, Time & IP Helpers
  * ------------------------------------------------------------------ */
 
 function tg_e($s)
@@ -94,7 +112,7 @@ function tg_clip($s, $max)
 function tg_now($format = 'Y-m-d H:i:s')
 {
     try {
-        $d = new DateTime('now', new DateTimeZone((string) tg_cfg('timezone', 'UTC')));
+        $d = new DateTime('now', new DateTimeZone((string) tg_cfg('timezone', 'Asia/Ho_Chi_Minh')));
         return $d->format($format);
     } catch (Exception $e) {
         return date($format);
@@ -105,9 +123,9 @@ function tg_hours($h)
 {
     $h = (int) $h;
     if ($h >= 48 && $h % 24 === 0) {
-        return ($h / 24) . ' days';
+        return ($h / 24) . ' ngày';
     }
-    return $h . ' h';
+    return $h . 'h';
 }
 
 function tg_db()
@@ -118,20 +136,20 @@ function tg_db()
 
 function tg_ip()
 {
+    if (function_exists('sh_client_ip')) {
+        $sip = (string) sh_client_ip();
+        if ($sip !== '') {
+            return $sip;
+        }
+    }
     if (function_exists('client_ip')) {
         return (string) client_ip();
-    }
-    foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_REAL_IP'] as $h) { // behind Cloudflare / a proxy REMOTE_ADDR is the proxy, not the visitor
-        if (!empty($_SERVER[$h]) && filter_var(trim((string) $_SERVER[$h]), FILTER_VALIDATE_IP)) {
-            return substr(trim((string) $_SERVER[$h]), 0, 45);
-        }
     }
     return substr((string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : ''), 0, 45);
 }
 
 /* ------------------------------------------------------------------
- * Tiny JSON storage (settings, throttles, scan positions). Files live in ./cache next to index.php
- * (falls back to the temp dir). File names carry a hash so they can not be guessed.
+ * 3. Lock-Safe JSON Storage in ./cache (gitignored)
  * ------------------------------------------------------------------ */
 
 function tg_dir()
@@ -155,12 +173,15 @@ function tg_path($name)
 
 function tg_store_read($name)
 {
-    $raw  = @file_get_contents(tg_path($name));
+    $p = tg_path($name);
+    if (!is_file($p)) {
+        return [];
+    }
+    $raw  = @file_get_contents($p);
     $data = is_string($raw) ? json_decode($raw, true) : null;
     return is_array($data) ? $data : [];
 }
 
-/** Read-modify-write under an exclusive lock. $fn receives the array and returns the new array. */
 function tg_store_update($name, $fn)
 {
     $fh = @fopen(tg_path($name), 'c+');
@@ -168,7 +189,7 @@ function tg_store_update($name, $fn)
         $r = $fn([]);
         return is_array($r) ? $r : [];
     }
-    flock($fh, LOCK_EX);
+    @flock($fh, LOCK_EX);
     $raw  = stream_get_contents($fh);
     $data = json_decode((string) $raw, true);
     if (!is_array($data)) {
@@ -180,14 +201,13 @@ function tg_store_update($name, $fn)
     }
     ftruncate($fh, 0);
     rewind($fh);
-    fwrite($fh, json_encode($new, JSON_UNESCAPED_UNICODE));
+    fwrite($fh, json_encode($new, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     fflush($fh);
-    flock($fh, LOCK_UN);
+    @flock($fh, LOCK_UN);
     fclose($fh);
     return $new;
 }
 
-/** true = allowed (and remembered); false = same signature was seen less than $seconds ago. */
 function tg_throttle($sig, $seconds)
 {
     $allowed = false;
@@ -211,25 +231,25 @@ function tg_throttle($sig, $seconds)
 }
 
 /* ------------------------------------------------------------------
- * Alert categories (the bot has a screen to switch each one on/off)
+ * 4. Alert Categories & Owner Tag
  * ------------------------------------------------------------------ */
 
 function tg_categories()
 {
     return [
-        'register' => ['🆕 Registrations', true],
-        'key'      => ['🔑 Keys', true],
-        'freekey'  => ['🔗 Free key clicks', true],
-        'tool'     => ['🧰 Tools', true],
-        'admin'    => ['🛡 Admin panel', true],
-        'security' => ['🔐 Security', true],
-        'login'    => ['🔑 Failed logins', false],
-        'error'    => ['🚨 Site errors', true],
-        'audit'    => ['🤖 Bot actions', true],
-        'minor'    => ['🔕 Minor events', true],
-        'ban'      => ['🚫 IP bans', true],
-        'visit'    => ['🚪 Page visits', true],
-        'activity' => ['👁 Other actions', true],
+        'register' => ['🆕 Đăng ký mới', true],
+        'freekey'  => ['🎁 Get Key Free', true],
+        'key'      => ['🔑 Nhập Key', true],
+        'tool'     => ['📦 Bấm sản phẩm', true],
+        'ddos'     => ['🛡 Chống DDoS / Spam', true],
+        'vpn'      => ['🕵️ VPN & Đa tài khoản', true],
+        'ban'      => ['🚫 Khóa IP / User', true],
+        'admin'    => ['👑 Admin CP', true],
+        'error'    => ['🚨 Lỗi hệ thống', true],
+        'login'    => ['🔐 Đăng nhập sai', false],
+        'visit'    => ['🚪 Mở trang chủ', false],
+        'minor'    => ['🔕 Sự kiện phụ', false],
+        'audit'    => ['🤖 Nhật ký Bot', false],
     ];
 }
 
@@ -245,10 +265,6 @@ function tg_cat_on($cat)
     }
     return (bool) $cats[$cat][1];
 }
-
-/* ------------------------------------------------------------------
- * Tag the owner in every alert:  <a href="tg://user?id=...">@iosnea</a>  (a real mention = push notification)
- * ------------------------------------------------------------------ */
 
 function tg_tag()
 {
@@ -268,156 +284,251 @@ function tg_tag()
 }
 
 /* ------------------------------------------------------------------
- * Activity log (table tg_activity): EVERY member / admin / bot action except logins.
- * Insert only: nothing here ever deletes anything.
+ * 5. Command & Bot Panel Auto-Delete Engine (NEVER deletes Website Alerts!)
  * ------------------------------------------------------------------ */
 
-function tg_ensure_tables()
+function tg_autodelete_ttl()
 {
-    static $done = false;
-    if ($done) {
-        return;
+    $s = tg_store_read('settings');
+    if (isset($s['autodelete_sec'])) {
+        return max(0, (int) $s['autodelete_sec']);
     }
-    $done = true;
-    $c = tg_db();
-    if ($c === null) {
-        return;
-    }
-    try {
-        mysqli_query($c, "CREATE TABLE IF NOT EXISTS `tg_activity` (
-            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-            `actor` VARCHAR(100) NOT NULL DEFAULT '',
-            `role` VARCHAR(12) NOT NULL DEFAULT 'member',
-            `action` VARCHAR(40) NOT NULL DEFAULT '',
-            `detail` VARCHAR(500) NOT NULL DEFAULT '',
-            `ip` VARCHAR(45) NOT NULL DEFAULT '',
-            `created_at` DATETIME NOT NULL,
-            PRIMARY KEY (`id`),
-            KEY `idx_actor` (`actor`),
-            KEY `idx_ip` (`ip`),
-            KEY `idx_created` (`created_at`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-        tg_ensure_block_table($c);
-        if (function_exists('ipg_ensure')) {
-            ipg_ensure($c);
-        }
-    } catch (Throwable $e) {
-        error_log('[telegram.php] ensure tables: ' . $e->getMessage());
-    }
+    return max(0, (int) tg_cfg('autodelete_sec', 120));
 }
 
-/** Write one activity row. Never throws. $role: member | admin | bot */
-function tg_activity($actor, $role, $action, $detail = '', $ip = null)
+function tg_autodelete_set_ttl($seconds)
 {
-    $c = tg_db();
-    if ($c === null || (string) $actor === '') {
+    $seconds = max(0, min(86400, (int) $seconds));
+    tg_store_update('settings', function ($s) use ($seconds) {
+        $s['autodelete_sec'] = $seconds;
+        return $s;
+    });
+    return $seconds;
+}
+
+/**
+ * Schedules ONLY Admin commands and Bot interactive UI panels for auto-deletion.
+ * Website notification cards MUST NEVER call this function.
+ */
+function tg_autodelete_register($chatId, $messageId, $customTtl = null)
+{
+    $chatId    = trim((string) $chatId);
+    $messageId = (int) $messageId;
+    if ($chatId === '' || $messageId <= 0) {
         return;
     }
-    if ($ip === null) {
-        $ip = tg_ip();
+    $ttl = $customTtl !== null ? (int) $customTtl : tg_autodelete_ttl();
+    if ($ttl <= 0) {
+        return;
     }
-    for ($try = 0; $try < 2; $try++) {
-        try {
-            $stmt = $c->prepare('INSERT INTO tg_activity (actor, role, action, detail, ip, created_at) VALUES (?, ?, ?, ?, ?, NOW())');
-            if ($stmt === false) {
-                throw new RuntimeException($c->error);
-            }
-            $a  = tg_clip($actor, 100);
-            $r  = tg_clip($role, 12);
-            $ac = tg_clip($action, 40);
-            $d  = tg_clip($detail, 490);
-            $i  = substr((string) $ip, 0, 45);
-            $stmt->bind_param('sssss', $a, $r, $ac, $d, $i);
-            $stmt->execute();
-            $stmt->close();
-            return;
-        } catch (Throwable $e) {
-            if ($try === 0 && stripos($e->getMessage(), "doesn't exist") !== false) {
-                tg_ensure_tables_force();
-                continue;
-            }
-            error_log('[telegram.php] activity: ' . $e->getMessage());
-            return;
+    $due = time() + max(10, $ttl);
+    tg_store_update('autodelete', function ($q) use ($chatId, $messageId, $due) {
+        if (!is_array($q)) {
+            $q = [];
+        }
+        $q[$chatId . ':' . $messageId] = $due;
+        if (count($q) > 500) {
+            asort($q);
+            $q = array_slice($q, -400, null, true);
+        }
+        return $q;
+    });
+    tg_autodelete_spawn_worker();
+}
+
+function tg_autodelete_sweep()
+{
+    if (!tg_enabled()) {
+        return 0;
+    }
+    $q = tg_store_read('autodelete');
+    if (!$q) {
+        return 0;
+    }
+    $now = time();
+    $due = [];
+    foreach ($q as $k => $exp) {
+        if ((int) $exp <= $now) {
+            $due[$k] = (int) $exp;
         }
     }
+    if (!$due) {
+        return 0;
+    }
+    $dueKeys = array_slice(array_keys($due), 0, 25);
+    tg_store_update('autodelete', function ($cur) use ($dueKeys) {
+        foreach ($dueKeys as $dk) {
+            unset($cur[$dk]);
+        }
+        return $cur;
+    });
+    $deleted = 0;
+    foreach ($dueKeys as $dk) {
+        $parts = explode(':', (string) $dk, 2);
+        if (count($parts) === 2 && (int) $parts[1] > 0) {
+            $r = tg_api_raw('deleteMessage', ['chat_id' => $parts[0], 'message_id' => (int) $parts[1]], 3);
+            if (!empty($r['ok'])) {
+                $deleted++;
+            }
+        }
+    }
+    return $deleted;
 }
 
-function tg_ensure_tables_force()
+/** Spawns at most 1 lightweight background PHP timer so command messages auto-delete even with 0 web traffic. */
+function tg_autodelete_spawn_worker()
 {
-    $c = tg_db();
-    if ($c === null) {
+    $lockFile = tg_dir() . '/tg_ad_worker.lock';
+    if (is_file($lockFile) && @filemtime($lockFile) > time() - 25) {
+        return; // worker already active
+    }
+    $botScript = __DIR__ . '/telegram_bot.php';
+    if (!is_file($botScript)) {
         return;
     }
-    try {
-        mysqli_query($c, "CREATE TABLE IF NOT EXISTS `tg_activity` (
-            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-            `actor` VARCHAR(100) NOT NULL DEFAULT '',
-            `role` VARCHAR(12) NOT NULL DEFAULT 'member',
-            `action` VARCHAR(40) NOT NULL DEFAULT '',
-            `detail` VARCHAR(500) NOT NULL DEFAULT '',
-            `ip` VARCHAR(45) NOT NULL DEFAULT '',
-            `created_at` DATETIME NOT NULL,
-            PRIMARY KEY (`id`),
-            KEY `idx_actor` (`actor`),
-            KEY `idx_ip` (`ip`),
-            KEY `idx_created` (`created_at`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-        tg_ensure_block_table($c);
-    } catch (Throwable $e) {
-        error_log('[telegram.php] ensure tables: ' . $e->getMessage());
+    $disabled = strtolower((string) ini_get('disable_functions'));
+    $phpBin   = defined('PHP_BINARY') && PHP_BINARY !== '' && stripos(PHP_BINARY, 'fpm') === false && stripos(PHP_BINARY, 'httpd') === false
+        ? PHP_BINARY
+        : 'php';
+    @touch($lockFile);
+    if (DIRECTORY_SEPARATOR === '\\') {
+        if (function_exists('popen') && strpos($disabled, 'popen') === false) {
+            $cmd = 'start /B "" "' . $phpBin . '" "' . $botScript . '" --autodelete-sweep >NUL 2>&1';
+            $h   = @popen($cmd, 'r');
+            if (is_resource($h)) {
+                @pclose($h);
+            }
+        }
+    } else {
+        if (function_exists('exec') && strpos($disabled, 'exec') === false) {
+            $cmd = escapeshellcmd($phpBin) . ' ' . escapeshellarg($botScript) . ' --autodelete-sweep >/dev/null 2>&1 &';
+            @exec($cmd);
+        }
     }
-}
-
-/** Which events are saved in tg_activity, and how: [actor, role, action, detail] or null. Logins are never saved. */
-function tg_activity_map($type, array $d)
-{
-    $user = isset($d['username']) ? (string) $d['username'] : '';
-    switch ($type) {
-        case 'register':
-            return [$user, 'member', 'register', 'new account' . (isset($d['id']) && $d['id'] ? ' #' . (int) $d['id'] : '')];
-        case 'key_ok':
-            return [$user, 'member', 'key_ok', (isset($d['type']) ? $d['type'] : '?') . ' key ' . (isset($d['key']) ? $d['key'] : '') . ', ' . (int) (isset($d['turns']) ? $d['turns'] : 0) . ' turn(s)'];
-        case 'key_invalid':
-            return [$user, 'member', 'key_wrong', (isset($d['type']) ? $d['type'] : '?') . ' typed: ' . (isset($d['key']) ? $d['key'] : '')];
-        case 'key_has_turn':
-            return [$user, 'member', 'key_rejected', 'still has an active key'];
-        case 'key_error':
-            return [$user, 'member', 'key_error', 'transaction error: ' . (isset($d['key']) ? $d['key'] : '')];
-        case 'key_locked':
-            return [$user, 'member', 'key_locked', 'too many wrong keys'];
-        case 'freekey_click':
-            return [$user, 'member', 'freekey_click', 'opened the free key link'];
-        case 'tool_use':
-            return [$user, 'member', 'tool_' . (isset($d['outcome']) ? $d['outcome'] : '?'),
-                (isset($d['tool']) ? $d['tool'] : '?') . (isset($d['tool_type']) && $d['tool_type'] !== '' ? ' (' . $d['tool_type'] . ')' : '')
-                . (!empty($d['reopen']) ? ' reopen' : '') . (isset($d['turns']) ? ' turns left ' . (int) $d['turns'] : '')];
-        case 'page_view':
-            return [$user, isset($d['role']) ? (string) $d['role'] : 'member', 'page_view', 'opened the home page' . (!empty($d['status']) ? ' (?status=' . $d['status'] . ')' : '')];
-        case 'member_action':
-            return [$user, isset($d['role']) ? (string) $d['role'] : 'member', isset($d['action']) ? (string) $d['action'] : 'action', isset($d['detail']) ? (string) $d['detail'] : ''];
-        case 'admin_log':
-            return [$user !== '' ? $user : 'admin_cp', 'admin_cp', 'cp:' . (isset($d['action']) ? (string) $d['action'] : ''), isset($d['detail']) ? (string) $d['detail'] : ''];
-        case 'ip_blocked_hit':
-            return [$user !== '' ? $user : 'ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'blocked_visit', 'banned IP tried to enter, hit #' . (int) (isset($d['hits']) ? $d['hits'] : 1)];
-        case 'ip_ban':
-            return ['tg:' . (isset($d['by']) ? $d['by'] : ''), 'bot', 'ip_ban', (isset($d['ip']) ? $d['ip'] : '') . (isset($d['reason']) ? ' · ' . $d['reason'] : '')];
-        case 'ip_unban':
-            return ['tg:' . (isset($d['by']) ? $d['by'] : ''), 'bot', 'ip_unban', isset($d['ip']) ? (string) $d['ip'] : ''];
-        case 'user_block':
-            return [$user, 'bot', 'user_block', (isset($d['reason']) ? $d['reason'] : '') . ' · by tg:' . (isset($d['by']) ? $d['by'] : '')];
-        case 'user_unblock':
-            return [$user, 'bot', 'user_unblock', 'by tg:' . (isset($d['by']) ? $d['by'] : '')];
-    }
-    return null;
 }
 
 /* ------------------------------------------------------------------
- * TELEGRAM CUSTOM EMOJI + coloured buttons
- * - Every normal emoji in a message / button is swapped for the matching emoji of your pack at send time.
- * - If the bot owner has no Premium (or Telegram refuses), it silently falls back to normal emoji.
+ * 6. Permanent Custom Emoji Vault (Survives Premium Expiry Forever!)
  * ------------------------------------------------------------------ */
 
-/** Position (1 = first) of each icon inside the "Reseller < Emoji >" pack. Check with /emoji, change with /emojimap. */
+function tg_emoji_norm($s)
+{
+    return str_replace(["\u{FE0F}", "\u{FE0E}"], '', (string) $s);
+}
+
+function tg_emoji_vault_file()
+{
+    return tg_dir() . '/tg_emoji_vault.json';
+}
+
+function tg_emoji_vault_read()
+{
+    if (isset($GLOBALS['TG_EMOJI_VAULT_MEMO']) && is_array($GLOBALS['TG_EMOJI_VAULT_MEMO'])) {
+        return $GLOBALS['TG_EMOJI_VAULT_MEMO'];
+    }
+    $v = [];
+    $f = tg_emoji_vault_file();
+    if (is_file($f)) {
+        $raw = @file_get_contents($f);
+        $dec = is_string($raw) ? json_decode($raw, true) : null;
+        if (is_array($dec)) {
+            $v = $dec;
+        }
+    }
+    // Fallback / restore from permanent MySQL site_config if cache file was ever cleared
+    if (empty($v['pool']) && empty($v['picks'])) {
+        $c = tg_db();
+        if ($c !== null) {
+            try {
+                $res = @$c->query("SELECT config_value FROM site_config WHERE config_key = 'tg_emoji_vault' LIMIT 1");
+                $row = $res ? $res->fetch_assoc() : null;
+                if ($row && !empty($row['config_value'])) {
+                    $dbDec = json_decode((string) $row['config_value'], true);
+                    if (is_array($dbDec)) {
+                        $v = $dbDec;
+                        @file_put_contents($f, json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+                    }
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
+    }
+    // Also merge legacy settings['emoji_pick'] if present so old picks are never lost
+    $legacy = tg_store_read('settings');
+    if (!empty($legacy['emoji_pick']) && is_array($legacy['emoji_pick'])) {
+        if (!isset($v['picks']) || !is_array($v['picks'])) {
+            $v['picks'] = [];
+        }
+        foreach ($legacy['emoji_pick'] as $eu => $eid) {
+            if (preg_match('/^\d{5,}$/', (string) $eid) && !isset($v['picks'][tg_emoji_norm($eu)])) {
+                $v['picks'][tg_emoji_norm($eu)] = (string) $eid;
+            }
+        }
+    }
+    $v += [
+        'picks'        => [],
+        'pack_name'    => '',
+        'pack_list'    => [],
+        'pool'         => [],
+        'default_id'   => '',
+        'replace_all'  => true,
+        'updated_at'   => 0,
+    ];
+    return $GLOBALS['TG_EMOJI_VAULT_MEMO'] = $v;
+}
+
+/** Saves Emoji Vault permanently to BOTH ./cache/tg_emoji_vault.json AND MySQL site_config. */
+function tg_emoji_vault_write(array $vault)
+{
+    $vault['updated_at'] = time();
+    $GLOBALS['TG_EMOJI_VAULT_MEMO'] = $vault;
+    $json = json_encode($vault, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    @file_put_contents(tg_emoji_vault_file(), $json, LOCK_EX);
+
+    $c = tg_db();
+    if ($c !== null) {
+        try {
+            $st = @$c->prepare("INSERT INTO site_config (config_key, config_value) VALUES ('tg_emoji_vault', ?) ON DUPLICATE KEY UPDATE config_value = VALUES(config_value)");
+            if ($st) {
+                $st->bind_param('s', $json);
+                @$st->execute();
+                $st->close();
+            }
+        } catch (Throwable $e) {
+            error_log('[telegram.php] vault db save: ' . $e->getMessage());
+        }
+    }
+    tg_store_update('emojidown', function () {
+        return [];
+    });
+    tg_emoji_reset();
+}
+
+function tg_emoji_slots()
+{
+    static $slots = null;
+    if ($slots === null) {
+        $raw = [
+            ['🏠', 'Menu'], ['🔄', 'Làm mới'], ['⬅', 'Quay lại'], ['✖', 'Huỷ'], ['✅', 'Thành công'], ['❌', 'Lỗi / Sai'],
+            ['🟢', 'Bật'], ['🔴', 'Tắt'], ['🟡', 'Chờ'], ['⚠', 'Cảnh báo'], ['⛔', 'Chặn'], ['🚫', 'Cấm IP'],
+            ['🛡', 'Khiên DDoS'], ['🔐', 'Bảo mật'], ['🔒', 'Khoá'], ['🔓', 'Mở khoá'], ['👤', 'Thành viên'], ['👥', 'DS User'],
+            ['👑', 'Admin'], ['💎', 'VIP'], ['🔑', 'Key'], ['🎁', 'Key Free'], ['🎟', 'Lượt'], ['⏳', 'Hạn dùng'],
+            ['📦', 'Sản phẩm'], ['🧰', 'Công cụ'], ['🛠', 'Bảo trì'], ['⚙', 'Cấu hình'], ['🗄', 'Database'], ['📜', 'Nhật ký'],
+            ['🧮', 'SQL'], ['🩺', 'Sức khoẻ'], ['🔔', 'Thông báo'], ['🎨', 'Emoji'], ['🔍', 'Tìm kiếm'], ['➕', 'Thêm'],
+            ['➖', 'Giảm'], ['👁', 'Hoạt động'], ['🆕', 'Mới'], ['📈', 'Thống kê'], ['🕒', 'Thời gian'], ['🌐', 'IP'],
+            ['🔗', 'Liên kết'], ['📝', 'Ghi chú'], ['📄', 'Dữ liệu'], ['📍', 'Vị trí'], ['📱', 'Thiết bị'], ['👮', 'Quản trị'],
+            ['🚨', 'Báo động'], ['☹', 'Mặt buồn'], ['🕵', 'Giám sát VPN'], ['🧠', 'AI Tối cao'], ['⚡', 'Tốc độ'], ['⭐', 'Sao'],
+            ['📨', 'Tin nhắn'], ['🏷', 'Gói'], ['🗑', 'Xoá'], ['🧹', 'Dọn dẹp'], ['✍', 'Sửa'], ['⏱', 'Hẹn giờ'],
+        ];
+        $slots = [];
+        foreach ($raw as $r) {
+            $slots[] = [tg_emoji_norm($r[0]), $r[1]];
+        }
+    }
+    return $slots;
+}
+
 function tg_emoji_default_map()
 {
     return [
@@ -429,7 +540,6 @@ function tg_emoji_default_map()
     ];
 }
 
-/** Normal emoji (without the invisible U+FE0F) => icon name. */
 function tg_emoji_unicode_map()
 {
     return [
@@ -443,9 +553,153 @@ function tg_emoji_unicode_map()
     ];
 }
 
+/**
+ * Ingests custom_emoji_ids sent by Admin in Telegram chat:
+ * - Queries Telegram API for the sticker details + entire custom emoji pack (if any).
+ * - Automatically maps ALL normal icons across the bot to Premium emojis.
+ * - Saves everything permanently in MySQL site_config + JSON vault so it survives Premium expiry!
+ */
+function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
+{
+    $cleanIds = [];
+    foreach ($ids as $id) {
+        $id = trim((string) $id);
+        if (preg_match('/^\d{5,}$/', $id)) {
+            $cleanIds[] = $id;
+        }
+    }
+    $cleanIds = array_values(array_unique(array_slice($cleanIds, 0, 50)));
+    if (!$cleanIds) {
+        return ['ok' => false, 'count' => 0, 'pack' => ''];
+    }
+
+    $vault = tg_emoji_vault_read();
+    $res   = tg_api_raw('getCustomEmojiStickers', ['custom_emoji_ids' => $cleanIds], 6);
+    $found = [];
+    $packName = '';
+
+    if (!empty($res['ok']) && isset($res['result']) && is_array($res['result'])) {
+        foreach ($res['result'] as $st) {
+            if (!empty($st['custom_emoji_id'])) {
+                $cid = (string) $st['custom_emoji_id'];
+                $em  = !empty($st['emoji']) ? tg_emoji_norm($st['emoji']) : '';
+                $found[$cid] = $em;
+                if ($packName === '' && !empty($st['set_name'])) {
+                    $packName = (string) $st['set_name'];
+                }
+            }
+        }
+    }
+
+    // Also incorporate base character hints from the message entities if API didn't return emoji char
+    foreach ($cleanIds as $idx => $cid) {
+        if (empty($found[$cid]) && !empty($msgUnicodeHints[$idx])) {
+            $found[$cid] = tg_emoji_norm($msgUnicodeHints[$idx]);
+        }
+    }
+
+    // Fetch entire pack permanently if set_name is available
+    $packList = is_array($vault['pack_list']) ? $vault['pack_list'] : [];
+    if ($packName !== '') {
+        $pRes = tg_api_raw('getStickerSet', ['name' => $packName], 6);
+        if (!empty($pRes['ok']) && isset($pRes['result']['stickers']) && is_array($pRes['result']['stickers'])) {
+            $freshPack = [];
+            foreach ($pRes['result']['stickers'] as $pst) {
+                if (!empty($pst['custom_emoji_id'])) {
+                    $freshPack[] = [
+                        'id' => (string) $pst['custom_emoji_id'],
+                        'e'  => !empty($pst['emoji']) ? tg_emoji_norm($pst['emoji']) : '⭐',
+                    ];
+                }
+            }
+            if ($freshPack) {
+                $packList = $freshPack;
+                $vault['pack_name'] = $packName;
+                $vault['pack_list'] = $packList;
+                tg_store_update('settings', function ($s) use ($packName) {
+                    $s['emoji_pack'] = $packName;
+                    $s['emoji_off']  = false;
+                    return $s;
+                });
+            }
+        }
+    }
+
+    // 1. Direct unicode matches from sent emojis
+    if (!is_array($vault['picks'])) {
+        $vault['picks'] = [];
+    }
+    foreach ($found as $cid => $uChar) {
+        if ($uChar !== '') {
+            $vault['picks'][$uChar] = $cid;
+        }
+    }
+
+    // 2. Match unicode emojis from the pack for any unpicked slot
+    $packByChar = [];
+    foreach ($packList as $item) {
+        if (!empty($item['e']) && !empty($item['id']) && !isset($packByChar[$item['e']])) {
+            $packByChar[$item['e']] = (string) $item['id'];
+        }
+    }
+
+    // 3. Build rich permanent pool: sent custom emojis first, then pack emojis
+    $pool = $cleanIds;
+    if (count($cleanIds) === 1 && count($packList) === 0) {
+        // Admin sent 1 standalone custom emoji -> apply it universally as default_id across all normal icons!
+        $pool = [$cleanIds[0]];
+    } elseif ($packList) {
+        foreach ($packList as $item) {
+            if (!empty($item['id'])) {
+                $pool[] = (string) $item['id'];
+            }
+        }
+        $pool = array_values(array_unique($pool));
+    }
+
+    $vault['default_id']  = $cleanIds[0];
+    $vault['pool']        = array_slice($pool, 0, 120);
+    $vault['replace_all'] = true;
+
+    // 4. Fill ALL 60 UI slots so 100% of normal icons become Telegram Custom Emojis immediately!
+    $slots = tg_emoji_slots();
+    $sentCount = count($cleanIds);
+    foreach ($slots as $idx => $sl) {
+        $u = $sl[0];
+        if ($sentCount > 1 && isset($cleanIds[$idx])) {
+            // Multiple emojis sent in one message -> fill slots in order too!
+            $vault['picks'][$u] = $cleanIds[$idx];
+        } elseif (!isset($vault['picks'][$u])) {
+            if (isset($packByChar[$u])) {
+                $vault['picks'][$u] = $packByChar[$u];
+            } elseif ($sentCount === 1) {
+                // Single custom emoji sent: if pack has stickers, use matching or sent emoji so every icon is Premium!
+                $vault['picks'][$u] = $cleanIds[0];
+            } elseif (!empty($vault['pool'])) {
+                $vault['picks'][$u] = $vault['pool'][$idx % count($vault['pool'])];
+            }
+        }
+    }
+
+    tg_store_update('settings', function ($s) {
+        $s['emoji_off'] = false;
+        return $s;
+    });
+    tg_emoji_vault_write($vault);
+
+    return [
+        'ok'         => true,
+        'sent_count' => count($cleanIds),
+        'pack'       => $vault['pack_name'],
+        'pack_count' => count($packList),
+        'mapped'     => count($vault['picks']),
+        'sample_id'  => $cleanIds[0],
+    ];
+}
+
 function tg_emoji_reset()
 {
-    unset($GLOBALS['TG_EMOJI_TABLE'], $GLOBALS['TG_EMOJI_CACHE'], $GLOBALS['TG_EMOJI_CTX']);
+    unset($GLOBALS['TG_EMOJI_TABLE'], $GLOBALS['TG_EMOJI_CACHE'], $GLOBALS['TG_EMOJI_CTX'], $GLOBALS['TG_EMOJI_VAULT_MEMO']);
 }
 
 function tg_emoji_on()
@@ -472,52 +726,49 @@ function tg_style_on()
 
 function tg_emoji_pack_name()
 {
-    $s = tg_store_read('settings');
-    $n = isset($s['emoji_pack']) ? (string) $s['emoji_pack'] : '';
-    if ($n === '') {
-        $n = (string) tg_cfg('emoji_pack', '');
+    $v = tg_emoji_vault_read();
+    if (!empty($v['pack_name']) && preg_match('/^[A-Za-z0-9_]{1,64}$/', (string) $v['pack_name'])) {
+        return (string) $v['pack_name'];
     }
+    $s = tg_store_read('settings');
+    $n = isset($s['emoji_pack']) ? (string) $s['emoji_pack'] : (string) tg_cfg('emoji_pack', '');
     $n = trim($n);
     return preg_match('/^[A-Za-z0-9_]{1,64}$/', $n) ? $n : '';
 }
 
-/** The pack: ['name' => ..., 'list' => [['id' => custom_emoji_id, 'e' => fallback emoji], ...]]  (cached 24 h) */
 function tg_emoji_pack($force = false)
 {
-    static $memo = null;
-    if ($memo !== null && !$force) {
-        return $memo;
-    }
+    $v    = tg_emoji_vault_read();
     $name = tg_emoji_pack_name();
-    $memo = ['name' => $name, 'list' => []];
-    if ($name === '') {
-        return $memo;
+    if (!$force && !empty($v['pack_list']) && is_array($v['pack_list'])) {
+        return ['name' => $name, 'list' => $v['pack_list']];
     }
-    $c   = tg_store_read('emojipack');
-    $ttl = !empty($c['fail']) ? 300 : 86400;
-    if (!$force && isset($c['name'], $c['at'], $c['list']) && $c['name'] === $name && (int) $c['at'] > time() - $ttl && is_array($c['list'])) {
-        $memo['list'] = $c['list'];
-        return $memo;
+    if ($name === '') {
+        return ['name' => '', 'list' => []];
     }
     $res  = tg_api_raw('getStickerSet', ['name' => $name], 5);
     $list = [];
-    $fail = true;
     if (!empty($res['ok']) && isset($res['result']['stickers']) && is_array($res['result']['stickers'])) {
-        $fail = false;
         foreach ($res['result']['stickers'] as $st) {
             if (!empty($st['custom_emoji_id'])) {
-                $list[] = ['id' => (string) $st['custom_emoji_id'], 'e' => isset($st['emoji']) && $st['emoji'] !== '' ? (string) $st['emoji'] : '⭐'];
+                $list[] = [
+                    'id' => (string) $st['custom_emoji_id'],
+                    'e'  => !empty($st['emoji']) ? tg_emoji_norm($st['emoji']) : '⭐',
+                ];
             }
         }
     }
-    tg_store_update('emojipack', function ($x) use ($name, $list, $fail) {
-        return ['name' => $name, 'at' => time(), 'list' => $list, 'fail' => $fail];
-    });
-    $memo['list'] = $list;
-    return $memo;
+    if ($list) {
+        $v['pack_name'] = $name;
+        $v['pack_list'] = $list;
+        if (empty($v['default_id'])) {
+            $v['default_id'] = $list[0]['id'];
+        }
+        tg_emoji_vault_write($v);
+    }
+    return ['name' => $name, 'list' => $list ?: (is_array($v['pack_list']) ? $v['pack_list'] : [])];
 }
 
-/** Effective icon map: defaults < config < chat (/emojimap). */
 function tg_emoji_map()
 {
     $s    = tg_store_read('settings');
@@ -525,122 +776,119 @@ function tg_emoji_map()
     return array_merge(tg_emoji_default_map(), (array) tg_cfg('emoji_map', []), $chat);
 }
 
-/** custom_emoji_id of an icon name, or '' when it is not available. */
 function tg_emoji_id($key)
 {
     if (isset($GLOBALS['TG_EMOJI_CACHE'][$key])) {
         return $GLOBALS['TG_EMOJI_CACHE'][$key];
     }
     $id = '';
-    if (!isset($GLOBALS['TG_EMOJI_CTX'])) { // read the switches / map once per request, not once per icon
-        $on = tg_emoji_on();
-        $GLOBALS['TG_EMOJI_CTX'] = ['on' => $on, 'map' => $on ? tg_emoji_map() : []];
-    }
-    if ($GLOBALS['TG_EMOJI_CTX']['on']) {
+    if (tg_emoji_on()) {
         $ids = (array) tg_cfg('emoji_ids', []);
         if (isset($ids[$key]) && preg_match('/^\d{5,}$/', (string) $ids[$key])) {
             $id = (string) $ids[$key];
         } else {
-            $map = $GLOBALS['TG_EMOJI_CTX']['map'];
+            $map = tg_emoji_map();
             if (isset($map[$key])) {
                 $pack = tg_emoji_pack();
                 $i    = (int) $map[$key] - 1;
-                if ($i >= 0 && isset($pack['list'][$i])) {
+                if ($i >= 0 && isset($pack['list'][$i]['id'])) {
                     $id = (string) $pack['list'][$i]['id'];
                 }
             }
         }
     }
-    $GLOBALS['TG_EMOJI_CACHE'][$key] = $id;
-    return $id;
+    return $GLOBALS['TG_EMOJI_CACHE'][$key] = $id;
 }
 
-/** Normal emoji => custom_emoji_id, only for the icons that are really available. */
-function tg_emoji_norm($s)
-{
-    return str_replace("\u{FE0F}", '', (string) $s);
-}
-
-/** The icons the bot uses. Each one can get its own Premium emoji from the bot (🎨 Emoji Premium). */
-function tg_emoji_slots()
-{
-    static $slots = null;
-    if ($slots === null) {
-        $raw = [
-            ['🏠', 'Menu'], ['🔄', 'Refresh'], ['⬅', 'Back'], ['✖', 'Cancel'], ['✅', 'OK'], ['❌', 'Error'],
-            ['🟢', 'On'], ['🔴', 'Off'], ['🟡', 'Pending'], ['⚠', 'Warning'], ['⛔', 'Block'], ['🚫', 'Ban'],
-            ['🛡', 'Shield'], ['🔐', 'Security'], ['🔒', 'Lock'], ['🔓', 'Unlock'], ['👤', 'User'], ['👥', 'Users'],
-            ['👑', 'Admin'], ['💎', 'VIP'], ['🔑', 'Key'], ['🎁', 'Gift'], ['🎟', 'Turns'], ['⏳', 'Time left'],
-            ['📦', 'Tools'], ['🧰', 'Toolbox'], ['🛠', 'Maint.'], ['⚙', 'Config'], ['🗄', 'Database'], ['📜', 'Logs'],
-            ['🧮', 'SQL'], ['🩺', 'Health'], ['🔔', 'Alerts'], ['🎨', 'Emoji'], ['🔍', 'Search'], ['➕', 'Add'],
-            ['👁', 'Activity'], ['🆕', 'New'], ['📈', 'Stats'], ['🕒', 'Clock'], ['🌐', 'IP'], ['🔗', 'Link'],
-            ['📝', 'Note'], ['📄', 'File'], ['📍', 'Where'], ['📱', 'Device'], ['👮', 'Admin by'], ['🚨', 'Alarm'],
-        ];
-        $slots = [];
-        foreach ($raw as $r) {
-            $slots[] = [tg_emoji_norm($r[0]), $r[1]];
-        }
-    }
-    return $slots;
-}
-
-/** Normal emoji => custom_emoji_id. Layers: old pack-by-number map < your picks (🎨 Emoji Premium). */
 function tg_emoji_table()
 {
-    if (!isset($GLOBALS['TG_EMOJI_TABLE'])) {
-        $t = [];
-        if (tg_emoji_on()) {
-            $s = tg_store_read('settings');
-            if (empty($s['emoji_legacy_off'])) {
-                foreach (tg_emoji_unicode_map() as $u => $key) {
-                    $id = tg_emoji_id($key);
-                    if ($id !== '') {
-                        $t[$u] = $id;
-                    }
-                }
+    if (isset($GLOBALS['TG_EMOJI_TABLE'])) {
+        return $GLOBALS['TG_EMOJI_TABLE'];
+    }
+    $t = [];
+    if (tg_emoji_on()) {
+        $v = tg_emoji_vault_read();
+        foreach (tg_emoji_unicode_map() as $u => $key) {
+            $id = tg_emoji_id($key);
+            if ($id !== '') {
+                $t[tg_emoji_norm($u)] = $id;
             }
-            if (!empty($s['emoji_pick']) && is_array($s['emoji_pick'])) {
-                foreach ($s['emoji_pick'] as $u => $id) {
-                    if (preg_match('/^\d{5,}$/', (string) $id)) {
-                        $t[tg_emoji_norm($u)] = (string) $id;
+        }
+        if (!empty($v['pack_list']) && is_array($v['pack_list'])) {
+            foreach ($v['pack_list'] as $item) {
+                if (!empty($item['e']) && !empty($item['id'])) {
+                    $nu = tg_emoji_norm($item['e']);
+                    if (!isset($t[$nu])) {
+                        $t[$nu] = (string) $item['id'];
                     }
                 }
             }
         }
-        $GLOBALS['TG_EMOJI_TABLE'] = $t;
+        if (!empty($v['picks']) && is_array($v['picks'])) {
+            foreach ($v['picks'] as $u => $id) {
+                if (preg_match('/^\d{5,}$/', (string) $id)) {
+                    $t[tg_emoji_norm($u)] = (string) $id;
+                }
+            }
+        }
+        // Guarantee 100% of slots get replaced when vault has a default_id
+        if (!empty($v['replace_all']) && !empty($v['default_id']) && preg_match('/^\d{5,}$/', (string) $v['default_id'])) {
+            foreach (tg_emoji_slots() as $sl) {
+                if (!isset($t[$sl[0]])) {
+                    $t[$sl[0]] = (string) $v['default_id'];
+                }
+            }
+        }
     }
-    return $GLOBALS['TG_EMOJI_TABLE'];
+    return $GLOBALS['TG_EMOJI_TABLE'] = $t;
+}
+
+function tg_emoji_fallback_id($char = '')
+{
+    if (!tg_emoji_on()) {
+        return '';
+    }
+    $v = tg_emoji_vault_read();
+    if (!empty($v['replace_all']) && !empty($v['default_id']) && preg_match('/^\d{5,}$/', (string) $v['default_id'])) {
+        return (string) $v['default_id'];
+    }
+    return '';
 }
 
 function tg_emoji_regex(array $table, $lead)
 {
+    $keys = array_keys($table);
+    usort($keys, function ($a, $b) {
+        return strlen((string) $b) - strlen((string) $a);
+    });
     $alt = implode('|', array_map(function ($u) {
         return preg_quote((string) $u, '~');
-    }, array_keys($table)));
-    return $lead ? '~^(' . $alt . ')\x{FE0F}?\s*~u' : '~(' . $alt . ')\x{FE0F}?~u';
+    }, $keys));
+    return $lead ? '~^(' . $alt . ')[\x{FE0E}\x{FE0F}]?\s*~u' : '~(' . $alt . ')[\x{FE0E}\x{FE0F}]?~u';
 }
 
-/** <tg-emoji emoji-id="ID">fallback</tg-emoji> for an icon name (or just the fallback when not available). */
 function tg_ce($key, $fallback)
 {
     $id = tg_emoji_id($key);
     return $id === '' ? $fallback : '<tg-emoji emoji-id="' . $id . '">' . $fallback . '</tg-emoji>';
 }
 
-/** HTML text: swap normal emoji for custom emoji (never inside tags, <code> or <pre>). */
+/** Replaces normal emojis in HTML text with <tg-emoji> (skips tags, <code>, <pre>). */
 function tg_dress_text($html)
 {
-    $table = tg_emoji_table();
-    if (!$table) {
+    $table      = tg_emoji_table();
+    $fallbackId = tg_emoji_fallback_id();
+    if (!$table && $fallbackId === '') {
         return $html;
     }
-    $re    = tg_emoji_regex($table, false);
+    $re    = $table ? tg_emoji_regex($table, false) : null;
+    $anyRe = $fallbackId !== '' ? '~([\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}])[\x{FE0E}\x{FE0F}]?~u' : null;
     $parts = preg_split('~(<tg-emoji\b.*?</tg-emoji>|<[^>]+>)~s', (string) $html, -1, PREG_SPLIT_DELIM_CAPTURE);
     if ($parts === false) {
         return $html;
     }
     $code = 0;
-    $left = 90; // Telegram allows 100 entities per message
+    $left = 90;
     foreach ($parts as $i => $part) {
         if ($i % 2 === 1) {
             if (preg_match('~^<(code|pre)\b~i', $part)) {
@@ -653,38 +901,71 @@ function tg_dress_text($html)
         if ($code > 0 || $part === '' || $left <= 0) {
             continue;
         }
-        $parts[$i] = preg_replace_callback($re, function ($m) use ($table, &$left) {
-            if ($left <= 0) {
-                return $m[0];
+        if ($re !== null) {
+            $part = preg_replace_callback($re, function ($m) use ($table, &$left) {
+                if ($left <= 0) {
+                    return $m[0];
+                }
+                $left--;
+                return '<tg-emoji emoji-id="' . $table[$m[1]] . '">' . $m[0] . '</tg-emoji>';
+            }, $part);
+        }
+        if ($anyRe !== null && $left > 0) {
+            $subParts = preg_split('~(<tg-emoji\b.*?</tg-emoji>)~s', (string) $part, -1, PREG_SPLIT_DELIM_CAPTURE);
+            if (is_array($subParts)) {
+                foreach ($subParts as $si => $sp) {
+                    if ($si % 2 === 0 && $sp !== '' && $left > 0) {
+                        $subParts[$si] = preg_replace_callback($anyRe, function ($m) use ($fallbackId, &$left) {
+                            if ($left <= 0) {
+                                return $m[0];
+                            }
+                            $left--;
+                            return '<tg-emoji emoji-id="' . $fallbackId . '">' . $m[0] . '</tg-emoji>';
+                        }, $sp);
+                    }
+                }
+                $part = implode('', $subParts);
             }
-            $left--;
-            return '<tg-emoji emoji-id="' . $table[$m[1]] . '">' . $m[0] . '</tg-emoji>';
-        }, $part);
+        }
+        $parts[$i] = $part;
     }
     return implode('', $parts);
 }
 
-/** Buttons: a leading normal emoji becomes the button icon (icon_custom_emoji_id). */
+/** Replaces leading normal emojis on inline keyboard buttons with icon_custom_emoji_id. */
 function tg_dress_markup($markup)
 {
     if (!is_array($markup) || empty($markup['inline_keyboard']) || !is_array($markup['inline_keyboard'])) {
         return $markup;
     }
-    $table = tg_emoji_table();
-    if (!$table) {
+    $table      = tg_emoji_table();
+    $fallbackId = tg_emoji_fallback_id();
+    if (!$table && $fallbackId === '') {
         return $markup;
     }
-    $re = tg_emoji_regex($table, true);
+    $re    = $table ? tg_emoji_regex($table, true) : null;
+    $anyRe = $fallbackId !== '' ? '~^([\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}])[\x{FE0E}\x{FE0F}]?\s*~u' : null;
+
     foreach ($markup['inline_keyboard'] as $r => $row) {
         foreach ((array) $row as $c => $b) {
             if (!is_array($b) || !isset($b['text']) || isset($b['icon_custom_emoji_id'])) {
                 continue;
             }
-            if (preg_match($re, (string) $b['text'], $m)) {
-                $rest = preg_replace($re, '', (string) $b['text'], 1);
+            $txt = (string) $b['text'];
+            if ($re !== null && preg_match($re, $txt, $m)) {
+                $rest = preg_replace($re, '', $txt, 1);
                 if ($rest !== null && trim($rest) !== '') {
                     $b['text']                 = $rest;
                     $b['icon_custom_emoji_id'] = $table[$m[1]];
+                    $markup['inline_keyboard'][$r][$c] = $b;
+                    continue;
+                }
+            }
+            if ($anyRe !== null && preg_match($anyRe, $txt)) {
+                $rest = preg_replace($anyRe, '', $txt, 1);
+                if ($rest !== null && trim($rest) !== '') {
+                    $b['text']                 = $rest;
+                    $b['icon_custom_emoji_id'] = $fallbackId;
                     $markup['inline_keyboard'][$r][$c] = $b;
                 }
             }
@@ -724,8 +1005,7 @@ function tg_dress_params($method, array $params)
 }
 
 /* ------------------------------------------------------------------
- * USER BLOCK (account level). Table tg_user_blocks. Nothing is ever deleted:
- * the old password hash / key state is saved so "unblock" gives the account back exactly as it was.
+ * 7. Activity Log & User Account Block (Preserved 100%)
  * ------------------------------------------------------------------ */
 
 function tg_block_sql()
@@ -764,7 +1044,79 @@ function tg_ensure_block_table($c)
     }
 }
 
-/** The active block row of a member, or null. Never throws. */
+function tg_ensure_tables()
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+    tg_ensure_tables_force();
+}
+
+function tg_ensure_tables_force()
+{
+    $c = tg_db();
+    if ($c === null) {
+        return;
+    }
+    try {
+        mysqli_query($c, "CREATE TABLE IF NOT EXISTS `tg_activity` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `actor` VARCHAR(100) NOT NULL DEFAULT '',
+            `role` VARCHAR(12) NOT NULL DEFAULT 'member',
+            `action` VARCHAR(40) NOT NULL DEFAULT '',
+            `detail` VARCHAR(500) NOT NULL DEFAULT '',
+            `ip` VARCHAR(45) NOT NULL DEFAULT '',
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_actor` (`actor`),
+            KEY `idx_ip` (`ip`),
+            KEY `idx_created` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        tg_ensure_block_table($c);
+        if (function_exists('ipg_ensure')) {
+            ipg_ensure($c);
+        }
+    } catch (Throwable $e) {
+        error_log('[telegram.php] ensure tables: ' . $e->getMessage());
+    }
+}
+
+function tg_activity($actor, $role, $action, $detail = '', $ip = null)
+{
+    $c = tg_db();
+    if ($c === null || (string) $actor === '') {
+        return;
+    }
+    if ($ip === null) {
+        $ip = tg_ip();
+    }
+    for ($try = 0; $try < 2; $try++) {
+        try {
+            $stmt = $c->prepare('INSERT INTO tg_activity (actor, role, action, detail, ip, created_at) VALUES (?, ?, ?, ?, ?, NOW())');
+            if ($stmt === false) {
+                throw new RuntimeException($c->error);
+            }
+            $a  = tg_clip($actor, 100);
+            $r  = tg_clip($role, 12);
+            $ac = tg_clip($action, 40);
+            $d  = tg_clip($detail, 490);
+            $i  = substr((string) $ip, 0, 45);
+            $stmt->bind_param('sssss', $a, $r, $ac, $d, $i);
+            $stmt->execute();
+            $stmt->close();
+            return;
+        } catch (Throwable $e) {
+            if ($try === 0 && stripos($e->getMessage(), "doesn't exist") !== false) {
+                tg_ensure_tables_force();
+                continue;
+            }
+            return;
+        }
+    }
+}
+
 function tg_user_block_row($username)
 {
     $c = tg_db();
@@ -802,27 +1154,22 @@ function tg_user_blocked($username)
 
 function tg_block_page(array $row)
 {
-    $site    = htmlspecialchars((string) tg_cfg('site_name', 'DEVNVIOS'), ENT_QUOTES, 'UTF-8');
-    $reason  = htmlspecialchars((string) (isset($row['reason']) ? $row['reason'] : ''), ENT_QUOTES, 'UTF-8');
+    $site    = htmlspecialchars((string) tg_cfg('site_name', 'IOSMODS.XYZ'), ENT_QUOTES, 'UTF-8');
+    $reason  = htmlspecialchars((string) (isset($row['reason']) ? $row['reason'] : 'Vi phạm quy định của website'), ENT_QUOTES, 'UTF-8');
     $contact = htmlspecialchars((string) tg_cfg('contact_url', 'https://t.me/iosnea'), ENT_QUOTES, 'UTF-8');
     return '<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-        . '<title>Tài khoản bị chặn · ' . $site . '</title><style>'
-        . 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0b12;color:#eee;font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;padding:20px}'
-        . '.c{max-width:420px;width:100%;background:#15151f;border:1px solid #2a2a3a;border-radius:22px;padding:32px 26px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)}'
-        . '.i{font-size:54px;line-height:1}h1{font-size:22px;margin:14px 0 6px}p{color:#aab;margin:6px 0}'
-        . '.r{margin:16px 0;padding:12px 14px;background:#1d1d2b;border-radius:12px;color:#ff8a8a;font-size:15px}'
-        . 'a{display:inline-block;margin-top:14px;padding:12px 26px;border-radius:999px;background:#2f7bff;color:#fff;text-decoration:none;font-weight:600}'
-        . '</style></head><body><div class="c"><div class="i">⛔</div><h1>Tài khoản đã bị chặn</h1>'
-        . '<p>Tài khoản của bạn không thể sử dụng ' . $site . '.</p>'
-        . ($reason !== '' ? '<div class="r">' . $reason . '</div>' : '')
-        . '<p>Nếu đây là nhầm lẫn, hãy liên hệ admin.</p><a href="' . $contact . '">Liên hệ admin</a></div></body></html>';
+        . '<title>Tài khoản bị khoá · ' . $site . '</title><style>'
+        . 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0d12;color:#f2f4f7;font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;padding:20px}'
+        . '.c{max-width:410px;width:100%;background:#131720;border:1px solid #232936;border-radius:22px;padding:30px 24px;text-align:center}'
+        . 'h1{font-size:21px;margin:12px 0 6px}p{color:#98a2b3;margin:6px 0;font-size:14px}'
+        . '.r{margin:16px 0;padding:12px 14px;background:#271518;border:1px solid #552328;border-radius:13px;color:#fda29b;font-size:14px}'
+        . 'a{display:block;margin-top:16px;padding:13px 20px;border-radius:13px;background:#f2f4f7;color:#10131a;text-decoration:none;font-weight:650}'
+        . '</style></head><body><div class="c"><div style="font-size:44px;line-height:1">☹️</div><h1>Tài khoản đang bị khoá</h1>'
+        . '<p>Tài khoản của bạn tạm thời không thể sử dụng ' . $site . '.</p>'
+        . '<div class="r">Lý do: ' . $reason . '</div>'
+        . '<a href="' . $contact . '">Liên hệ Admin hỗ trợ</a></div></body></html>';
 }
 
-/**
- * If this member is blocked: log it, end the session and show the "account blocked" page. Admins are never touched.
- * Called automatically from tg_event() for every member action; you may also call it yourself near the top of index.php:
- *     if (function_exists('tg_block_enforce') && !empty($_SESSION['username'])) { tg_block_enforce($_SESSION['username']); }
- */
 function tg_block_enforce($username, $role = 'member')
 {
     $username = (string) $username;
@@ -844,19 +1191,8 @@ function tg_block_enforce($username, $role = 'member')
                 $stmt->close();
             }
         } catch (Throwable $e) {
-            // counting is optional
+            // ignore
         }
-    }
-    if (tg_throttle('ubl:' . $username, 20)) {
-        tg_activity($username, 'blocked', 'blocked_user', 'blocked account tried to use the site');
-    }
-    if (tg_cat_on('ban') && tg_throttle('ubh:' . $username, 600)) {
-        tg_queue(['html' => tg_card('⛔ <b>BLOCKED USER TRIED TO ENTER</b>', [
-            tg_r('👤', 'User', tg_c($username)),
-            tg_r('🌐', 'IP', tg_c(tg_ip())),
-            tg_r('📝', 'Reason', tg_e(tg_clip(isset($row['reason']) ? $row['reason'] : '', 120))),
-            tg_r('🔁', 'Blocked visits', '<b>' . ((int) $row['hits'] + 1) . '</b>'),
-        ]), 'except' => '']);
     }
     if (headers_sent()) {
         return;
@@ -876,8 +1212,7 @@ function tg_block_enforce($username, $role = 'member')
 }
 
 /* ------------------------------------------------------------------
- * Telegram HTTP API
- * tg_api() = tg_api_raw() + custom emoji dressing + automatic fallback to plain emoji if Telegram refuses them.
+ * 8. Telegram HTTP API (Never wipes permanent Emoji Vault on fallback!)
  * ------------------------------------------------------------------ */
 
 function tg_strip_ce($html)
@@ -889,11 +1224,14 @@ function tg_api($method, array $params = [], $timeout = 6)
 {
     $dressed  = tg_dress_params($method, $params);
     $res      = tg_api_raw($method, $dressed, $timeout);
-    $hasExtra = isset($params['reply_markup']) && is_array($params['reply_markup']) && strpos((string) json_encode($params['reply_markup']), '"style"') !== false;
-    $hasTag   = isset($params['text']) && is_string($params['text']) && strpos($params['text'], '<tg-emoji') !== false;
+    $hasExtra = isset($dressed['reply_markup']) && is_array($dressed['reply_markup'])
+        && (strpos((string) json_encode($dressed['reply_markup']), '"style"') !== false
+            || strpos((string) json_encode($dressed['reply_markup']), '"icon_custom_emoji_id"') !== false);
+    $hasTag   = isset($dressed['text']) && is_string($dressed['text']) && strpos($dressed['text'], '<tg-emoji') !== false;
+
     if (empty($res['ok']) && isset($res['error_code']) && ($dressed !== $params || $hasExtra || $hasTag)) {
         $d = (string) (isset($res['description']) ? $res['description'] : '');
-        if (preg_match('/emoji|icon_|DOCUMENT_INVALID|BUTTON_TYPE|style|entit/i', $d)) {
+        if (preg_match('/emoji|icon_|DOCUMENT_INVALID|BUTTON_TYPE|style|entit|PREMIUM/i', $d)) {
             $plain = $params;
             if (isset($plain['reply_markup'])) {
                 $plain['reply_markup'] = tg_strip_button_extras($plain['reply_markup']);
@@ -903,9 +1241,10 @@ function tg_api($method, array $params = [], $timeout = 6)
             }
             $res2 = tg_api_raw($method, $plain, $timeout);
             if (!empty($res2['ok'])) {
+                // Keep permanent vault 100% intact! Only pause custom-emoji dressing briefly (180s) if Premium is inactive.
                 $flag = preg_match('/style/i', $d) ? 'styledown' : 'emojidown';
-                tg_store_update($flag, function ($s) {
-                    return ['until' => time() + 21600]; // do not try again for 6 hours
+                tg_store_update($flag, function () {
+                    return ['until' => time() + 180];
                 });
                 return $res2;
             }
@@ -946,7 +1285,7 @@ function tg_api_raw($method, array $params = [], $timeout = 6)
             $err = 'file_get_contents failed';
         }
     } else {
-        $err = 'host has no curl and allow_url_fopen is off';
+        $err = 'no curl / allow_url_fopen';
     }
 
     $res = is_string($raw) ? json_decode($raw, true) : null;
@@ -957,7 +1296,7 @@ function tg_api_raw($method, array $params = [], $timeout = 6)
 }
 
 /* ------------------------------------------------------------------
- * Message cards
+ * 9. Compact Vietnamese Alert Formatting (Direct, Clean, Never Deleted!)
  * ------------------------------------------------------------------ */
 
 function tg_r($icon, $label, $valueHtml)
@@ -967,36 +1306,74 @@ function tg_r($icon, $label, $valueHtml)
 
 function tg_card($title, array $rows, $pre = '')
 {
-    $out  = $title . "\n";
-    $body = '';
+    $out   = $title . "\n";
+    $lines = [];
     foreach ($rows as $r) {
-        if (is_array($r)) {
-            $body .= $r[0] . ' ' . tg_e($r[1]) . ' · ' . $r[2] . "\n";
+        if (is_array($r) && count($r) >= 3) {
+            $lbl = trim((string) $r[1]);
+            $lines[] = $r[0] . ($lbl !== '' ? ' ' . tg_e($lbl) . ': ' : ' ') . $r[2];
+        } elseif (is_string($r) && $r !== '') {
+            $lines[] = $r;
         }
     }
-    if ($body !== '') {
-        $out .= '<blockquote>' . rtrim($body) . '</blockquote>' . "\n";
+    if ($lines) {
+        $out .= '<blockquote>' . implode("\n", $lines) . '</blockquote>' . "\n";
     }
     if ($pre !== '') {
-        $out .= '<pre>' . tg_e(tg_clip($pre, 1200)) . '</pre>' . "\n";
+        $out .= '<pre>' . tg_e(tg_clip($pre, 900)) . '</pre>' . "\n";
     }
-    return $out . '<i>🕒 ' . tg_e(tg_now('d/m H:i:s')) . ' · ' . tg_e(tg_cfg('site_name', 'DEVNVIOS')) . '</i>';
+    return $out . '<i>🕒 ' . tg_e(tg_now('H:i:s d/m')) . '</i>';
 }
 
-function tg_page()
+function tg_alert_kb(array $rows)
 {
-    $method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'CLI';
-    $uri    = (string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?');
-    return $method . ' ' . $uri;
+    return ['inline_keyboard' => $rows];
 }
 
-/** Turn an event into a message. Returns null (ignore) or ['cat','title','rows','pre','throttle']. */
+function tg_activity_map($type, array $d)
+{
+    $user = isset($d['username']) ? (string) $d['username'] : '';
+    switch ($type) {
+        case 'register':
+            return [$user, 'member', 'register', 'đăng ký mới' . (!empty($d['id']) ? ' #' . (int) $d['id'] : '')];
+        case 'freekey_click':
+            return [$user, 'member', 'freekey_click', 'bấm link lấy key free'];
+        case 'freekey_claimed':
+            return [$user, 'member', 'freekey_ok', 'nhận key free: ' . (isset($d['key']) ? $d['key'] : '')];
+        case 'freekey_blocked':
+            return [$user !== '' ? $user : 'guest', 'member', 'freekey_block', 'chặn get key: ' . (isset($d['event']) ? $d['event'] : '')];
+        case 'key_ok':
+            return [$user, 'member', 'key_ok', (isset($d['type']) ? $d['type'] : '?') . ' · ' . (isset($d['key']) ? $d['key'] : '')];
+        case 'key_invalid':
+            return [$user, 'member', 'key_wrong', (isset($d['type']) ? $d['type'] : '?') . ': ' . (isset($d['key']) ? $d['key'] : '')];
+        case 'key_locked':
+            return [$user, 'member', 'key_locked', 'nhập sai key quá giới hạn'];
+        case 'tool_use':
+            return [$user, 'member', 'tool_' . (isset($d['outcome']) ? $d['outcome'] : '?'), (isset($d['tool']) ? $d['tool'] : '?')];
+        case 'ddos_block':
+            return ['ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'ddos_block', isset($d['detail']) ? $d['detail'] : 'DDoS'];
+        case 'key_spam_ban':
+            return [$user !== '' ? $user : 'ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'key_spam_ban', 'spam nhập key sai'];
+        case 'vpn_multi_acc':
+            return [$user !== '' ? $user : 'ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'vpn_multi_acc', isset($d['reason']) ? $d['reason'] : 'VPN/Multi-acc'];
+        case 'admin_log':
+            return [$user !== '' ? $user : 'admin_cp', 'admin_cp', 'cp:' . (isset($d['action']) ? $d['action'] : ''), isset($d['detail']) ? $d['detail'] : ''];
+        case 'ip_ban':
+            return ['tg:' . (isset($d['by']) ? $d['by'] : ''), 'bot', 'ip_ban', (isset($d['ip']) ? $d['ip'] : '')];
+        case 'ip_unban':
+            return ['tg:' . (isset($d['by']) ? $d['by'] : ''), 'bot', 'ip_unban', (isset($d['ip']) ? $d['ip'] : '')];
+        case 'ip_auto_unban':
+            return ['auto-timer', 'bot', 'ip_auto_unban', (isset($d['ip']) ? $d['ip'] : '')];
+    }
+    return null;
+}
+
 function tg_render($type, array $d)
 {
     $user = isset($d['username']) ? (string) $d['username'] : '';
-    $ip   = array_key_exists('ip', $d) ? (string) $d['ip'] : tg_ip();
-    $ipRow = $ip !== '' ? tg_r('🌐', 'IP', tg_c($ip)) : null;
-    $userRow = $user !== '' ? tg_r('👤', 'User', tg_c($user)) : null;
+    $ip   = array_key_exists('ip', $d) && (string) $d['ip'] !== '' ? (string) $d['ip'] : tg_ip();
+    $uTag = $user !== '' ? tg_c($user) : '<i>khách</i>';
+    $ipTag = $ip !== '' ? tg_c($ip) : '<i>—</i>';
 
     switch ($type) {
         case 'register':
@@ -1004,263 +1381,332 @@ function tg_render($type, array $d)
             $c  = tg_db();
             if (empty($d['claimed'])) {
                 if ($c !== null && $id === 0 && $user !== '') {
-                    $res = mysqli_query($c, "SELECT id FROM users WHERE username = '" . mysqli_real_escape_string($c, $user) . "' LIMIT 1");
-                    $row = $res ? mysqli_fetch_assoc($res) : null;
+                    $res = @$c->query("SELECT id FROM users WHERE username = '" . $c->real_escape_string($user) . "' LIMIT 1");
+                    $row = $res ? $res->fetch_assoc() : null;
                     $id  = $row ? (int) $row['id'] : 0;
                 }
                 if ($id > 0 && !tg_claim_registration($id, false)) {
-                    return null; // already announced
+                    return null;
                 }
             }
             $total = null;
             if ($c !== null) {
-                $res   = mysqli_query($c, 'SELECT COUNT(*) AS n FROM users');
-                $row   = $res ? mysqli_fetch_assoc($res) : null;
+                $res   = @$c->query('SELECT COUNT(*) AS n FROM users');
+                $row   = $res ? $res->fetch_assoc() : null;
                 $total = $row ? (int) $row['n'] : null;
             }
-            return ['cat' => 'register', 'title' => '🆕 <b>NEW REGISTRATION</b>', 'rows' => [
-                $userRow,
-                $id > 0 ? tg_r('🆔', 'User ID', tg_c('#' . $id)) : null,
-                $ipRow,
-                $total !== null ? tg_r('👥', 'Total users', '<b>' . $total . '</b>') : null,
-            ]];
+            $rows = [
+                '👤 Tài khoản: ' . $uTag . ($id > 0 ? ' (#' . $id . ')' : '') . ($total !== null ? ' · 👥 Tổng: <b>' . $total . '</b>' : ''),
+                '🌐 IP: ' . $ipTag . (!empty($d['vpn']) ? ' · ⚠️ <b>Nghi VPN/Proxy</b>' : ''),
+            ];
+            $kb = null;
+            if (!empty($d['alts']) && is_array($d['alts'])) {
+                $rows[] = '🕵️ Trùng thiết bị/IP với: <code>' . tg_e(implode(', ', array_slice($d['alts'], 0, 4))) . '</code>';
+                if ($ip !== '') {
+                    $kb = tg_alert_kb([[
+                        ['text' => '🔍 Kiểm tra IP', 'callback_data' => 'qa|ip|' . $ip],
+                        ['text' => '🚫 Tạm khoá IP 30p', 'callback_data' => 'qa|tempban|' . $ip],
+                    ]]);
+                }
+            }
+            return ['cat' => 'register', 'title' => '🆕 <b>ĐĂNG KÝ MỚI</b>', 'rows' => $rows, 'kb' => $kb];
+
+        case 'freekey_click':
+            return [
+                'cat'      => 'freekey',
+                'title'    => '🔗 <b>BẤM GET KEY FREE</b>',
+                'throttle' => ['fkc:' . $user, 45],
+                'rows'     => ['👤 ' . $uTag . ' · 🌐 ' . $ipTag],
+            ];
+
+        case 'freekey_claimed':
+            $k = isset($d['key']) ? (string) $d['key'] : '';
+            return [
+                'cat'   => 'freekey',
+                'title' => '🎁 <b>GET KEY FREE THÀNH CÔNG</b>',
+                'rows'  => [
+                    '👤 ' . $uTag . ' · 🌐 ' . $ipTag,
+                    '🔑 Key: ' . tg_c($k),
+                ],
+            ];
+
+        case 'freekey_blocked':
+            $ev = isset($d['event']) ? (string) $d['event'] : '';
+            $evMap = [
+                'blocked_vpn'    => 'Bật VPN / Fake IP / Proxy',
+                'blocked_link'   => 'Tạo acc phụ chung thiết bị / mạng',
+                'blocked_device' => 'Trùng thiết bị nhận Key Free trong 8h',
+                'blocked_ip'     => 'Trùng địa chỉ IP nhận Key Free trong 8h',
+                'blocked_cheat'  => 'Vượt link quá nhanh / dùng tool tự động',
+                'blocked_race'   => 'Gửi yêu cầu nhận Key trùng lặp',
+            ];
+            $why  = isset($evMap[$ev]) ? $evMap[$ev] : $ev;
+            $rows = [
+                '👤 ' . $uTag . ' · 🌐 ' . $ipTag,
+                '⚠️ Phát hiện: <b>' . tg_e($why) . '</b>',
+            ];
+            if (!empty($d['alts']) && is_array($d['alts'])) {
+                $rows[] = '👥 Acc liên kết: <code>' . tg_e(implode(', ', array_slice($d['alts'], 0, 4))) . '</code>';
+            }
+            $btns = [];
+            if ($user !== '' && strlen($user) <= 40) {
+                $btns[] = ['text' => '🔓 Cho phép 1 lần', 'callback_data' => 'qa|fkpass|' . $user];
+            }
+            if ($ip !== '' && strlen($ip) <= 42) {
+                $btns[] = ['text' => '🚫 Khoá IP 30p', 'callback_data' => 'qa|tempban|' . $ip];
+            }
+            return [
+                'cat'      => 'vpn',
+                'title'    => '🕵️ <b>KIỂM SOÁT GET KEY FREE</b>',
+                'throttle' => ['fkb:' . $user . ':' . $ev . ':' . $ip, 90],
+                'rows'     => $rows,
+                'kb'       => $btns ? tg_alert_kb([$btns]) : null,
+            ];
 
         case 'key_ok':
             $hours = (int) (isset($d['hours']) ? $d['hours'] : 0);
-            return ['cat' => 'key', 'title' => '🟢 <b>KEY ACTIVATED</b>', 'rows' => [
-                $userRow,
-                tg_r('🏷', 'Plan', '<b>' . tg_e(isset($d['type']) ? $d['type'] : '?') . '</b>'),
-                $hours > 0 ? tg_r('⏳', 'Valid for', tg_c(tg_hours($hours))) : null,
-                tg_r('🎟', 'Turns', tg_c((int) (isset($d['turns']) ? $d['turns'] : 0))),
-                tg_r('🔑', 'Key', tg_c(isset($d['key']) ? $d['key'] : '')),
-                $ipRow,
-            ]];
+            $plan  = isset($d['type']) ? (string) $d['type'] : 'FREE';
+            $turns = (int) (isset($d['turns']) ? $d['turns'] : 1);
+            return [
+                'cat'   => 'key',
+                'title' => '🔑 <b>NHẬP KEY THÀNH CÔNG</b>',
+                'rows'  => [
+                    '👤 ' . $uTag . ' · 🏷 <b>' . tg_e($plan) . '</b> (' . ($hours > 0 ? tg_e(tg_hours($hours)) . ' · ' : '') . $turns . ' lượt)',
+                    '🔑 ' . tg_c(isset($d['key']) ? $d['key'] : '') . ' · 🌐 ' . $ipTag,
+                ],
+            ];
 
         case 'key_invalid':
             $typed = isset($d['key']) ? (string) $d['key'] : '';
-            return ['cat' => 'key', 'title' => '🔴 <b>WRONG KEY</b>', 'throttle' => ['ki:' . $user, 20], 'rows' => [
-                $userRow,
-                tg_r('🏷', 'Box', '<b>' . tg_e(isset($d['type']) ? $d['type'] : '?') . '</b>'),
-                tg_r('⌨️', 'Typed', $typed !== '' ? tg_c(tg_clip($typed, 60)) : '<i>(empty / invalid format)</i>'),
-                $ipRow,
-            ]];
-
-        case 'key_has_turn':
-            return ['cat' => 'minor', 'title' => '🟡 <b>KEY REJECTED</b>', 'rows' => [
-                $userRow, tg_r('ℹ️', 'Reason', 'still has an active key / turns'), $ipRow,
-            ]];
-
-        case 'key_error':
-            return ['cat' => 'error', 'title' => '🚨 <b>KEY ACTIVATION FAILED</b>', 'throttle' => ['ke', 120], 'rows' => [
-                $userRow,
-                tg_r('⚙️', 'Problem', 'database transaction error (see server error_log)'),
-                tg_r('🔑', 'Key', tg_c(isset($d['key']) ? $d['key'] : '')),
-                $ipRow,
-            ]];
+            $box   = isset($d['type']) ? (string) $d['type'] : '?';
+            return [
+                'cat'      => 'key',
+                'title'    => '❌ <b>NHẬP SAI KEY</b>',
+                'throttle' => ['ki:' . $user . ':' . $ip, 15],
+                'rows'     => [
+                    '👤 ' . $uTag . ' · Ô <b>' . tg_e($box) . '</b>: ' . ($typed !== '' ? tg_c(tg_clip($typed, 42)) : '<i>trống</i>'),
+                    '🌐 IP: ' . $ipTag,
+                ],
+            ];
 
         case 'key_locked':
-            return ['cat' => 'security', 'title' => '⛔ <b>KEY LOCKOUT</b>', 'throttle' => ['kl:' . $user, 600], 'rows' => [
-                $userRow, tg_r('🛑', 'Reason', 'too many wrong keys, key entry is locked'), $ipRow,
-            ]];
-
-        case 'freekey_click':
-            return ['cat' => 'freekey', 'title' => '🔗 <b>GET FREE KEY CLICKED</b>', 'throttle' => ['fk:' . $user, 60], 'rows' => [
-                $userRow, tg_r('➡️', 'Action', 'opened the free key link'), $ipRow,
-            ]];
+            return [
+                'cat'      => 'ddos',
+                'title'    => '⛔ <b>KHOÁ Ô NHẬP KEY TẠM THỜI</b>',
+                'throttle' => ['kl:' . $user . ':' . $ip, 180],
+                'rows'     => ['👤 ' . $uTag . ' · Nhập sai quá nhiều lần · 🌐 ' . $ipTag],
+            ];
 
         case 'tool_use':
             $out   = isset($d['outcome']) ? (string) $d['outcome'] : '';
             $tool  = isset($d['tool']) ? (string) $d['tool'] : '?';
-            $ttype = isset($d['tool_type']) && $d['tool_type'] !== '' ? ' (' . $d['tool_type'] . ')' : '';
-            $toolRow = tg_r('📦', 'Tool', '<b>' . tg_e($tool) . '</b>' . tg_e($ttype));
+            $ttype = !empty($d['tool_type']) ? strtoupper((string) $d['tool_type']) : '';
+            $badge = $ttype !== '' ? ' (' . tg_e($ttype) . ')' : '';
             if ($out === 'open') {
-                if (empty($d['spent'])) {
-                    return null; // Admin exempt: nothing was spent
-                }
-                $left = (int) (isset($d['turns']) ? $d['turns'] : 0);
-                if (!empty($d['reopen'])) {
-                    return ['cat' => 'minor', 'title' => '🔁 <b>TOOL REOPENED</b> <i>(free)</i>', 'rows' => [$userRow, $toolRow, $ipRow]];
-                }
-                return ['cat' => 'tool', 'title' => '🧰 <b>TOOL OPENED</b>', 'rows' => [
-                    $userRow, $toolRow,
-                    tg_r('🏷', 'Plan', tg_c(isset($d['plan']) && $d['plan'] !== '' ? $d['plan'] : 'NONE')),
-                    tg_r('🎟', 'Turns left', $left > 0 ? tg_c($left) : '<b>0</b> (key finished)'),
-                    $ipRow,
-                ]];
-            }
-            if ($out === 'warn') {
-                return ['cat' => 'tool', 'title' => '⚠️ <b>VIP KEY ON FREE TOOL</b>', 'rows' => [
-                    $userRow, $toolRow, tg_r('📣', 'Warning', tg_c((int) (isset($d['count']) ? $d['count'] : 0) . ' / 3')), $ipRow,
-                ]];
-            }
-            if ($out === 'penalty') {
-                return ['cat' => 'tool', 'title' => '💸 <b>PENALTY APPLIED</b>', 'rows' => [
-                    $userRow, $toolRow, tg_r('➖', 'Charged', '1 VIP turn (too many Free clicks)'), $ipRow,
-                ]];
+                $reopen = !empty($d['reopen']);
+                $left   = isset($d['turns']) ? (int) $d['turns'] : null;
+                $turnTxt = $reopen ? '<i>mở lại miễn phí</i>' : ($left !== null ? '🎟 Còn <b>' . $left . '</b> lượt' : '👑 Admin');
+                return [
+                    'cat'      => 'tool',
+                    'title'    => '📦 <b>BẤM SẢN PHẨM</b>',
+                    'throttle' => $reopen ? ['tre:' . $user . ':' . $tool, 30] : null,
+                    'rows'     => [
+                        '👤 ' . $uTag . ' · 🧰 <b>' . tg_e(tg_clip($tool, 40)) . '</b>' . $badge,
+                        $turnTxt . ' · 🌐 ' . $ipTag,
+                    ],
+                ];
             }
             if ($out === 'need_key' || $out === 'need_vip') {
-                return ['cat' => 'minor', 'title' => '🚫 <b>TOOL DENIED</b>', 'rows' => [
-                    $userRow, $toolRow, tg_r('ℹ️', 'Reason', $out === 'need_vip' ? 'VIP tool, user has no VIP key' : 'no turns left'), $ipRow,
-                ]];
+                return [
+                    'cat'      => 'tool',
+                    'title'    => '🚫 <b>BẤM SẢN PHẨM (CHƯA ĐỦ KEY)</b>',
+                    'throttle' => ['tno:' . $user . ':' . $tool, 30],
+                    'rows'     => [
+                        '👤 ' . $uTag . ' · 🧰 <b>' . tg_e(tg_clip($tool, 40)) . '</b>' . $badge,
+                        'ℹ️ ' . ($out === 'need_vip' ? 'Cần Key VIP' : 'Chưa có lượt / hết hạn') . ' · 🌐 ' . $ipTag,
+                    ],
+                ];
             }
-            if ($out === 'csrf_fail') {
-                return ['cat' => 'security', 'title' => '🛡 <b>BLOCKED REQUEST (CSRF)</b>', 'throttle' => ['csrf:' . $user, 300], 'rows' => [
-                    $userRow, tg_r('ℹ️', 'Reason', 'tool request without a valid session token'), $ipRow,
-                ]];
-            }
-            if ($out === 'missing') {
-                return ['cat' => 'minor', 'title' => '❓ <b>TOOL NOT FOUND</b>', 'rows' => [$userRow, $toolRow, $ipRow]];
+            if ($out === 'warn' || $out === 'penalty') {
+                return [
+                    'cat'   => 'tool',
+                    'title' => '⚠️ <b>KEY VIP BẤM SẢN PHẨM FREE</b>',
+                    'rows'  => [
+                        '👤 ' . $uTag . ' · 🧰 <b>' . tg_e(tg_clip($tool, 40)) . '</b>',
+                        ($out === 'penalty' ? '💸 Đã trừ 1 lượt VIP' : '📣 Cảnh báo lần ' . (int) (isset($d['count']) ? $d['count'] : 1) . '/3') . ' · 🌐 ' . $ipTag,
+                    ],
+                ];
             }
             return null;
+
+        case 'ddos_block':
+            $mins = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 3600) / 60));
+            $kb   = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
+                ['text' => '🔓 Gỡ ban ngay', 'callback_data' => 'qa|unban|' . $ip],
+                ['text' => '🚫 Chặn vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+            ]]) : null;
+            return [
+                'cat'      => 'ddos',
+                'title'    => '🚨 <b>CHẶN TẤN CÔNG DDOS / EXPLOIT</b>',
+                'throttle' => ['ddos:' . $ip, 120],
+                'rows'     => [
+                    '🌐 IP tấn công: ' . $ipTag . ' · ⏱ Tạm khoá <b>' . $mins . ' phút</b>',
+                    '⚡ Phát hiện: <b>' . tg_e(isset($d['detail']) ? $d['detail'] : 'HTTP Flood') . '</b>',
+                ],
+                'kb'       => $kb,
+            ];
+
+        case 'key_spam_ban':
+            $mins  = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 1800) / 60));
+            $fails = (int) (isset($d['fails']) ? $d['fails'] : 0);
+            $kb    = ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[
+                ['text' => '🔓 Gỡ ban ngay', 'callback_data' => 'qa|unban|' . $ip],
+                ['text' => '🚫 Chặn vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+            ]]) : null;
+            return [
+                'cat'      => 'ddos',
+                'title'    => '☹️ <b>TẠM KHOÁ SPAM NHẬP KEY</b>',
+                'throttle' => ['kspam:' . $ip, 60],
+                'rows'     => [
+                    '👤 ' . $uTag . ' · 🌐 ' . $ipTag,
+                    '🛑 Nhập sai <b>' . $fails . '</b> lần → Đã chuyển sang trang Mặt buồn (tự mở sau <b>' . $mins . 'p</b>)',
+                ],
+                'kb'       => $kb,
+            ];
+
+        case 'vpn_multi_acc':
+            $dur  = (int) (isset($d['duration']) ? $d['duration'] : 0);
+            $rows = [
+                '👤 ' . $uTag . ' · 🌐 ' . $ipTag,
+                '📝 ' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : 'Phát hiện VPN / Tạo acc phụ lấy Key Free', 160)),
+            ];
+            $btns = [];
+            if ($user !== '' && strlen($user) <= 40) {
+                $btns[] = ['text' => '🔓 Cho phép 1 lần', 'callback_data' => 'qa|fkpass|' . $user];
+            }
+            if ($dur > 0 && $ip !== '' && strlen($ip) <= 42) {
+                $btns[] = ['text' => '🔓 Gỡ khoá IP', 'callback_data' => 'qa|unban|' . $ip];
+            }
+            return [
+                'cat'      => 'vpn',
+                'title'    => '🕵️ <b>PHÁT HIỆN VPN / ĐA TÀI KHOẢN</b>',
+                'throttle' => ['vma:' . $user . ':' . $ip, 90],
+                'rows'     => $rows,
+                'kb'       => $btns ? tg_alert_kb([$btns]) : null,
+            ];
+
+        case 'ip_auto_unban':
+            return [
+                'cat'   => 'ban',
+                'title' => '🟢 <b>TỰ ĐỘNG GỠ KHOÁ IP HẾT HẠN</b>',
+                'rows'  => ['🌐 IP: ' . $ipTag . ($user !== '' ? ' · 👤 ' . $uTag : '') . ' → Đã vào web bình thường'],
+            ];
+
+        case 'ip_ban':
+            return [
+                'cat'   => 'ban',
+                'title' => '🚫 <b>ĐÃ CHẶN VĨNH VIỄN IP</b>',
+                'rows'  => [
+                    '🌐 ' . $ipTag . ($user !== '' ? ' · 👤 ' . $uTag : ''),
+                    '📝 ' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 140)),
+                ],
+            ];
+
+        case 'ip_unban':
+            return [
+                'cat'   => 'ban',
+                'title' => '✅ <b>ĐÃ GỠ CHẶN IP</b>',
+                'rows'  => ['🌐 ' . $ipTag . ' · 👮 Admin ' . tg_c(isset($d['by']) ? $d['by'] : '')],
+            ];
+
+        case 'user_block':
+            return [
+                'cat'   => 'ban',
+                'title' => '⛔ <b>ĐÃ KHOÁ TÀI KHOẢN</b>',
+                'rows'  => ['👤 ' . $uTag . ' · 📝 ' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 120))],
+            ];
+
+        case 'user_unblock':
+            return [
+                'cat'   => 'ban',
+                'title' => '✅ <b>ĐÃ MỞ KHOÁ TÀI KHOẢN</b>',
+                'rows'  => ['👤 ' . $uTag . ' · 👮 Admin ' . tg_c(isset($d['by']) ? $d['by'] : '')],
+            ];
+
+        case 'admin_log':
+            $act = isset($d['action']) ? (string) $d['action'] : '';
+            return [
+                'cat'   => 'admin',
+                'title' => '👑 <b>THAO TÁC ADMIN CP</b> · <code>' . tg_e($act) . '</code>',
+                'rows'  => [
+                    '👤 ' . $uTag . ' · 📝 ' . tg_e(tg_clip(isset($d['detail']) ? $d['detail'] : '', 180)),
+                ],
+            ];
 
         case 'site_error':
         case 'site_fatal':
         case 'php_warning':
-            $where = isset($d['where']) ? (string) $d['where'] : '';
-            $text  = isset($d['error']) ? (string) $d['error'] : (isset($d['message']) ? (string) $d['message'] : '');
-            $file  = isset($d['file']) ? str_replace(__DIR__ . DIRECTORY_SEPARATOR, '', (string) $d['file']) : '';
-            $sig   = $type . '|' . substr($text, 0, 160) . '|' . $file . '|' . (isset($d['line']) ? $d['line'] : '');
-            $titles = [
-                'site_error'  => '🚨 <b>SITE ERROR</b>',
-                'site_fatal'  => '💥 <b>PHP FATAL ERROR</b>',
-                'php_warning' => '⚠️ <b>PHP WARNING</b>',
+            $text = isset($d['error']) ? (string) $d['error'] : (isset($d['message']) ? (string) $d['message'] : '');
+            $file = isset($d['file']) ? basename((string) $d['file']) . (isset($d['line']) ? ':' . $d['line'] : '') : '';
+            $sig  = $type . '|' . substr($text, 0, 140) . '|' . $file;
+            return [
+                'cat'      => 'error',
+                'title'    => $type === 'php_warning' ? '⚠️ <b>CẢNH BÁO PHP</b>' : '🚨 <b>LỖI HỆ THỐNG</b>',
+                'throttle' => ['err:' . md5($sig), $type === 'php_warning' ? 900 : 300],
+                'pre'      => $text,
+                'rows'     => [$file !== '' ? '📄 ' . tg_c($file) : '📍 ' . tg_e(isset($d['where']) ? $d['where'] : 'web')],
             ];
-            $sess = isset($_SESSION['username']) ? (string) $_SESSION['username'] : '';
-            return ['cat' => 'error', 'title' => $titles[$type], 'throttle' => ['err:' . md5($sig), $type === 'php_warning' ? 900 : 300], 'pre' => $text, 'rows' => [
-                $where !== '' ? tg_r('📍', 'Where', tg_e($where)) : null,
-                $file !== '' ? tg_r('📄', 'File', tg_c($file . (isset($d['line']) ? ':' . $d['line'] : ''))) : null,
-                tg_r('🔗', 'Request', tg_c(tg_page())),
-                $sess !== '' ? tg_r('👤', 'User', tg_c($sess)) : null,
-                $ipRow,
-            ]];
 
         case 'db_down':
-            return ['cat' => 'error', 'title' => '🔌 <b>DATABASE UNREACHABLE</b>', 'throttle' => ['dbdown', 300], 'rows' => [
-                tg_r('⚠️', 'Impact', 'the website can not load data right now'),
-                tg_r('🔗', 'Request', tg_c(tg_page())),
-                $ipRow,
-            ]];
-
-        case 'admin_log':
-            $icons = ['toggle_maintenance' => '🛠', 'maintenance_access_login' => '🔓', 'regen_maintenance_access' => '🔁',
-                      'gen_keys' => '🔑', 'kill_key' => '⛔', 'add_product' => '📦', 'save_site' => '🎨', 'save_advanced' => '⚙️'];
-            $action = isset($d['action']) ? (string) $d['action'] : '';
-            $icon   = isset($icons[$action]) ? $icons[$action] : '🛡';
-            return ['cat' => 'admin', 'title' => $icon . ' <b>ADMIN PANEL</b> · ' . tg_e($action), 'rows' => [
-                tg_r('👤', 'Admin', tg_c($user)),
-                tg_r('📝', 'Detail', tg_e(tg_clip(isset($d['detail']) ? $d['detail'] : '', 300))),
-                isset($d['ip']) && $d['ip'] !== '' ? tg_r('🌐', 'IP', tg_c($d['ip'])) : null,
-                isset($d['created_at']) ? tg_r('🕒', 'Logged at', tg_c($d['created_at'])) : null,
-            ]];
-
-        case 'security_log':
-            return ['cat' => 'security', 'title' => '🔐 <b>SECURITY</b> · ' . tg_e(isset($d['violation_type']) ? $d['violation_type'] : '?'), 'rows' => [
-                tg_r('🌐', 'IP', tg_c(isset($d['ip_address']) ? $d['ip_address'] : '')),
-                tg_r('🔁', 'Hits', '<b>' . (int) (isset($d['count']) ? $d['count'] : 1) . '</b>'),
-                !empty($d['user_agent']) ? tg_r('📱', 'Device', tg_e(tg_clip($d['user_agent'], 120))) : null,
-            ]];
-
-        case 'login_fail':
-            return ['cat' => 'login', 'title' => '🔐 <b>LOGIN FAILED</b>', 'rows' => [
-                tg_r('👤', 'Account', tg_c(isset($d['username']) ? $d['username'] : '')),
-                tg_r('🌐', 'IP', tg_c(isset($d['ip']) ? $d['ip'] : '')),
-                tg_r('🔁', 'Attempts', '<b>' . (int) (isset($d['count']) ? $d['count'] : 1) . '</b>'),
-            ]];
+            return [
+                'cat'      => 'error',
+                'title'    => '🔌 <b>MẤT KẾT NỐI DATABASE</b>',
+                'throttle' => ['dbdown', 300],
+                'rows'     => ['⚠️ Không thể kết nối MySQL · 🌐 ' . $ipTag],
+            ];
 
         case 'page_view':
-            $role = isset($d['role']) && $d['role'] === 'admin' ? '👑 admin' : 'member';
-            return ['cat' => 'visit', 'title' => '🚪 <b>OPENED THE SITE</b>', 'throttle' => ['pv:' . $user, 120], 'rows' => [
-                $userRow,
-                tg_r('🏷', 'Role', tg_e($role)),
-                tg_r('🔑', 'Plan', tg_c(isset($d['plan']) && $d['plan'] !== '' ? $d['plan'] : 'NONE') . ' · ' . (int) (isset($d['turns']) ? $d['turns'] : 0) . ' turn(s)'),
-                $ipRow,
-            ]];
+            return [
+                'cat'      => 'visit',
+                'title'    => '🚪 <b>TRUY CẬP WEB</b>',
+                'throttle' => ['pv:' . $user, 180],
+                'rows'     => ['👤 ' . $uTag . ' · 🔑 ' . tg_c(isset($d['plan']) ? $d['plan'] : 'NONE') . ' (' . (int) (isset($d['turns']) ? $d['turns'] : 0) . ' lượt) · 🌐 ' . $ipTag],
+            ];
 
-        case 'member_action':
-            $cat = (isset($d['cat']) && $d['cat'] === 'minor') ? 'minor' : 'activity';
-            $thr = isset($d['throttle']) ? (int) $d['throttle'] : 0;
-            $r   = ['cat' => $cat, 'title' => '👁 <b>MEMBER ACTION</b> · ' . tg_e(isset($d['action']) ? $d['action'] : ''), 'rows' => [
-                $userRow,
-                !empty($d['detail']) ? tg_r('📝', 'Detail', tg_e(tg_clip($d['detail'], 300))) : null,
-                $ipRow,
-            ]];
-            if ($thr > 0) {
-                $r['throttle'] = ['ma:' . $user . ':' . (isset($d['action']) ? $d['action'] : ''), $thr];
-            }
-            return $r;
+        case 'login_fail':
+            return [
+                'cat'   => 'login',
+                'title' => '🔐 <b>ĐĂNG NHẬP SAI</b>',
+                'rows'  => ['👤 ' . $uTag . ' · 🔁 <b>' . (int) (isset($d['count']) ? $d['count'] : 1) . '</b> lần · 🌐 ' . $ipTag],
+            ];
 
-        case 'ip_ban':
-            $total = null;
-            $c     = tg_db();
-            if ($c !== null) {
-                try {
-                    $res   = mysqli_query($c, 'SELECT COUNT(*) AS n FROM ip_bans WHERE active = 1');
-                    $row   = $res ? mysqli_fetch_assoc($res) : null;
-                    $total = $row ? (int) $row['n'] : null;
-                } catch (Throwable $e) {
-                    $total = null;
-                }
-            }
-            return ['cat' => 'ban', 'title' => '🚫 <b>IP BANNED FOREVER</b>', 'rows' => [
-                tg_r('🌐', 'Banned IP', tg_c(isset($d['ip']) ? $d['ip'] : '')),
-                $userRow,
-                tg_r('📝', 'Reason', tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 200))),
-                tg_r('👮', 'Banned by', tg_c('admin ' . (isset($d['by']) ? $d['by'] : '?'))),
-                $total !== null ? tg_r('📊', 'Total banned IPs', '<b>' . $total . '</b>') : null,
-                tg_r('👁', 'Visitor now sees', 'the "Access blocked" page'),
-            ]];
-
-        case 'ip_unban':
-            return ['cat' => 'ban', 'title' => '✅ <b>IP UNBANNED</b>', 'rows' => [
-                tg_r('🌐', 'IP', tg_c(isset($d['ip']) ? $d['ip'] : '')),
-                tg_r('👮', 'Unbanned by', tg_c('admin ' . (isset($d['by']) ? $d['by'] : '?'))),
-            ]];
-
-        case 'ip_blocked_hit':
-            return ['cat' => 'ban', 'title' => '⛔ <b>BANNED IP TRIED TO ENTER</b>', 'throttle' => ['bh:' . (isset($d['ip']) ? $d['ip'] : ''), 600], 'rows' => [
-                tg_r('🌐', 'IP', tg_c(isset($d['ip']) ? $d['ip'] : '')),
-                $userRow,
-                tg_r('🔁', 'Blocked hits', '<b>' . (int) (isset($d['hits']) ? $d['hits'] : 1) . '</b>'),
-                tg_r('📝', 'Ban reason', tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 120))),
-                !empty($d['user_agent']) ? tg_r('📱', 'Device', tg_e(tg_clip($d['user_agent'], 120))) : null,
-                tg_r('🔗', 'Request', tg_c(tg_page())),
-            ]];
-
-        case 'user_block':
-            return ['cat' => 'ban', 'title' => '⛔ <b>USER BLOCKED</b>', 'rows' => [
-                $userRow,
-                tg_r('📝', 'Reason', tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 200))),
-                tg_r('🔒', 'Account', 'login locked · key revoked'),
-                tg_r('🌐', 'IPs banned', '<b>' . (int) (isset($d['ips']) ? $d['ips'] : 0) . '</b>'),
-                tg_r('👮', 'Blocked by', tg_c('admin ' . (isset($d['by']) ? $d['by'] : '?'))),
-            ]];
-
-        case 'user_unblock':
-            return ['cat' => 'ban', 'title' => '✅ <b>USER UNBLOCKED</b>', 'rows' => [
-                $userRow,
-                tg_r('🔓', 'Account', 'password and key given back'),
-                tg_r('👮', 'Unblocked by', tg_c('admin ' . (isset($d['by']) ? $d['by'] : '?'))),
-            ]];
+        case 'security_log':
+            return [
+                'cat'   => 'ddos',
+                'title' => '🛡 <b>CẢNH BÁO BẢO MẬT</b>',
+                'rows'  => ['🌐 ' . tg_c(isset($d['ip_address']) ? $d['ip_address'] : '') . ' · ' . tg_e(isset($d['violation_type']) ? $d['violation_type'] : '?')],
+            ];
 
         case 'bot_audit':
-            return ['cat' => 'audit', 'title' => '🤖 <b>BOT ACTION</b>', 'except' => isset($d['admin']) ? (string) $d['admin'] : '', 'rows' => [
-                tg_r('👤', 'By admin', tg_c(isset($d['admin']) ? $d['admin'] : '')),
-                tg_r('⚡', 'Action', tg_c(isset($d['action']) ? $d['action'] : '')),
-                tg_r('📝', 'Detail', tg_e(tg_clip(isset($d['detail']) ? $d['detail'] : '', 400))),
-            ]];
+            return [
+                'cat'    => 'audit',
+                'title'  => '🤖 <b>NHẬT KÝ BOT</b>',
+                'except' => isset($d['admin']) ? (string) $d['admin'] : '',
+                'rows'   => ['👮 ' . tg_c(isset($d['admin']) ? $d['admin'] : '') . ' · ' . tg_e(tg_clip(isset($d['detail']) ? $d['detail'] : '', 160))],
+            ];
 
         case 'test':
-            return ['cat' => 'test', 'title' => '🔔 <b>TEST ALERT</b>', 'rows' => [
-                tg_r('✅', 'Status', 'Telegram alerts are working'),
-                tg_r('🌐', 'Server', tg_c(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : php_uname('n'))),
-            ]];
+            return [
+                'cat'   => 'test',
+                'title' => '🔔 <b>KIỂM TRA THÔNG BÁO</b>',
+                'rows'  => ['✅ Hệ thống thông báo hoạt động ổn định 100% (thông báo không bao giờ tự xoá).'],
+            ];
     }
     return null;
 }
 
 /* ------------------------------------------------------------------
- * Queue + delivery. Messages are collected during the request and sent AFTER the page has
- * been delivered to the visitor (fastcgi_finish_request), so nobody waits for Telegram.
+ * 10. Post-Response Alert Queue & Delivery (NEVER Auto-Deleted!)
  * ------------------------------------------------------------------ */
 
 function tg_queue($item = null)
@@ -1275,7 +1721,6 @@ function tg_queue($item = null)
     return null;
 }
 
-/** Report something that happened. Never throws. */
 function tg_event($type, array $d = [])
 {
     static $busy = false;
@@ -1284,24 +1729,25 @@ function tg_event($type, array $d = [])
     }
     $busy = true;
     try {
-        if (isset($d['username']) && in_array($type, ['page_view', 'member_action', 'tool_use', 'key_ok', 'key_invalid', 'freekey_click'], true)) {
-            tg_block_enforce((string) $d['username'], isset($d['role']) ? (string) $d['role'] : 'member'); // blocked member: ends the request here
+        if (isset($d['username']) && in_array($type, ['page_view', 'member_action', 'tool_use', 'key_ok', 'key_invalid', 'freekey_click', 'freekey_claimed'], true)) {
+            tg_block_enforce((string) $d['username'], isset($d['role']) ? (string) $d['role'] : 'member');
         }
         $map = tg_activity_map($type, $d);
         if ($map !== null) {
             $logIt = true;
-            if ($type === 'page_view' || $type === 'ip_blocked_hit' || ($type === 'member_action' && !empty($d['throttle']))) {
-                $logIt = tg_throttle('al:' . $type . ':' . $map[0] . ':' . $map[2], 20); // very chatty events: at most 1 row / 20 s per member
+            if ($type === 'page_view') {
+                $logIt = tg_throttle('al:pv:' . $map[0], 30);
             }
             if ($logIt) {
                 tg_activity($map[0], $map[1], $map[2], $map[3], array_key_exists('ip', $d) && $d['ip'] !== '' ? (string) $d['ip'] : null);
             }
         }
         $r = tg_render($type, $d);
-        if ($r !== null && tg_cat_on($r['cat'])) {
+        if ($r !== null && ($r['cat'] === 'test' || tg_cat_on($r['cat']))) {
             if (empty($r['throttle']) || tg_throttle($r['throttle'][0], $r['throttle'][1])) {
                 tg_queue([
                     'html'   => tg_card($r['title'], $r['rows'], isset($r['pre']) ? $r['pre'] : ''),
+                    'kb'     => isset($r['kb']) ? $r['kb'] : null,
                     'except' => isset($r['except']) ? $r['except'] : '',
                 ]);
             }
@@ -1320,14 +1766,14 @@ function tg_flush($finish = true)
     }
     $down = tg_store_read('down');
     if (!empty($down['until']) && $down['until'] > time()) {
-        return; // Telegram was unreachable a moment ago: do not slow the site down again
+        return;
     }
 
     if ($finish && PHP_SAPI !== 'cli') {
         ignore_user_abort(true);
         @set_time_limit(30);
         if (session_status() === PHP_SESSION_ACTIVE) {
-            @session_write_close(); // do not keep the visitor's session locked while we talk to Telegram
+            @session_write_close();
         }
         if (function_exists('fastcgi_finish_request')) {
             while (ob_get_level() > 0) {
@@ -1338,7 +1784,7 @@ function tg_flush($finish = true)
         }
     }
 
-    // Flood guard: at most 60 alerts per minute, the rest is summarised in one line
+    // Smart wave limiter: max 50 alerts/min so huge DDoS waves summarize cleanly without lagging Telegram
     $allowed = 0;
     $dropped = 0;
     tg_store_update('rate', function ($s) use (&$allowed, &$dropped, $items) {
@@ -1347,7 +1793,7 @@ function tg_flush($finish = true)
             $s = ['w' => $win, 'n' => 0];
         }
         foreach ($items as $i) {
-            if ($s['n'] < 60) {
+            if ($s['n'] < 50) {
                 $s['n']++;
                 $allowed++;
             } else {
@@ -1358,33 +1804,40 @@ function tg_flush($finish = true)
     });
     $items = array_slice($items, 0, $allowed);
     if ($dropped > 0) {
-        $items[] = ['html' => '⚠️ <b>' . $dropped . ' more alert(s) were suppressed</b> (rate limit: 60 per minute)', 'except' => ''];
+        $items[] = [
+            'html'   => '🧠 <b>AI Chống Spam Thông Báo:</b> Đã gộp <b>' . $dropped . '</b> cảnh báo trùng lặp trong phút này để giữ ổn định.',
+            'kb'     => null,
+            'except' => '',
+        ];
     }
 
     foreach ($items as $item) {
         foreach (tg_admin_ids() as $adminId) {
-            if ($item['except'] !== '' && (string) $item['except'] === (string) $adminId) {
+            if (!empty($item['except']) && (string) $item['except'] === (string) $adminId) {
                 continue;
             }
             $params = [
-                'chat_id' => $adminId,
-                'text' => tg_clip($item['html'], 3800) . '  ' . tg_tag(),
-                'parse_mode' => 'HTML',
+                'chat_id'                  => $adminId,
+                'text'                     => tg_clip($item['html'], 3800) . '  ' . tg_tag(),
+                'parse_mode'               => 'HTML',
                 'disable_web_page_preview' => true,
             ];
+            if (!empty($item['kb'])) {
+                $params['reply_markup'] = $item['kb'];
+            }
+            // IMPORTANT: Alerts sent here are NEVER passed to tg_autodelete_register() -> Kept forever!
             $res = tg_api('sendMessage', $params, 4);
             if (empty($res['ok'])) {
                 if (!isset($res['error_code'])) {
-                    tg_store_update('down', function ($s) {
-                        return ['until' => time() + 90];
+                    tg_store_update('down', function () {
+                        return ['until' => time() + 60];
                     });
-                    return; // network problem: stop, try again later
+                    return;
                 }
                 if (stripos((string) (isset($res['description']) ? $res['description'] : ''), 'parse') !== false) {
-                    $params['parse_mode'] = '';
-                    unset($params['parse_mode']);
+                    unset($params['parse_mode'], $params['reply_markup']);
                     $params['text'] = html_entity_decode(strip_tags($params['text']), ENT_QUOTES, 'UTF-8');
-                    tg_api('sendMessage', $params, 4);
+                    tg_api_raw('sendMessage', $params, 4);
                 }
             }
         }
@@ -1392,7 +1845,7 @@ function tg_flush($finish = true)
 }
 
 /* ------------------------------------------------------------------
- * Registrations announced exactly once (by the hook in the register page OR by the scanner)
+ * 11. Registration De-dup & Background Table/Ban Scanner
  * ------------------------------------------------------------------ */
 
 function tg_claim_registration($id, $viaScan)
@@ -1400,25 +1853,19 @@ function tg_claim_registration($id, $viaScan)
     $ok = false;
     tg_store_update('scan', function ($s) use ($id, $viaScan, &$ok) {
         $reg = (isset($s['reg']) && is_array($s['reg'])) ? $s['reg'] : [];
-        if (in_array($id, $reg, true)) {
+        if (in_array((int) $id, $reg, true)) {
             return $s;
         }
-        if (!$viaScan && isset($s['b']['users']) && (int) $s['b']['users'] >= $id) {
-            return $s; // the scanner already walked past this account
+        if (!$viaScan && isset($s['b']['users']) && (int) $s['b']['users'] >= (int) $id) {
+            return $s;
         }
-        $reg[]    = $id;
-        $s['reg'] = array_slice($reg, -150);
+        $reg[]    = (int) $id;
+        $s['reg'] = array_slice($reg, -200);
         $ok       = true;
         return $s;
     });
     return $ok;
 }
-
-/* ------------------------------------------------------------------
- * Scanner: read-only look at tables the existing site already writes to.
- * New accounts, admin_cp actions (admin_logs), security_logs and failed logins become alerts,
- * without touching admin_cp / login / register files. The first run only remembers "now".
- * ------------------------------------------------------------------ */
 
 function tg_scan_events($force = false)
 {
@@ -1443,6 +1890,19 @@ function tg_scan_events($force = false)
         return;
     }
 
+    // Sweep expired timed IP bans & pending DDoS bans + auto-delete due command messages
+    try {
+        if (function_exists('sh_sync_pending_to_db')) {
+            sh_sync_pending_to_db($conn);
+        }
+        if (function_exists('ipg_sweep_expired')) {
+            ipg_sweep_expired($conn);
+        }
+        tg_autodelete_sweep();
+    } catch (Throwable $e) {
+        // ignore
+    }
+
     $specs = [
         'users'          => 'SELECT id, username FROM users WHERE id > %d ORDER BY id ASC LIMIT 30',
         'admin_logs'     => 'SELECT id, username, action, detail, ip, created_at FROM admin_logs WHERE id > %d ORDER BY id ASC LIMIT 30',
@@ -1453,7 +1913,7 @@ function tg_scan_events($force = false)
         try {
             tg_scan_table($conn, $table, $sql);
         } catch (Throwable $e) {
-            error_log('[telegram.php] scan ' . $table . ': ' . $e->getMessage());
+            // table may not exist
         }
     }
 }
@@ -1463,11 +1923,14 @@ function tg_scan_table($conn, $table, $sqlTemplate)
     $state = tg_store_read('scan');
     $base  = isset($state['b'][$table]) ? (int) $state['b'][$table] : null;
 
-    $res = mysqli_query($conn, 'SELECT COALESCE(MAX(id), 0) AS m FROM `' . $table . '`');
-    $row = $res ? mysqli_fetch_assoc($res) : null;
+    $res = @mysqli_query($conn, 'SELECT COALESCE(MAX(id), 0) AS m FROM `' . $table . '`');
+    if (!$res) {
+        return;
+    }
+    $row = mysqli_fetch_assoc($res);
     $max = $row ? (int) $row['m'] : 0;
 
-    if ($base === null || $base > $max) { // first run (or table emptied): start from "now", never announce old rows
+    if ($base === null || $base > $max) {
         tg_store_update('scan', function ($s) use ($table, $max) {
             $s['b'][$table] = $max;
             return $s;
@@ -1478,7 +1941,7 @@ function tg_scan_table($conn, $table, $sqlTemplate)
         return;
     }
 
-    $res  = mysqli_query($conn, sprintf($sqlTemplate, $base));
+    $res  = @mysqli_query($conn, sprintf($sqlTemplate, $base));
     $rows = [];
     $last = $base;
     while ($res && ($r = mysqli_fetch_assoc($res))) {
@@ -1499,7 +1962,7 @@ function tg_scan_table($conn, $table, $sqlTemplate)
     } elseif ($table === 'admin_logs') {
         foreach ($rows as $r) {
             if (strpos((string) $r['username'], 'tg:') === 0) {
-                continue; // written by the Telegram bot itself
+                continue;
             }
             tg_event('admin_log', $r);
         }
@@ -1531,20 +1994,19 @@ function tg_scan_table($conn, $table, $sqlTemplate)
 }
 
 /* ------------------------------------------------------------------
- * Error / downtime watcher. Call tg_boot() once, BEFORE db.php is included,
- * so a dead database is reported too.
+ * 12. Error / Shutdown Lifecycle
  * ------------------------------------------------------------------ */
 
 function tg_php_error($no, $str, $file, $line)
 {
     if (!(error_reporting() & $no)) {
-        return false; // silenced with @
+        return false;
     }
     if (!in_array($no, [E_WARNING, E_USER_WARNING, E_RECOVERABLE_ERROR, E_USER_ERROR], true)) {
         return false;
     }
     tg_event('php_warning', ['message' => $str, 'file' => $file, 'line' => $line]);
-    return false; // let PHP keep its normal handling / logging
+    return false;
 }
 
 function tg_shutdown()
@@ -1571,11 +2033,12 @@ function tg_shutdown()
                 $dbOk = false;
             }
         }
-        if (!$dbOk && !$fatal) {
+        if (!$dbOk && !$fatal && (!defined('SH_EARLY_RAN') || empty($GLOBALS['SH_SKIP_DB_ALERT']))) {
             tg_event('db_down', []);
         }
 
         tg_flush(true);
+        tg_autodelete_sweep();
         if ($dbOk && !$fatal) {
             tg_scan_events();
             tg_flush(false);

@@ -5,6 +5,11 @@
    kho� m? tool theo gi�y (server), CSRF, v� c�c h�m cho trang security.php. */
 
 // ---- C?ng ho� cookie phi�n (tru?c session_start) ----
+if (is_file(__DIR__ . '/security_shield.php')) {
+    require_once __DIR__ . '/security_shield.php';
+    sh_early_guard();
+}
+
 $ds_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
     || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
 
@@ -56,6 +61,9 @@ if (!$conn) {
 }
 mysqli_set_charset($conn, "utf8mb4");
 $st = [];
+if (function_exists('sh_post_db_guard')) {
+    sh_post_db_guard($conn);
+}
 
 /* ================= C?U H�NH (d?i n?u c?n) ================= */
 // B?ng ngu?i d�ng d�ng cho trang security.php (d?i cho d�ng v?i database c?a b?n)
@@ -99,6 +107,7 @@ if (!function_exists('ds_q')) {
 if (!function_exists('ds_client_ip')) {
     function ds_client_ip()
     {
+        if (function_exists('sh_client_ip')) { $sip = sh_client_ip(); if ($sip !== '') { return $sip; } }
         $ip = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '';
         if (defined('DS_TRUST_CF') && DS_TRUST_CF && !empty($_SERVER['HTTP_CF_CONNECTING_IP'])
             && filter_var($_SERVER['HTTP_CF_CONNECTING_IP'], FILTER_VALIDATE_IP)) {

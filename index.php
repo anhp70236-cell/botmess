@@ -887,6 +887,12 @@ function is_cloudflare_ip(string $ip): bool
 
 function client_ip(): string
 {
+    if (function_exists('sh_client_ip')) {
+        $sip = sh_client_ip();
+        if ($sip !== '') {
+            return $sip;
+        }
+    }
     $ip = '';
     if (CLIENT_IP_HEADER !== '' && !empty($_SERVER[CLIENT_IP_HEADER])) {
         $ip = trim(explode(',', (string) $_SERVER[CLIENT_IP_HEADER])[0]);
@@ -1709,7 +1715,7 @@ if (isset($_GET['use_tool'])) {
         if ($tgOutcome === 'open') {
             $tgData['spent']  = !empty($outcome['spent']);
             $tgData['reopen'] = !empty($outcome['reopen']);
-            if ($tgData['spent'] && function_exists('tg_enabled') && tg_enabled()) {
+            if (function_exists('tg_enabled') && tg_enabled()) {
                 try {
                     $fresh = find_user($conn, $username);
                     $tgData['turns'] = $fresh ? (int) $fresh['turns'] : 0;
@@ -1743,6 +1749,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if (key_attempts_blocked($conn, $username)) {
         site_tg('key_locked', ['username' => $username]);
+        if (function_exists('sh_on_key_fail')) {
+            sh_on_key_fail($conn, $username, '', isset($_POST['submit_vip']) ? 'VIP' : 'FREE');
+        }
         redirect('?status=too_many_attempts');
     }
 
@@ -1751,7 +1760,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $dailyKeyType = isset($_POST['submit_vip']) ? 'VIP' : (isset($_POST['submit_free']) ? 'FREE' : '');
 
-    if ($enforceRules && daily_key_limited($dailyKeyType) && daily_key_limit_hit($conn, $username)) {
+    if ($enforceRules && daily_key_limited($dailyKeyType) && (daily_key_limit_hit($conn, $username) || (function_exists('sh_check_freekey_redeem') && !sh_check_freekey_redeem($conn, $username, $dailyKeyType, $enforceRules)))) {
 
         redirect('?status=key_daily_limit');
 
@@ -1793,6 +1802,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         default:
             record_key_failure($conn, $username);
             site_tg('key_invalid', ['username' => $username, 'type' => $tgKeyType, 'key' => $tgKeyCode]);
+            if (function_exists('sh_on_key_fail')) {
+                sh_on_key_fail($conn, $username, $tgKeyCode, $tgKeyType);
+            }
             redirect('?status=key_wrong');
     }
 }

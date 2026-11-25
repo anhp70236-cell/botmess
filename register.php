@@ -1,6 +1,14 @@
 <?php
 include 'db.php';
 if (session_status() === PHP_SESSION_NONE) { session_start(); }
+if (is_file(__DIR__ . '/telegram.php')) {
+    try {
+        require_once __DIR__ . '/telegram.php';
+        tg_boot('web');
+    } catch (Throwable $e) {
+        error_log('[register.php] telegram: ' . $e->getMessage());
+    }
+}
 
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
@@ -174,7 +182,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 $insert->bind_param('ss', $typedUser, $pass);
                 $insert->execute();
+                $newRegId = (int) $insert->insert_id;
                 $insert->close();
+
+                try {
+                    $regObs = function_exists('sh_observe_register')
+                        ? sh_observe_register($conn, $typedUser, $newRegId)
+                        : ['alts' => [], 'vpn' => false, 'ip' => ''];
+                    if (function_exists('tg_event')) {
+                        tg_event('register', [
+                            'username' => $typedUser,
+                            'id'       => $newRegId,
+                            'ip'       => $regObs['ip'],
+                            'alts'     => $regObs['alts'],
+                            'vpn'      => !empty($regObs['vpn']),
+                        ]);
+                    }
+                } catch (Throwable $tgErr) {
+                    error_log('[register.php] tg_event: ' . $tgErr->getMessage());
+                }
 
                 session_regenerate_id(true);
                 $_SESSION['username'] = $typedUser;

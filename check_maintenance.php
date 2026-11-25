@@ -60,7 +60,7 @@ if (!$MT_LOGIN_OPEN) {
 }
 $MT_ALLOW_PAGES = array_values(array_unique(array_merge(
     array_diff($MT_ALLOW_PAGES, ['logout', 'logout.php']),
-    ['admin_cp.php', 'admin_cp', 'maintenance_access.php']
+    ['admin_cp.php', 'admin_cp', 'maintenance_access.php', 'telegram_bot.php', 'telegram_bot']
 )));
 /* Logout pages: visiting one also clears the remember-Admin cookie (otherwise you would be logged straight back in). */
 if (!isset($MT_LOGOUT_PAGES)) {

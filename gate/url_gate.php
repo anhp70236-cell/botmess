@@ -89,4 +89,8 @@ function ug_run() {
     exit;
 }
 
+if (is_file(dirname(__DIR__) . '/security_shield.php')) {
+    require_once dirname(__DIR__) . '/security_shield.php';
+    sh_early_guard();
+}
 ug_run();

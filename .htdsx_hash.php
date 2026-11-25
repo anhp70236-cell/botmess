@@ -1,5 +1,9 @@
 <?php
 /* dsx-hash-v1 : tu dong chen script an duong dan, KHONG sua file goc */
+if (is_file(__DIR__ . '/security_shield.php')) {
+    require_once __DIR__ . '/security_shield.php';
+    sh_early_guard();
+}
 if (!function_exists('dsx_hash_cb')) {
     function dsx_hash_cb($buf, $phase = 0) {
         static $done = false;

@@ -2,6 +2,14 @@
 if (session_status() === PHP_SESSION_NONE) { session_start(); }
 include 'db.php';
 date_default_timezone_set('Asia/Ho_Chi_Minh');
+if (is_file(__DIR__ . '/telegram.php')) {
+    try {
+        require_once __DIR__ . '/telegram.php';
+        tg_boot('web');
+    } catch (Throwable $e) {
+        error_log('[get_key.php] telegram: ' . $e->getMessage());
+    }
+}
 
 // Optional settings file (kept on the server, never overwritten by updates)
 if (is_file(__DIR__ . '/fk_config.php')) { include_once __DIR__ . '/fk_config.php'; }
@@ -362,8 +370,11 @@ function fk_reset_info($now, $from = null) {
 
 // Logs a "blocked_*" event (counts as a strike) and shows the red page
 function fk_deny($conn, $event, $title, $text) {
-    global $main_web, $username;
+    global $main_web, $username, $ip_raw;
     fk_log($conn, $event, $username);
+    if (function_exists('sh_on_freekey_abuse')) {
+        try { sh_on_freekey_abuse($conn, $username, $event, isset($ip_raw) ? $ip_raw : ''); } catch (Throwable $e) {}
+    }
     fk_layout('fa-ban', $title, $text,
         '<div class="actions">' . fk_btn($main_web, 'Back to home', 'fa-house', false) . '</div>', 0, 'bad');
 }
@@ -377,9 +388,15 @@ function fk_cheat_info($conn) {
 }
 
 // One key per device and per IP every 8 hours + VPN block + lock-out after too many blocked tries
+function fk_has_admin_pass($conn, $un, $now) {
+    if ($un === '') return false;
+    $p = fk_row($conn, "SELECT expires_at FROM free_key_pass WHERE username = ? LIMIT 1", 's', array($un));
+    return $p && (int)$p['expires_at'] > $now;
+}
+
 function fk_guard($conn) {
     global $ip, $ip_raw, $device, $now, $wl, $main_web, $username;
-    if ($wl) return;
+    if ($wl || fk_has_admin_pass($conn, $username, $now)) return;
     $since = $now - FK_COOLDOWN;
     $home  = '<div class="actions">' . fk_btn($main_web, 'Back to home', 'fa-house', false) . '</div>';
     // FKX-NOLOCK: gian lan chi mat key, khong khoa tai khoan / mang
@@ -695,6 +712,9 @@ if ($action === 'verify') {
     if ($elapsed < max((int)FK_MIN_WAIT, (int)FK_FAST_WAIT) || $is_bot) {
         fk_exec($conn, "DELETE FROM free_key_flow WHERE id = ?", 'i', array((int)$flow['id']));
         fk_log($conn, 'blocked_cheat', $username);
+        if (function_exists('sh_on_freekey_abuse')) {
+            try { sh_on_freekey_abuse($conn, $username, 'blocked_cheat', $ip_raw); } catch (Throwable $e) {}
+        }
         header('Cache-Control: no-store');
         header('Location: ' . $key_base . '?=cheat&s=' . min(999, max(0, $elapsed)));
         exit();
@@ -714,7 +734,8 @@ if ($action === 'verify') {
         fk_fail('You have already claimed a key. Each account can claim 1 key every ' . fk_cd_label() . '.');
     }
     fk_guard($conn);
-    $claim_ip = $wl ? 'wl:' . substr(md5($username), 0, 12) : $ip;   // whitelisted IPs never collide with each other
+    $adminPass = fk_has_admin_pass($conn, $username, $now);
+    $claim_ip = ($wl || $adminPass) ? 'wl:' . substr(md5($username . '|' . $now), 0, 12) : $ip;   // whitelisted / pass IPs never collide with each other
 
     // Issue the key (once, atomically)
     mysqli_begin_transaction($conn);
@@ -755,8 +776,16 @@ if ($action === 'verify') {
     }
 
     fk_exec($conn, "UPDATE free_key_flow SET claim_id = ? WHERE id = ?", 'ii', array((int)$claim_id, (int)$flow['id']));
+    if ($adminPass) {
+        fk_exec($conn, "DELETE FROM free_key_pass WHERE username = ?", 's', array($username));
+    }
     mysqli_commit($conn);
     fk_log($conn, 'claim', $username);
+    if (function_exists('tg_event')) {
+        try {
+            tg_event('freekey_claimed', array('username' => $username, 'key' => $key, 'ip' => $ip_raw));
+        } catch (Throwable $e) {}
+    }
 
     fk_set_view_cookie($view);
     header('Cache-Control: no-store');

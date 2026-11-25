@@ -1,23 +1,28 @@
 <?php
 /* ==========================================================================
-   ipguard.php  —  Permanent IP ban for DEVNVIOS
-   - Banned IP = clean "access blocked" page (HTTP 403), nothing else loads.
-   - Bans live in table `ip_bans` (created automatically). "Unban" only flips active = 0,
-     so NOTHING is ever deleted (works even with allow_destructive = false).
-   - Used by index.php and telegram_bot.php. To protect another page (login, register, admin_cp...)
-     add these two lines right after its database connection:
-         require_once __DIR__ . '/ipguard.php';
-         ipg_run($conn);
-   - PHP 7.2 compatible. Never throws: a guard problem can not break the website.
+   ipguard.php  —  Permanent & Timed Auto-Unban IP Guard for IOSMODS / DEVNVIOS
+   - Supports both Permanent IP bans and Timed Auto-Unban IP isolations
+     (Key-Spam Sad-Face page, DDoS shield, VPN/multi-account cooldown).
+   - Never deletes ban history: Unban flips active = 0 and records unbanned_by
+     ('auto-timer' or Admin ID).
+   - Synchronizes seamlessly with security_shield.php pre-DB fast cache.
+   - NEVER touches /peoeopoo or /ios_b, and NEVER bans safe/Cloudflare/OneShield/Admin IPs.
+   - PHP 7.2 – 8.3+ compatible. Never throws fatal errors.
    ========================================================================== */
 
 if (!defined('IPG_LOADED')) {
     define('IPG_LOADED', 1);
 }
 
-/** Contact link shown on the blocked page (the admin's Telegram). */
+if (is_file(__DIR__ . '/security_shield.php')) {
+    require_once __DIR__ . '/security_shield.php';
+}
+
 function ipg_contact()
 {
+    if (function_exists('sh_contact_url')) {
+        return sh_contact_url();
+    }
     if (function_exists('tg_cfg')) {
         $c = (string) tg_cfg('contact_url', '');
         if ($c !== '') {
@@ -33,6 +38,9 @@ function ipg_contact()
 
 function ipg_in_cidr($ip, $cidr)
 {
+    if (function_exists('sh_in_cidr')) {
+        return sh_in_cidr($ip, $cidr);
+    }
     $parts  = explode('/', $cidr, 2);
     $subnet = @inet_pton($parts[0]);
     $addr   = @inet_pton($ip);
@@ -54,42 +62,14 @@ function ipg_in_cidr($ip, $cidr)
 
 function ipg_is_cloudflare($ip)
 {
-    static $ranges = [
-        '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18',
-        '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17',
-        '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
-        '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32',
-        '2a06:98c0::/29', '2c0f:f248::/32',
-    ];
-    foreach ($ranges as $r) {
-        if (ipg_in_cidr($ip, $r)) {
-            return true;
-        }
-    }
-    return false;
+    return function_exists('sh_is_cloudflare') ? sh_is_cloudflare($ip) : false;
 }
 
-/** The visitor's IP, same rules as index.php client_ip(). */
-function ipg_ip()
-{
-    if (function_exists('client_ip') && defined('CLIENT_IP_HEADER')) {
-        return ipg_norm(client_ip());
-    }
-    $ip = '';
-    if (defined('CLIENT_IP_HEADER') && CLIENT_IP_HEADER !== '' && !empty($_SERVER[CLIENT_IP_HEADER])) {
-        $ip = trim(explode(',', (string) $_SERVER[CLIENT_IP_HEADER])[0]);
-    }
-    if ($ip === '' || filter_var($ip, FILTER_VALIDATE_IP) === false) {
-        $remote = (string) (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
-        $cf     = trim((string) (isset($_SERVER['HTTP_CF_CONNECTING_IP']) ? $_SERVER['HTTP_CF_CONNECTING_IP'] : ''));
-        $ip     = ($cf !== '' && filter_var($cf, FILTER_VALIDATE_IP) !== false && ipg_is_cloudflare($remote)) ? $cf : $remote;
-    }
-    return ipg_norm($ip);
-}
-
-/** Canonical text form (so 2001:db8::1 and 2001:0db8:0:0:0:0:0:1 are the same ban). '' if not an IP. */
 function ipg_norm($ip)
 {
+    if (function_exists('sh_norm_ip')) {
+        return sh_norm_ip($ip);
+    }
     $ip = trim((string) $ip);
     if ($ip === '' || filter_var($ip, FILTER_VALIDATE_IP) === false) {
         return '';
@@ -99,53 +79,88 @@ function ipg_norm($ip)
     return $out === false ? $ip : substr((string) $out, 0, 45);
 }
 
-/** [true,''] or [false,'why not'] — refuses addresses that would lock out everybody (proxy, Cloudflare, local). */
+function ipg_ip()
+{
+    if (function_exists('sh_client_ip')) {
+        return sh_client_ip();
+    }
+    $remote = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '';
+    return ipg_norm($remote);
+}
+
+/** [true, ''] or [false, 'why not'] — zero-false-positive protection against banning proxies/Cloudflare/OneShield/Admins. */
 function ipg_can_ban($ip)
 {
     $ip = ipg_norm($ip);
     if ($ip === '') {
-        return [false, 'That is not a valid IP address.'];
+        return [false, 'Địa chỉ IP không hợp lệ.'];
+    }
+    if (function_exists('sh_is_safe_ip')) {
+        list($safe, $why) = sh_is_safe_ip($ip);
+        if ($safe) {
+            return [false, $why];
+        }
+        return [true, ''];
     }
     if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
-        return [false, 'Private / local address: banning it could block every visitor.'];
-    }
-    if (ipg_is_cloudflare($ip)) {
-        return [false, 'This is a Cloudflare address: banning it would block every visitor.'];
+        return [false, 'Địa chỉ nội bộ / cục bộ: không được phép chặn.'];
     }
     return [true, ''];
 }
 
 /* ------------------------------------------------------------------
- * Table
+ * Table & Seamless Schema Upgrade (adds ban_type + expires_at safely)
  * ------------------------------------------------------------------ */
 
 function ipg_ensure($conn)
 {
+    static $checked = false;
+    if ($checked || !($conn instanceof mysqli)) {
+        return;
+    }
+    $checked = true;
     try {
         mysqli_query($conn, "CREATE TABLE IF NOT EXISTS `ip_bans` (
             `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
             `ip` VARCHAR(45) NOT NULL,
             `reason` VARCHAR(255) NOT NULL DEFAULT '',
+            `ban_type` VARCHAR(24) NOT NULL DEFAULT 'manual',
             `username` VARCHAR(100) DEFAULT NULL,
             `banned_by` VARCHAR(60) NOT NULL DEFAULT '',
             `active` TINYINT(1) NOT NULL DEFAULT 1,
             `hits` INT UNSIGNED NOT NULL DEFAULT 0,
             `last_hit` DATETIME DEFAULT NULL,
             `created_at` DATETIME NOT NULL,
+            `expires_at` DATETIME DEFAULT NULL,
             `unbanned_by` VARCHAR(60) DEFAULT NULL,
             `unbanned_at` DATETIME DEFAULT NULL,
             PRIMARY KEY (`id`),
             UNIQUE KEY `uq_ip` (`ip`),
-            KEY `idx_active` (`active`)
+            KEY `idx_active` (`active`),
+            KEY `idx_expires` (`active`, `expires_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        $cols = [];
+        $res  = @mysqli_query($conn, 'SHOW COLUMNS FROM `ip_bans`');
+        while ($res && ($r = mysqli_fetch_assoc($res))) {
+            $cols[$r['Field']] = true;
+        }
+        if ($cols) {
+            if (!isset($cols['ban_type'])) {
+                @mysqli_query($conn, "ALTER TABLE `ip_bans` ADD COLUMN `ban_type` VARCHAR(24) NOT NULL DEFAULT 'manual' AFTER `reason`");
+            }
+            if (!isset($cols['expires_at'])) {
+                @mysqli_query($conn, "ALTER TABLE `ip_bans` ADD COLUMN `expires_at` DATETIME DEFAULT NULL AFTER `created_at`");
+            }
+        }
     } catch (Throwable $e) {
         error_log('[ipguard.php] ensure: ' . $e->getMessage());
     }
 }
 
-/** Run a prepared statement; creates the table once and retries if it is missing. Returns mysqli_stmt or null. */
 function ipg_q($conn, $sql, $types = '', array $params = [])
 {
+    ipg_ensure($conn);
     for ($try = 0; $try < 2; $try++) {
         try {
             $stmt = $conn->prepare($sql);
@@ -162,7 +177,7 @@ function ipg_q($conn, $sql, $types = '', array $params = [])
             }
             return $stmt;
         } catch (Throwable $e) {
-            if ($try === 0 && stripos($e->getMessage(), "doesn't exist") !== false) {
+            if ($try === 0) {
                 ipg_ensure($conn);
                 continue;
             }
@@ -174,7 +189,55 @@ function ipg_q($conn, $sql, $types = '', array $params = [])
 }
 
 /* ------------------------------------------------------------------
- * Ban / unban / lookup
+ * Auto-Sweep Expired Timed Bans
+ * ------------------------------------------------------------------ */
+
+function ipg_sweep_expired($conn, $priorityIp = '')
+{
+    if (!($conn instanceof mysqli)) {
+        return 0;
+    }
+    ipg_ensure($conn);
+    $lifted = 0;
+    try {
+        $res = @mysqli_query($conn, "SELECT id, ip, username, ban_type, reason FROM ip_bans WHERE active = 1 AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 30");
+        $rows = [];
+        while ($res && ($r = mysqli_fetch_assoc($res))) {
+            $rows[] = $r;
+        }
+        if (!$rows) {
+            if ($priorityIp !== '' && function_exists('sh_remove_ban_cache')) {
+                sh_remove_ban_cache($priorityIp);
+            }
+            return 0;
+        }
+        foreach ($rows as $r) {
+            $st = ipg_q($conn, "UPDATE ip_bans SET active = 0, unbanned_by = 'auto-timer', unbanned_at = NOW() WHERE id = ? AND active = 1", 'i', [(int) $r['id']]);
+            if ($st !== null) {
+                if ($st->affected_rows > 0) {
+                    $lifted++;
+                    if (function_exists('sh_remove_ban_cache')) {
+                        sh_remove_ban_cache($r['ip']);
+                    }
+                    if (function_exists('tg_event')) {
+                        tg_event('ip_auto_unban', [
+                            'ip'       => (string) $r['ip'],
+                            'username' => (string) (isset($r['username']) ? $r['username'] : ''),
+                            'ban_type' => (string) (isset($r['ban_type']) ? $r['ban_type'] : 'temp'),
+                        ]);
+                    }
+                }
+                $st->close();
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('[ipguard.php] sweep: ' . $e->getMessage());
+    }
+    return $lifted;
+}
+
+/* ------------------------------------------------------------------
+ * Ban / Temp-Ban / Unban / Lookup
  * ------------------------------------------------------------------ */
 
 function ipg_find($conn, $ip)
@@ -187,7 +250,8 @@ function ipg_find($conn, $ip)
     if ($st === null) {
         return null;
     }
-    $row = $st->get_result()->fetch_assoc();
+    $rs  = $st->get_result();
+    $row = $rs ? $rs->fetch_assoc() : null;
     $st->close();
     return $row ?: null;
 }
@@ -195,10 +259,20 @@ function ipg_find($conn, $ip)
 function ipg_is_banned($conn, $ip)
 {
     $row = ipg_find($conn, $ip);
-    return ($row && (int) $row['active'] === 1) ? $row : null;
+    if (!$row || (int) $row['active'] !== 1) {
+        return null;
+    }
+    if (!empty($row['expires_at']) && strpos((string) $row['expires_at'], '0000') !== 0) {
+        $exp = strtotime((string) $row['expires_at']);
+        if ($exp !== false && $exp <= time()) {
+            ipg_sweep_expired($conn, $ip);
+            return null;
+        }
+    }
+    return $row;
 }
 
-/** Permanent ban. Returns ['ok'=>bool, 'msg'=>string, 'row'=>array|null, 'new'=>bool]. */
+/** Permanent IP ban (Admin action). */
 function ipg_ban($conn, $ip, $reason, $by, $username = '')
 {
     $ip = ipg_norm($ip);
@@ -212,143 +286,161 @@ function ipg_ban($conn, $ip, $reason, $by, $username = '')
     }
     $reason   = function_exists('mb_substr') ? mb_substr($reason, 0, 250, 'UTF-8') : substr($reason, 0, 250);
     $existing = ipg_find($conn, $ip);
-    $already  = $existing && (int) $existing['active'] === 1;
+    $already  = $existing && (int) $existing['active'] === 1 && empty($existing['expires_at']);
     $uname    = $username !== '' ? $username : null;
+
     $st = ipg_q(
         $conn,
-        'INSERT INTO ip_bans (ip, reason, username, banned_by, active, hits, created_at) VALUES (?, ?, ?, ?, 1, 0, NOW())
-         ON DUPLICATE KEY UPDATE created_at = IF(active = 1, created_at, NOW()), active = 1, reason = VALUES(reason),
-             username = COALESCE(VALUES(username), username), banned_by = VALUES(banned_by), unbanned_by = NULL, unbanned_at = NULL',
+        "INSERT INTO ip_bans (ip, reason, ban_type, username, banned_by, active, hits, created_at, expires_at)
+         VALUES (?, ?, 'manual', ?, ?, 1, 0, NOW(), NULL)
+         ON DUPLICATE KEY UPDATE created_at = IF(active = 1, created_at, NOW()), active = 1,
+             reason = VALUES(reason), ban_type = 'manual', expires_at = NULL,
+             username = COALESCE(VALUES(username), username), banned_by = VALUES(banned_by),
+             unbanned_by = NULL, unbanned_at = NULL",
         'ssss',
         [$ip, $reason, $uname, (string) $by]
     );
     if ($st === null) {
-        return ['ok' => false, 'msg' => 'Database error while saving the ban.', 'row' => null, 'new' => false];
+        return ['ok' => false, 'msg' => 'Lỗi cơ sở dữ liệu khi lưu chặn IP.', 'row' => null, 'new' => false];
     }
     $st->close();
-    return ['ok' => true, 'msg' => $already ? 'Already banned (reason updated).' : 'Banned forever.', 'row' => ipg_find($conn, $ip), 'new' => !$already];
+    $row = ipg_find($conn, $ip);
+    if ($row && function_exists('sh_write_ban_cache')) {
+        sh_write_ban_cache($ip, [
+            'id'         => (int) $row['id'],
+            'reason'     => (string) $row['reason'],
+            'ban_type'   => 'manual',
+            'username'   => (string) (isset($row['username']) ? $row['username'] : ''),
+            'banned_by'  => (string) $by,
+            'expires_ts' => 0,
+            'expires_at' => null,
+        ]);
+    }
+    return ['ok' => true, 'msg' => $already ? 'Đã cập nhật lý do chặn vĩnh viễn.' : 'Đã chặn IP vĩnh viễn.', 'row' => $row, 'new' => !$already];
 }
 
-/** "Unban" = active 0 (the row stays as history). */
+/** Timed IP ban (auto-unbans when $seconds elapse; never overwrites an active permanent manual ban!). */
+function ipg_temp_ban($conn, $ip, $seconds, $reason, $by = 'bot-shield', $username = '', $banType = 'temp')
+{
+    $ip = ipg_norm($ip);
+    list($can, $why) = ipg_can_ban($ip);
+    if (!$can) {
+        return ['ok' => false, 'msg' => $why, 'row' => null, 'new' => false];
+    }
+    $seconds  = max(60, min(604800, (int) $seconds));
+    $existing = ipg_find($conn, $ip);
+    if ($existing && (int) $existing['active'] === 1 && empty($existing['expires_at'])) {
+        // Already permanently banned by Admin -> keep permanent ban intact
+        return ['ok' => true, 'msg' => 'IP đang bị chặn vĩnh viễn.', 'row' => $existing, 'new' => false];
+    }
+
+    $reason = trim((string) $reason);
+    if ($reason === '') {
+        $reason = 'Tạm khoá truy cập tự động để bảo vệ hệ thống.';
+    }
+    $reason = function_exists('mb_substr') ? mb_substr($reason, 0, 250, 'UTF-8') : substr($reason, 0, 250);
+    $uname  = $username !== '' ? $username : null;
+    $btype  = preg_replace('/[^a-z0-9_]/i', '', (string) $banType) ?: 'temp';
+    $expTs  = time() + $seconds;
+    $expStr = date('Y-m-d H:i:s', $expTs);
+
+    $st = ipg_q(
+        $conn,
+        "INSERT INTO ip_bans (ip, reason, ban_type, username, banned_by, active, hits, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, 1, 1, NOW(), ?)
+         ON DUPLICATE KEY UPDATE created_at = NOW(), active = 1, reason = VALUES(reason),
+             ban_type = VALUES(ban_type), expires_at = VALUES(expires_at),
+             username = COALESCE(VALUES(username), username), banned_by = VALUES(banned_by),
+             unbanned_by = NULL, unbanned_at = NULL",
+        'ssssss',
+        [$ip, $reason, $btype, $uname, (string) $by, $expStr]
+    );
+    if ($st === null) {
+        return ['ok' => false, 'msg' => 'Lỗi cơ sở dữ liệu khi lưu tạm khoá IP.', 'row' => null, 'new' => false];
+    }
+    $st->close();
+    $row = ipg_find($conn, $ip);
+    if (function_exists('sh_write_ban_cache')) {
+        sh_write_ban_cache($ip, [
+            'id'         => $row ? (int) $row['id'] : 0,
+            'reason'     => $reason,
+            'ban_type'   => $btype,
+            'username'   => (string) $username,
+            'banned_by'  => (string) $by,
+            'expires_ts' => $expTs,
+            'expires_at' => $expStr,
+        ]);
+    }
+    return ['ok' => true, 'msg' => 'Đã tạm khoá IP (' . ceil($seconds / 60) . ' phút).', 'row' => $row, 'new' => true];
+}
+
+/** Unban = active 0 + clear fast cache + clear keyfail strikes so visitor enters immediately. */
 function ipg_unban($conn, $ip, $by)
 {
     $ip  = ipg_norm($ip);
     $row = ipg_find($conn, $ip);
+    if (function_exists('sh_remove_ban_cache')) {
+        sh_remove_ban_cache($ip);
+        $h = md5($ip);
+        @unlink(sh_dir() . '/keyfails/' . substr($h, 0, 2) . '/' . $h . '.json');
+        @unlink(sh_dir() . '/fkabuse/' . substr($h, 0, 2) . '/' . $h . '.json');
+        @unlink(sh_dir() . '/rates/' . substr($h, 0, 2) . '/' . $h . '.json');
+    }
     if (!$row || (int) $row['active'] !== 1) {
-        return ['ok' => false, 'msg' => 'This IP is not banned.', 'row' => $row];
+        return ['ok' => (bool) $row, 'msg' => $row ? 'IP này đã được gỡ chặn.' : 'IP này hiện không bị chặn.', 'row' => $row];
     }
     $st = ipg_q($conn, 'UPDATE ip_bans SET active = 0, unbanned_by = ?, unbanned_at = NOW() WHERE ip = ?', 'ss', [(string) $by, $ip]);
     if ($st === null) {
-        return ['ok' => false, 'msg' => 'Database error while unbanning.', 'row' => $row];
+        return ['ok' => false, 'msg' => 'Lỗi cơ sở dữ liệu khi gỡ chặn IP.', 'row' => $row];
     }
     $st->close();
-    return ['ok' => true, 'msg' => 'Unbanned.', 'row' => ipg_find($conn, $ip)];
+    return ['ok' => true, 'msg' => 'Đã gỡ chặn IP thành công.', 'row' => ipg_find($conn, $ip)];
 }
 
 /* ------------------------------------------------------------------
- * The blocked page (flat, matte, no glow)
+ * Blocked Page Renderer (Sad-Face iOS UI)
  * ------------------------------------------------------------------ */
 
 function ipg_wants_json()
 {
-    return isset($_GET['ajax']) || isset($_GET['sync'])
-        || (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower((string) $_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
-        || (isset($_SERVER['HTTP_ACCEPT']) && stripos((string) $_SERVER['HTTP_ACCEPT'], 'application/json') === 0);
+    return function_exists('sh_wants_json') ? sh_wants_json() : isset($_GET['ajax']);
 }
 
 function ipg_render(array $ban, $ip)
 {
-    while (ob_get_level() > 0) {
-        @ob_end_clean();
-    }
-    http_response_code(403);
-    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-    header('Pragma: no-cache');
-    header('X-Robots-Tag: noindex, nofollow');
-    header('X-Frame-Options: SAMEORIGIN');
-    header('X-Content-Type-Options: nosniff');
-
-    if (ipg_wants_json()) {
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['result' => 'ip_blocked', 'message' => 'Access blocked']);
+    if (function_exists('sh_render_sad_page')) {
+        $isTemp = !empty($ban['expires_at']) && strpos((string) $ban['expires_at'], '0000') !== 0;
+        sh_render_sad_page($ban, $ip, $isTemp ? 429 : 403);
         return;
     }
-
-    header('Content-Type: text/html; charset=utf-8');
-    $e      = function ($s) {
-        return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    };
-    $ref    = 'BAN-' . str_pad((string) (int) $ban['id'], 5, '0', STR_PAD_LEFT);
-    $reason = trim((string) $ban['reason']) !== '' ? (string) $ban['reason'] : 'Vi phạm quy định của website';
-    $since  = !empty($ban['created_at']) ? (string) $ban['created_at'] : '';
-    $contact = ipg_contact();
-    ?><!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="robots" content="noindex, nofollow">
-<meta name="color-scheme" content="light dark">
-<title>Truy cập bị chặn</title>
-<style>
-:root{--bg:#eef0f3;--card:#ffffff;--text:#1b1e24;--muted:#6a707c;--line:#e1e4e9;--accent:#b4372d;--chip:#f1f3f6;--btn:#1b1e24;--btn-text:#ffffff}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--text:#e9ebef;--muted:#8d94a2;--line:#262b34;--accent:#d8605a;--chip:#1e232b;--btn:#e9ebef;--btn-text:#14161b}}
-*{box-sizing:border-box}
-html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;display:flex;align-items:center;justify-content:center;padding:max(20px,env(safe-area-inset-top)) 20px max(20px,env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased}
-.card{width:100%;max-width:420px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:34px 28px 26px;text-align:center}
-.icon{width:68px;height:68px;border-radius:50%;background:var(--chip);border:1px solid var(--line);margin:0 auto 20px;display:flex;align-items:center;justify-content:center;color:var(--accent)}
-.icon svg{width:30px;height:30px}
-h1{margin:0 0 6px;font-size:22px;font-weight:650;letter-spacing:-.01em}
-.sub{margin:0 0 22px;color:var(--muted);font-size:14px;line-height:1.55}
-.rows{border:1px solid var(--line);border-radius:12px;overflow:hidden;text-align:left;margin-bottom:22px}
-.row{display:flex;justify-content:space-between;gap:16px;padding:11px 14px;font-size:13.5px;border-top:1px solid var(--line)}
-.row:first-child{border-top:0}
-.row span:first-child{color:var(--muted);flex:none}
-.row span:last-child{font-weight:560;text-align:right;word-break:break-word;min-width:0}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
-.btn{display:block;width:100%;padding:13px 16px;border-radius:12px;background:var(--btn);color:var(--btn-text);text-decoration:none;font-size:14.5px;font-weight:600;border:0;transition:opacity .15s}
-.btn:hover{opacity:.88}
-.note{margin:16px 0 0;color:var(--muted);font-size:12.5px;line-height:1.5}
-</style>
-</head>
-<body>
-<main class="card" role="alert">
-  <div class="icon" aria-hidden="true">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><path d="M12 14.6v2.2"/></svg>
-  </div>
-  <h1>Truy cập bị chặn</h1>
-  <p class="sub">Địa chỉ IP của bạn đã bị quản trị viên chặn vĩnh viễn khỏi website này.<br>Access from your IP address has been permanently blocked.</p>
-  <div class="rows">
-    <div class="row"><span>Lý do</span><span><?= $e($reason) ?></span></div>
-    <div class="row"><span>IP của bạn</span><span class="mono"><?= $e($ip) ?></span></div>
-    <div class="row"><span>Mã chặn</span><span class="mono"><?= $e($ref) ?></span></div>
-<?php if ($since !== '') { ?>
-    <div class="row"><span>Thời gian</span><span><?= $e($since) ?></span></div>
-<?php } ?>
-  </div>
-  <a class="btn" href="<?= $e($contact) ?>" rel="noopener">Liên hệ admin để khiếu nại</a>
-  <p class="note">Nếu bạn cho rằng đây là nhầm lẫn, hãy gửi cho admin mã chặn ở trên.</p>
-</main>
-</body>
-</html>
-<?php
+    http_response_code(403);
+    echo 'Truy cập bị giới hạn.';
 }
 
 /* ------------------------------------------------------------------
- * Guard: call once per request, right after the database connection.
- * Banned IP => alert (once per 10 minutes) + blocked page + exit.
+ * Runtime Guard
  * ------------------------------------------------------------------ */
 
 function ipg_run($conn)
 {
-    if (!($conn instanceof mysqli)) {
+    if (defined('IPG_RAN_ONCE') || !($conn instanceof mysqli)) {
         return;
     }
+    if (function_exists('sh_is_excluded_subapp') && (sh_is_excluded_subapp() || sh_is_telegram_webhook_call())) {
+        return;
+    }
+    define('IPG_RAN_ONCE', 1);
+
+    $ip  = '';
+    $ban = null;
     try {
         $ip = ipg_ip();
         if ($ip === '') {
             return;
+        }
+        list($safe, ) = ipg_can_ban($ip);
+        if (!$safe) {
+            return; // Safe/Admin/Proxy IP -> never block even if stale DB row existed
         }
         $ban = ipg_is_banned($conn, $ip);
         if ($ban === null) {
@@ -356,7 +448,7 @@ function ipg_run($conn)
         }
     } catch (Throwable $e) {
         error_log('[ipguard.php] run: ' . $e->getMessage());
-        return; // never lock the site because of a guard error
+        return;
     }
 
     try {
@@ -364,16 +456,24 @@ function ipg_run($conn)
         if ($st !== null) {
             $st->close();
         }
-        if (function_exists('tg_event')) {
-            tg_event('ip_blocked_hit', [
-                'ip' => $ip, 'username' => (string) (isset($ban['username']) ? $ban['username'] : ''),
-                'hits' => (int) $ban['hits'] + 1, 'reason' => (string) $ban['reason'], 'ban_id' => (int) $ban['id'],
-                'user_agent' => (string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''),
+        if (function_exists('sh_write_ban_cache')) {
+            $expTs = (!empty($ban['expires_at']) && strpos((string) $ban['expires_at'], '0000') !== 0)
+                ? (int) strtotime((string) $ban['expires_at'])
+                : 0;
+            sh_write_ban_cache($ip, [
+                'id'         => (int) $ban['id'],
+                'reason'     => (string) $ban['reason'],
+                'ban_type'   => isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'manual',
+                'username'   => isset($ban['username']) ? (string) $ban['username'] : '',
+                'expires_ts' => max(0, $expTs),
+                'expires_at' => $ban['expires_at'],
+                'hits'       => (int) $ban['hits'] + 1,
             ]);
         }
     } catch (Throwable $e) {
         error_log('[ipguard.php] hit: ' . $e->getMessage());
     }
+
     ipg_render($ban, $ip);
     exit;
 }
