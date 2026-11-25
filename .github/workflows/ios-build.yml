@@ -76,6 +76,7 @@ jobs:
         run: |
           TAG="v2.0.${{ github.run_number }}-${{ github.run_attempt }}"
           gh release create "${TAG}" \
+            --target "${{ github.sha }}" \
             build/Artifacts/DEVNVIOS-IPA-Analyzer.ipa \
             build/Artifacts/DEVNVIOS-IPA-Analyzer.ipa.sha256 \
             build/Artifacts/build-report.json \

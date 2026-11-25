@@ -9,8 +9,6 @@ xcodebuild build \
   -scheme DEVNVIOS \
   -configuration Release \
   -destination "generic/platform=iOS" \
-  -sdk iphoneos \
-  -arch arm64 \
   -derivedDataPath build/DerivedDataIOS \
   CODE_SIGN_IDENTITY="" \
   CODE_SIGNING_REQUIRED=NO \
