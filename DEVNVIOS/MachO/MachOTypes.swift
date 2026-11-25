@@ -17,6 +17,9 @@ public enum MachOConstants {
     public static let lcSegment64: UInt32 = 0x19
     public static let lcSymtab: UInt32 = 0x02
     public static let lcDysymtab: UInt32 = 0x0B
+    public static let lcLoadDylib: UInt32 = 0x0C
+    public static let lcLoadWeakDylib: UInt32 = 0x80000018
+    public static let lcRpath: UInt32 = 0x8000001C
     public static let lcUUID: UInt32 = 0x1B
     public static let lcEncryptionInfo: UInt32 = 0x21
     public static let lcEncryptionInfo64: UInt32 = 0x2C
@@ -97,6 +100,7 @@ public struct ParsedMachOImage: Sendable {
     public let sectionsByOrdinal: [Int: ParsedMachOSection]
     public let symbols: [SymbolEntry]
     public let functionStartRVAs: [UInt64]
+    public let linkedLibraries: [String]
 
     public var isARM64: Bool {
         cpuType == MachOConstants.cpuTypeARM64 || cpuType == MachOConstants.cpuTypeARM64_32

@@ -104,6 +104,8 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                 expectExecutable: sym.isFunctionSymbol,
                 staticOutput: staticOutput
             )
+            let callers = staticOutput.incomingCallCountsByFuncVA[sym.virtualAddress] ?? 0
+            let callerSuffix = callers > 0 ? " | Direct BL callers: \(callers)." : ""
             let off = DiscoveredOffset(
                 name: sym.cleanName,
                 value: HexFormatters.vaHex(sym.virtualAddress),
@@ -117,7 +119,7 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                 verificationStatus: validation.status,
                 confidenceScore: validation.confidence,
                 signatureHint: validation.prologueHex,
-                notes: validation.note
+                notes: validation.note + callerSuffix
             )
             appendUnique(off)
             symbolFindings += 1
@@ -397,9 +399,14 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                 let fileOff = machO.virtualAddressToSliceFileOffset(funcVA)
                 let cleanLabel = sanitizeXRefLabel(xref.referencedString, rva: funcRVA)
                 let status: OffsetVerificationStatus = (xref.prologueHex != nil) ? .probable : .unverified
+                let callers = staticOutput.incomingCallCountsByFuncVA[funcVA] ?? 0
                 var note = "Symbol-less ARM64 function (\(HexFormatters.vaHex(funcVA))) referencing string \"\(xref.referencedString)\" at \(HexFormatters.vaHex(xref.instructionVA))."
-                if let fieldHint = xref.nearbyFieldOffsetHint {
-                    note += String(format: " Nearby ARM64 LDR field offset access: +0x%X.", fieldHint)
+                if !xref.structFieldOffsets.isEmpty {
+                    let formattedFields = xref.structFieldOffsets.prefix(4).map { String(format: "+0x%X", $0) }.joined(separator: ", ")
+                    note += " Struct field accesses: [\(formattedFields)]."
+                }
+                if callers > 0 {
+                    note += " Incoming BL calls: \(callers)."
                 }
 
                 appendUnique(
@@ -420,6 +427,29 @@ public final class AdvancedOffsetDiscoveryEngine: Sendable {
                     )
                 )
                 symbolLessFindings += 1
+
+                // Surface correlated __DATA global/singleton pointers accessed inside the same gameplay function
+                for dataRef in staticOutput.arm64DataXRefs where dataRef.enclosingFunctionVA == funcVA {
+                    let dataFileOff = machO.virtualAddressToSliceFileOffset(dataRef.targetDataVA)
+                    appendUnique(
+                        DiscoveredOffset(
+                            name: String(format: "GlobalPtr_%llX_in_%@", dataRef.targetDataRVA, sanitizeIdentifierToken(xref.referencedString)),
+                            value: HexFormatters.vaHex(dataRef.targetDataVA),
+                            moduleName: moduleName,
+                            rva: dataRef.targetDataRVA,
+                            virtualAddress: dataRef.targetDataVA,
+                            fileOffset: dataFileOff,
+                            category: category,
+                            dataType: .staticData,
+                            discoverySource: .arm64PatternAnalysis,
+                            verificationStatus: .probable,
+                            confidenceScore: 0.74,
+                            signatureHint: dataRef.sectionDescription,
+                            notes: "Static global pointer in \(dataRef.sectionDescription) loaded via ADRP+LDR inside \(HexFormatters.vaHex(funcVA))."
+                        )
+                    )
+                    symbolLessFindings += 1
+                }
             } else {
                 let strRVA = machO.rva(forVirtualAddress: xref.targetStringVA)
                 let strFileOff = machO.virtualAddressToSliceFileOffset(xref.targetStringVA)

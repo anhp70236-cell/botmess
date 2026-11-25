@@ -106,6 +106,7 @@ public enum MachOParser {
         var minOSVersion: String?
         var entryPointRVA: UInt64?
         var encryptionInfo = ParsedEncryptionInfo(cryptOffset: 0, cryptSize: 0, cryptID: 0)
+        var linkedLibraries: [String] = []
 
         var symOff: UInt32 = 0
         var nSyms: UInt32 = 0
@@ -225,6 +226,15 @@ public enum MachOParser {
                 if cmdSize >= 16 {
                     funcStartsOff = cursor.readUInt32LE(at: cmdOffset + 8) ?? 0
                     funcStartsSize = cursor.readUInt32LE(at: cmdOffset + 12) ?? 0
+                }
+
+            case MachOConstants.lcLoadDylib, MachOConstants.lcLoadWeakDylib:
+                if cmdSize >= 24, let nameRelOff = cursor.readUInt32LE(at: cmdOffset + 8) {
+                    let strPos = cmdOffset + Int(nameRelOff)
+                    let maxLen = max(0, Int(cmdSize) - Int(nameRelOff))
+                    if maxLen > 0, let dylibPath = cursor.readCString(at: strPos, maxLength: maxLen), !dylibPath.isEmpty {
+                        linkedLibraries.append(dylibPath)
+                    }
                 }
 
             default:
@@ -347,7 +357,8 @@ public enum MachOParser {
             segments: segments,
             sectionsByOrdinal: sectionsByOrdinal,
             symbols: symbols,
-            functionStartRVAs: functionStartRVAs
+            functionStartRVAs: functionStartRVAs,
+            linkedLibraries: linkedLibraries
         )
     }
 
@@ -359,9 +370,6 @@ public enum MachOParser {
     }
 
     public static func cleanSymbolName(_ raw: String) -> String {
-        if raw.hasPrefix("_") && !raw.hasPrefix("__Z") {
-            return String(raw.dropFirst())
-        }
-        return raw
+        SymbolDemangler.demangle(raw)
     }
 }

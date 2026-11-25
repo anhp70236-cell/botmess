@@ -1,8 +1,13 @@
 import Foundation
 
 public struct ObjCDiscoveredMetadata: Sendable, Equatable {
-    public let classNames: [String: UInt64]
-    public let selectorNames: [String: UInt64]
+    public let classNames: [UInt64: String]
+    public let selectorNames: [UInt64: String]
+
+    public init(classNames: [UInt64: String], selectorNames: [UInt64: String]) {
+        self.classNames = classNames
+        self.selectorNames = selectorNames
+    }
 }
 
 public struct StaticBinaryAnalysisOutput: Sendable {
@@ -11,6 +16,9 @@ public struct StaticBinaryAnalysisOutput: Sendable {
     public let cStringsByVA: [UInt64: String]
     public let objcMetadata: ObjCDiscoveredMetadata
     public let arm64StringXRefs: [ARM64StringXRef]
+    public let arm64DataXRefs: [ARM64DataPointerXRef]
+    public let incomingCallCountsByFuncVA: [UInt64: Int]
+    public let detectedEngineSummary: String
     public let binarySHA256: String
     public let symbolStripStatus: SymbolStripStatus
 }
@@ -21,7 +29,7 @@ public enum StaticBinaryAnalyzer {
         moduleName: String,
         logger: AnalysisLogger? = nil
     ) throws -> StaticBinaryAnalysisOutput {
-        logger?.stage("Mach-O", "Parsing Mach-O headers and load commands for '\(moduleName)'...")
+        logger?.stage("Mach-O", "Parsing Mach-O headers, segments, sections, and linked dylibs for '\(moduleName)'...")
         let machO = try MachOParser.parse(data: binaryData, moduleName: moduleName)
         let sha256 = HexFormatters.sha256Hex(of: binaryData)
 
@@ -43,9 +51,11 @@ public enum StaticBinaryAnalyzer {
             }
         }()
 
+        let engineSummary = inferEngineSignature(machO: machO)
+
         logger?.info(
             stage: "Mach-O",
-            "Detected \(machO.architectureName) | Segments: \(machO.segments.count) | Symbols: \(machO.symbols.count) (\(stripStatus.rawValue)) | FunctionStarts: \(machO.functionStartRVAs.count)"
+            "Detected \(machO.architectureName) | Engine: \(engineSummary) | Segments: \(machO.segments.count) | Symbols: \(machO.symbols.count) (\(stripStatus.rawValue)) | FunctionStarts: \(machO.functionStartRVAs.count)"
         )
 
         if machO.encryptionInfo.isEncrypted {
@@ -86,15 +96,18 @@ public enum StaticBinaryAnalyzer {
             xrefTargetStrings[va] = sel
         }
 
-        var xrefs: [ARM64StringXRef] = []
-        if machO.isARM64 && !xrefTargetStrings.isEmpty {
-            logger?.stage("ARM64", "Scanning __TEXT,__text for ADRP+ADD PC-relative cross-references...")
-            xrefs = ARM64InstructionAnalyzer.scanStringCrossReferences(
+        var deepScan = ARM64DeepScanOutput(stringXRefs: [], dataPointerXRefs: [], incomingCallCountsByFuncVA: [:])
+        if machO.isARM64 {
+            logger?.stage("ARM64", "Running deep A64 scan (ADRP+ADD strings, ADRP+LDR __DATA globals, BL call-graph, scalar/SIMD field offsets)...")
+            deepScan = ARM64InstructionAnalyzer.performDeepCodeScan(
                 sliceCursor: sliceCursor,
                 machO: machO,
                 indexedStringsByVA: xrefTargetStrings
             )
-            logger?.info(stage: "ARM64", "Resolved \(xrefs.count) verified ARM64 string cross-references.")
+            logger?.info(
+                stage: "ARM64",
+                "Resolved \(deepScan.stringXRefs.count) string XRefs, \(deepScan.dataPointerXRefs.count) __DATA global XRefs, and \(deepScan.incomingCallCountsByFuncVA.count) call-graph targets."
+            )
         }
 
         return StaticBinaryAnalysisOutput(
@@ -102,10 +115,31 @@ public enum StaticBinaryAnalyzer {
             sliceCursor: sliceCursor,
             cStringsByVA: cStrings,
             objcMetadata: ObjCDiscoveredMetadata(classNames: objcClasses, selectorNames: objcSelectors),
-            arm64StringXRefs: xrefs,
+            arm64StringXRefs: deepScan.stringXRefs,
+            arm64DataXRefs: deepScan.dataPointerXRefs,
+            incomingCallCountsByFuncVA: deepScan.incomingCallCountsByFuncVA,
+            detectedEngineSummary: engineSummary,
             binarySHA256: sha256,
             symbolStripStatus: stripStatus
         )
+    }
+
+    private static func inferEngineSignature(machO: ParsedMachOImage) -> String {
+        if machO.moduleName == "UnityFramework"
+            || machO.section(forSectionName: "il2cpp", inSegment: "__TEXT") != nil
+            || machO.linkedLibraries.contains(where: { $0.contains("UnityFramework") }) {
+            return "Unity IL2CPP"
+        }
+        if machO.symbols.contains(where: { $0.cleanName.contains("UObject") || $0.cleanName.contains("AActor") }) {
+            return "Unreal Engine C++"
+        }
+        if machO.symbols.contains(where: { $0.cleanName.contains("cocos2d") }) {
+            return "Cocos2d-x C++"
+        }
+        if machO.linkedLibraries.contains(where: { $0.contains("SpriteKit") || $0.contains("SceneKit") }) {
+            return "Apple SceneKit / SpriteKit"
+        }
+        return "Native iOS Mach-O"
     }
 
     private static let relevantKeywords: [String] = [

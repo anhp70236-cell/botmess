@@ -272,4 +272,18 @@ final class DEVNVIOSAnalyzerTests: XCTestCase {
         container.themeMode = .slateContrast
         XCTAssertEqual(container.themeMode, .slateContrast)
     }
+
+    func testCPPDemanglerAndBLInstructionDecoding() {
+        let demangled = SymbolDemangler.demangle("__ZN3Heo16PlayerController13GetMoveVectorEv")
+        XCTAssertEqual(demangled, "Heo::PlayerController::GetMoveVector()")
+        XCTAssertEqual(OffsetCategoryClassifier.classify(identifier: demangled), .player)
+
+        // Verify BL +0x20 from 0x100001000 -> 0x100001020
+        let blInsn: UInt32 = 0x9400_0008
+        XCTAssertEqual(ARM64InstructionAnalyzer.decodeBLTarget(blInsn, pc: 0x1_0000_1000), 0x1_0000_1020)
+
+        // Verify 128-bit SIMD Q register LDR Q0, [X0, #0x30] (imm12 = 3)
+        let simdLdr: UInt32 = 0x3DC0_0C00
+        XCTAssertEqual(ARM64InstructionAnalyzer.decodeFieldLoadOffset(simdLdr), 0x30)
+    }
 }
