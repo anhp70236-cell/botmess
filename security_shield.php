@@ -1879,6 +1879,12 @@ function sh_full_clean_slate_unban($conn, $ip, $username = '', $createUnlockGate
             @unlink($ef);
         } elseif (!empty($ed['origin_ip']) && in_array(sh_norm_ip($ed['origin_ip']), $ipsToClean, true)) {
             @unlink($ef);
+        } elseif (!empty($ed['real_origin_ip']) && in_array(sh_norm_ip($ed['real_origin_ip']), $ipsToClean, true)) {
+            @unlink($ef);
+        } elseif (!empty($ed['stream_ip']) && in_array(sh_norm_ip($ed['stream_ip']), $ipsToClean, true)) {
+            @unlink($ef);
+        } elseif (!empty($ed['vpn_ip']) && in_array(sh_norm_ip($ed['vpn_ip']), $ipsToClean, true)) {
+            @unlink($ef);
         } elseif (!empty($ed['hw_fp']) && in_array(strtolower((string) $ed['hw_fp']), $hwsToClean, true)) {
             @unlink($ef);
         } elseif (!empty($ed['lid']) && in_array(strtolower((string) $ed['lid']), $lidsToClean, true)) {
@@ -3760,10 +3766,24 @@ function sh_handle_web_ai_chat_endpoint()
     $fgVpn  = count(array_filter(is_array($fgData['vpn'] ?? null) ? $fgData['vpn'] : [], function ($t) use ($now) { return (int) $t >= $now - 21600; }));
     $fgSpam = count(array_filter(is_array($fgData['spam'] ?? null) ? $fgData['spam'] : [], function ($t) use ($now) { return (int) $t >= $now - 21600; }));
 
+    $strippedWeb = trim((string) preg_replace('/[\s,.;:\-\[\]()]+/', ' ', str_ireplace($typedImx, ' ', $msg)));
+    $webWordCnt  = $strippedWeb !== '' ? count(preg_split('/\s+/u', $strippedWeb, -1, PREG_SPLIT_NO_EMPTY)) : 0;
+    $webReasonOk = (function_exists('mb_strlen') ? mb_strlen($strippedWeb, 'UTF-8') : strlen($strippedWeb)) >= 10 && $webWordCnt >= 3;
+
     $canEasyUnlock = !$isSevere && (
         ($banType === 'vpn_block' && $fgVpn < 3 && ($isVpnOff || $typedImx !== '' || $savedImg !== ''))
         || (in_array($banType, ['prod_spam', 'key_spam'], true) && $initDur <= 360 && $evasions === 0 && $fgSpam < 1 && ($isVpnOff || $typedImx !== '' || $savedImg !== '' || strlen($msg) >= 6))
     );
+
+    // Require clear reason FIRST when customer only pasted IMX-... or wrote a vague short line (unless finalizing after 7s)
+    if ($phase === 'check' && $canEasyUnlock && !$webReasonOk && $savedImg === '') {
+        echo json_encode([
+            'ok'     => true,
+            'action' => 'need_reason',
+            'reply'  => '◈ Đã tiếp nhận phiên ' . ($banCode !== '' ? $banCode : 'hiện tại') . ' (lý do hệ thống: ' . $reasonOrig . '). Vui lòng trình bày rõ nguyên nhân bạn gặp sự cố (tối thiểu 1 câu cụ thể) để tôi thẩm định và mở khoá.',
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 
     // PHASE 2 (after 7 seconds): Execute the actual clean-slate unlock & return Animated Unlocked HTML!
     if ($phase === 'finalize' && $canEasyUnlock) {
@@ -4158,17 +4178,15 @@ body{padding-top:var(--hd);padding-left:var(--ds-sbw);padding-bottom:24px}
 @keyframes sh-happy-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
 @keyframes sh-lock-body{0%,16%{transform:translateY(0) scale(1)}22%{transform:translateY(1.2px) scale(.96)}34%{transform:translateY(-2.4px) scale(1.06)}46%,78%{transform:translateY(0) scale(1)}90%,100%{transform:translateY(0) scale(1)}}
 @keyframes sh-shackle-open{0%,16%{transform:translateY(0) rotate(0deg)}24%{transform:translateY(1px) rotate(0deg)}38%{transform:translateY(-4.4px) rotate(-22deg)}52%,78%{transform:translateY(-4.4px) rotate(-20deg)}92%,100%{transform:translateY(0) rotate(0deg)}}
-@keyframes sh-lock-halo{0%,18%{opacity:0;transform:scale(.76)}36%{opacity:.95;transform:scale(1.1)}65%{opacity:.4;transform:scale(1.18)}85%,100%{opacity:0;transform:scale(1.22)}}
-@keyframes sh-keyhole-glow{0%,24%{opacity:.55;transform:scale(.9)}38%,78%{opacity:1;transform:scale(1.18)}92%,100%{opacity:.55;transform:scale(.9)}}
-.anim-icon--unlock{position:relative;width:58px;height:58px;border-radius:50%;background:rgba(48,209,88,.11);color:#30d158}
-.anim-icon--unlock::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.8px solid rgba(48,209,88,.48);animation:sh-lock-halo 3.2s cubic-bezier(.22,1,.36,1) infinite;pointer-events:none}
+.anim-icon--unlock{position:relative;width:54px;height:54px;border-radius:50%;background:#f2f2f5;color:#09090b;box-shadow:none}
+:root[data-theme="light"] .anim-icon--unlock{background:#eceef2;color:#09090b;box-shadow:none}
 .svg-sad{animation:sh-sad-head 4.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
 .svg-eye{animation:sh-eye-blink 4.8s infinite;transform-box:fill-box;transform-origin:center}
 .svg-frown{animation:sh-mouth-sigh 4.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
 .svg-happy{animation:sh-happy-bob 3s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
 .svg-lock-grp{animation:sh-lock-body 3.2s cubic-bezier(.22,1,.36,1) infinite;transform-box:fill-box;transform-origin:50% 62%}
 .svg-shackle{animation:sh-shackle-open 3.2s cubic-bezier(.22,1,.36,1) infinite;transform-box:fill-box;transform-origin:10% 100%}
-.svg-keyhole{animation:sh-keyhole-glow 3.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+.svg-keyhole{opacity:1;animation:none}
 /* Floating Rounded Lock-Screen AI Assistant (Obsidian-Black Distinct Border) + Compact Non-Zooming Square Chat Box */
 .sh-ai-fab{position:fixed;right:15px;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 14px);z-index:2147483000;width:54px;height:54px;border-radius:50%;padding:3px;background:#1a1c22;border:2px solid #2f323d;box-shadow:0 0 0 1px rgba(255,255,255,.11),0 8px 24px rgba(0,0,0,.78);cursor:pointer;pointer-events:auto;touch-action:manipulation;-webkit-appearance:none;appearance:none;transition:transform .18s ease,box-shadow .18s ease;display:flex;align-items:center;justify-content:center}
 :root[data-theme="light"] .sh-ai-fab{background:#16181d;border:2px solid #2b2e37;box-shadow:0 6px 20px rgba(0,0,0,.28)}
@@ -4201,7 +4219,7 @@ body{padding-top:var(--hd);padding-left:var(--ds-sbw);padding-bottom:24px}
 .sh-ai-go{height:34px;padding:0 12px;flex:0 0 auto;border-radius:10px;background:var(--blue);color:#fff;font-size:12px;font-weight:700}
 .sh-ai-go:disabled{opacity:.5}
 @media (min-width:1024px){.sh-ai-fab{right:22px;bottom:22px}.sh-ai-box{right:22px;bottom:84px}}
-@media (prefers-reduced-motion:reduce){.ds-sw,.ds-swi,.svg-sad,.svg-eye,.svg-frown,.svg-happy,.svg-lock-grp,.svg-shackle,.svg-keyhole,.anim-icon--unlock::after,.site-footer__heart{animation:none}.ios-ok-ring,.ios-ok-tick{animation:none;stroke-dashoffset:0}}
+@media (prefers-reduced-motion:reduce){.ds-sw,.ds-swi,.svg-sad,.svg-eye,.svg-frown,.svg-happy,.svg-lock-grp,.svg-shackle,.site-footer__heart{animation:none}.ios-ok-ring,.ios-ok-tick{animation:none;stroke-dashoffset:0}}
 CSS;
 }
 
@@ -5856,34 +5874,30 @@ function sh_client_guard_script()
         . 'function trip(why){if(reported)return;reported=1;post("__sh_report",{violation:why,gpu:GPU,emu:EMU},function(j){takeOver(j&&j.html?j.html:"");});setTimeout(function(){if(!takenOver)location.reload();},1100);}'
         // 1. Instant Pre-Paint Headless / Automation Check
         . 'if(navigator.webdriver||window._phantom||window.__nightmare||window.callPhantom||window.Cypress||window.__playwright){trip("Chạy trình duyệt tự động hoá / Script Bot (WebDriver)");return;}'
-        // 2. Deep Multi-Layer Stay iOS / Tampermonkey / Violentmonkey / Chrome Userscript, DOM/Shadow Injection & Prototype Tamper Shield (ZERO self-ban on iosmods.xyz own scripts!)
+        // 2. Active-Only Userscript / Automation Shield (NEVER false-blocks passive installed Stay iOS / Chrome Extensions that are NOT running on iosmods.xyz!)
         . 'var fnStr=Function.prototype.toString,natClick=HTMLElement.prototype.click,natSub=HTMLFormElement.prototype.submit,domReady=(document.readyState==="complete");'
-        . 'if(!domReady){window.addEventListener("load",function(){setTimeout(function(){domReady=true;},350);},{once:true});}'
+        . 'if(!domReady){window.addEventListener("load",function(){setTimeout(function(){domReady=true;},450);},{once:true});}'
         . 'function isNative(fn){try{return typeof fn==="function"&&fnStr.call(fn).indexOf("[native code]")!==-1;}catch(e){return true;}}'
         . 'function isOwnNode(nd){if(!nd||nd.nodeType!==1)return true;var id=String(nd.id||""),cl=typeof nd.className==="string"?nd.className:"";if(/^(ds-|sh-|dv-|app-config)/i.test(id)||/\b(ds-|sh-)/i.test(cl)||nd.getAttribute("data-sh"))return true;return false;}'
         . 'function findScript(){try{'
-        . 'if(window.GM_info||window.GM||window.GM_xmlhttpRequest||window.GM_addStyle||window.GM_getValue||window.GM_setValue||window.GM_registerMenuCommand||window.unsafeWindow||window.exportFunction||window.cloneInto||window._tampermonkey||window.TM_info||window.VM)return "Tampermonkey / Violentmonkey Userscript";'
-        . 'if(window.__stay__||window.stay||window._stay||window.STAY||window.__STAY_USERSCRIPT__||window.StayUserscript||(window.browser&&window.browser.runtime)||(window.chrome&&window.chrome.runtime&&window.chrome.runtime.id))return "Stay iOS / Chrome Extension Userscript";'
+        . 'if(window.GM_info||window.GM_xmlhttpRequest||window.GM_addStyle||window.GM_getValue||window.GM_setValue||window.GM_registerMenuCommand||window.unsafeWindow||window.exportFunction||window.cloneInto||window._tampermonkey||window.TM_info||window.VM)return "Tampermonkey / Violentmonkey Userscript đang chạy trên trang";'
+        . 'if(window.__STAY_USERSCRIPT__||window.StayUserscript)return "Stay iOS Userscript đang chạy trên trang";'
         . 'if(window.eruda||window.VConsole||window.__eruda)return "Công cụ soi mã nguồn Eruda / vConsole";'
-        . 'if(document.documentElement.getAttribute("data-userscript")||document.querySelector("[id*=stay-userscript],[id*=tampermonkey],[id*=violentmonkey],[class*=userscript],[data-stay-id],[data-userscript-id]"))return "Tiện ích tiêm Userscript (Stay / Tampermonkey)";'
-        . 'var sc=document.querySelectorAll("script[src],link[href],iframe[src]");'
-        . 'for(var i=0;i<sc.length;i++){var u=sc[i].getAttribute("src")||sc[i].getAttribute("href")||"";if(/^(chrome-extension|moz-extension|safari-web-extension|stay|userscript):\/\//i.test(u)||/^blob:/i.test(u))return "Tiêm mã tiện ích mở rộng ("+u.split(":")[0]+")";}'
-        . 'if(window.performance&&performance.getEntriesByType){var res=performance.getEntriesByType("resource")||[];for(var r=0;r<res.length;r++){var rn=String(res[r].name||"");if(/^(chrome-extension|moz-extension|safari-web-extension|stay):\/\//i.test(rn))return "Extension Userscript (Stay / Chrome) hoạt động ngầm";}}'
+        . 'if(document.documentElement.getAttribute("data-userscript")||document.querySelector("[id*=stay-userscript],[id*=tampermonkey],[id*=violentmonkey],[data-userscript-id]"))return "Userscript đang tiêm giao diện vào trang";'
+        . 'var sc=document.querySelectorAll("script[src]");'
+        . 'for(var i=0;i<sc.length;i++){var u=sc[i].getAttribute("src")||"";if(/^(stay|userscript):\/\//i.test(u)||/^blob:/i.test(u))return "Tiêm tệp Script trực tiếp ("+u.split(":")[0]+")";}'
         . 'if((HTMLElement.prototype.click!==natClick&&!isNative(HTMLElement.prototype.click))||(HTMLFormElement.prototype.submit!==natSub&&!isNative(HTMLFormElement.prototype.submit)))return "Script giả lập bấm nút tự động (Prototype Hook)";'
-        . 'if(domReady){var hc=document.documentElement.children;for(var h=0;h<hc.length;h++){var el=hc[h];if(el.tagName!=="HEAD"&&el.tagName!=="BODY"&&!isOwnNode(el))return "Userscript tiêm phần tử lạ ngoài Body (Stay iOS / Extension)";}'
-        . 'if(document.body){var bc=document.body.children;for(var b=0;b<bc.length;b++){var bel=bc[b];if(!isOwnNode(bel)&&bel.shadowRoot)return "Userscript tiêm Shadow-DOM nổi trên trang (Stay iOS / Extension)";}}}'
         . '}catch(e){}return "";}'
         . 'var psNow=findScript();if(psNow){trip("Phát hiện chạy Script / Userscript ("+psNow+")");return;}'
-        // Live DOM MutationObserver catching @run-at document-end / document-idle injected scripts & overlays from Stay iOS, Chrome Extensions & PC Console (NEVER flags iosmods.xyz initial HTML!)
+        // Live DOM MutationObserver catching ONLY active injected scripts/cheats targeting iosmods.xyz (ZERO false blocks for passive extensions!)
         . 'try{var scObs=new MutationObserver(function(muts){if(reported)return;for(var m=0;m<muts.length;m++){var ad=muts[m].addedNodes;if(!ad)continue;for(var n=0;n<ad.length;n++){var nd=ad[n];if(!nd||nd.nodeType!==1)continue;'
         . 'var tg=nd.tagName;if(tg==="SCRIPT"){var id=nd.id||"",ds=nd.getAttribute("data-sh")||"",sr=nd.getAttribute("src")||"",tp=nd.type||"";'
         . 'if(tp==="application/json"||tp==="application/ld+json"||ds||/^(ds-|sh-|dv-|app-config)/i.test(id))continue;'
-        . 'if(/^(chrome-extension|moz-extension|safari-web-extension|stay|blob:|data:)/i.test(sr)){trip("Chèn tệp Script trái phép từ Extension ("+sr.slice(0,32)+")");return;}'
-        . 'var code=nd.textContent||"";if(code&&/(GM_info|GM_xmlhttpRequest|unsafeWindow|Tampermonkey|Violentmonkey|__stay__|StayUserscript)/i.test(code)&&code.indexOf("__shG6")===-1){trip("Tiêm đoạn mã Userscript (Stay iOS / Tampermonkey) vào trang");return;}'
-        . 'if(domReady){var sameOrigin=(sr&&sr.indexOf("/")===0&&sr.indexOf("//")!==0);if(!sameOrigin){trip("Tiêm đoạn mã Script động sau khi tải trang (Stay iOS / Tampermonkey / Console)");return;}}'
+        . 'if(/^(stay|userscript|blob:|data:)/i.test(sr)){trip("Chèn tệp Script trái phép trực tiếp vào trang ("+sr.slice(0,32)+")");return;}'
+        . 'var code=nd.textContent||"";if(code&&/(GM_info|GM_xmlhttpRequest|unsafeWindow|Tampermonkey|Violentmonkey|StayUserscript)/i.test(code)&&code.indexOf("__shG6")===-1){trip("Tiêm đoạn mã Userscript đang chạy trực tiếp vào trang");return;}'
+        . 'if(domReady){var sameOrigin=(sr&&sr.indexOf("/")===0&&sr.indexOf("//")!==0);if(!sameOrigin){trip("Tiêm đoạn mã Script động sau khi tải trang");return;}}'
         . '}else if(!isOwnNode(nd)){var nid=String(nd.id||"")+" "+(typeof nd.className==="string"?nd.className:"");'
-        . 'if(/(tampermonkey|violentmonkey|stay-userscript|stay_|eruda|vconsole|userscript|modmenu|autoclick)/i.test(nid)){trip("Tiện ích Userscript / Stay iOS / Soi mã nguồn chèn giao diện vào trang");return;}'
-        . 'if(domReady&&(nd.parentNode===document.documentElement||nd.shadowRoot)){trip("Userscript tiêm giao diện lạ (Stay iOS / Chrome Extension)");return;}}}}});'
+        . 'if(/(tampermonkey|violentmonkey|stay-userscript|eruda|vconsole|modmenu|autoclick)/i.test(nid)){trip("Userscript / Công cụ soi mã nguồn tiêm giao diện vào trang");return;}}}}});'
         . 'scObs.observe(document.documentElement,{childList:true,subtree:true});}catch(e){}'
         . 'setInterval(function(){if(reported||document.hidden)return;var late=findScript();if(late)trip("Phát hiện Script / Userscript chạy nền ("+late+")");},1100);'
         // 3. Desktop PC Anti-View-Source & Anti-DevTools (Shortcuts + Viewport Delta + Console/Debugger Trap — NEVER affects phones!)

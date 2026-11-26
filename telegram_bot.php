@@ -5338,6 +5338,26 @@ function pub_is_offscope_coding_or_prompt($text)
     return false;
 }
 
+/** Validates that a user wrote a genuine, clear reason/message (>= 10 chars & >= 3 meaningful words, NOT vague filler). */
+function pub_is_clear_reason($text, $minChars = 10)
+{
+    $t = trim(preg_replace('/\s+/u', ' ', (string) $text));
+    if ($t === '') {
+        return false;
+    }
+    $len = function_exists('mb_strlen') ? mb_strlen($t, 'UTF-8') : strlen($t);
+    if ($len < $minChars) {
+        return false;
+    }
+    $ascii = pub_fold_ascii($t);
+    // Reject bare filler / non-informative pleas like "mở khoá giúp mình", "gửi admin đi", "cần hỗ trợ"
+    if (preg_match('/^(toi |minh |em )?(muon |can |xin |nho |hay )?(mo|go|gui|nhan|lien he|ho tro|giup|xem|kiem tra)(\s+(khoa|ban|admin|quan tri|giup|ho tro|toi|minh|em|voi|di|ngay|nhe|nha|a)){0,5}[.!?~\s]*$/', $ascii)) {
+        return false;
+    }
+    $words = preg_split('/\s+/u', $t, -1, PREG_SPLIT_NO_EMPTY);
+    return is_array($words) && count($words) >= 3;
+}
+
 /** Detects when a customer wants to send a support request / message to Admin of iosmods.xyz. */
 function pub_is_support_request($text, $intent)
 {
@@ -5509,18 +5529,22 @@ function bot_public_appeal_handler(array $m)
     $admLink   = function_exists('sh_contact_url') ? sh_contact_url() : 'https://t.me/iosnea';
     $admHandle = (preg_match('~t\.me/([A-Za-z0-9_]+)~', $admLink, $hm)) ? ('@' . $hm[1]) : $admLink;
 
-    // 3. TWO-WAY SUPPORT TICKET RELAY: If user was prompted to write their message (or send photo) for Admin, forward it NOW!
+    // 3. MANDATORY CLEAR-MESSAGE / CLEAR-REASON FLOWS (Admin Support Ticket & IMX Unlock Reason)
     $curStep = (string) ($mem['step'] ?? '');
     if ($curStep === 'await_support_msg' && $typedImx === '') {
         $asciiSup = pub_fold_ascii($text);
         if ($text !== '' && !$hasPhoto && preg_match('/^(huy|thoi|khong can|ko can|cancel|khong)$/', $asciiSup)) {
             pub_conv_set($from, ['step' => '']);
-            pub_send_reply($chatId, 'Đã huỷ gửi yêu cầu hỗ trợ rồi nhé <b>' . $nameSafe . '</b>! 😊 Khi nào cần hỗ trợ gì trên <b>iosmods.xyz</b> cứ nhắn lại cho mình nha ✨');
+            pub_send_reply($chatId, '❖ Đã huỷ phiên gửi tin nhắn tới Quản trị viên. Khi cần hỗ trợ về <b>iosmods.xyz</b>, bạn chỉ cần nhắn trực tiếp tại đây.');
             return;
         }
-        $msgLen = function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : strlen($text);
-        if (!$hasPhoto && $msgLen < 6) {
-            pub_send_reply($chatId, 'Bạn vui lòng ghi rõ hơn một chút nội dung cần Quản trị viên hỗ trợ (từ 6 ký tự trở lên, kèm tên tài khoản web hoặc gửi kèm ảnh chụp màn hình) để Admin xử lý nhanh nhất cho bạn nhé! 📝✨');
+        if (!$hasPhoto && !pub_is_clear_reason($text, 12)) {
+            pub_send_reply(
+                $chatId,
+                '◈ <b>Yêu cầu ghi rõ nội dung tin nhắn gửi Admin</b>' . "\n\n"
+                . 'Nội dung vừa rồi còn quá ngắn hoặc chưa cụ thể. Vui lòng viết rõ <b>vấn đề bạn đang gặp phải</b> (tối thiểu 1 câu đầy đủ từ 3 từ trở lên, kèm tên tài khoản website hoặc ảnh chụp màn hình nếu có) để Quản trị viên nắm đúng trọng tâm và xử lý ngay.' . "\n"
+                . '<i>(Nhắn "huỷ" nếu không cần gửi nữa)</i>'
+            );
             return;
         }
         $supIp  = (string) ($mem['real_ip'] ?? ($mem['last_ip'] ?? ($mentionedIp !== '' ? $mentionedIp : '')));
@@ -5547,22 +5571,45 @@ function bot_public_appeal_handler(array $m)
         pub_conv_set($from, ['step' => '']);
         $hist   = isset($mem['hist']) && is_array($mem['hist']) ? $mem['hist'] : [];
         $hist[] = ['role' => 'user', 'content' => tg_clip($supMsg, 400)];
-        $hist[] = ['role' => 'assistant', 'content' => 'Mình đã chuyển yêu cầu hỗ trợ của bạn trực tiếp tới Quản trị viên iosmods.xyz rồi nhé! Ngay khi Admin phản hồi, mình sẽ nhắn báo lại tại đây cho bạn.'];
+        $hist[] = ['role' => 'assistant', 'content' => 'Yêu cầu chi tiết của bạn đã được chuyển trực tiếp tới Quản trị viên iosmods.xyz.'];
         pub_conv_set($from, ['hist' => array_slice($hist, -14)]);
         pub_send_reply(
             $chatId,
-            '✅ <b>Đã chuyển yêu cầu hỗ trợ' . ($photoPath !== '' ? ' (kèm ảnh chụp màn hình 📸)' : '') . ' của bạn tới Quản trị viên iosmods.xyz!</b>' . "\n\n"
-            . '📝 Nội dung đã gửi: <i>' . tg_e(tg_clip($supMsg, 280)) . "</i>\n\n"
-            . '🔔 Bạn cứ giữ nguyên khung chat này — ngay khi Admin phản hồi hoặc xử lý xong, mình sẽ <b>nhắn báo trực tiếp lại cho bạn tại đây</b> liền nhé! 💬✨'
+            '✓ <b>Đã chuyển yêu cầu hỗ trợ' . ($photoPath !== '' ? ' (kèm ảnh chụp màn hình)' : '') . ' tới Quản trị viên iosmods.xyz</b>' . "\n\n"
+            . '❖ Nội dung gửi Admin: <i>' . tg_e(tg_clip($supMsg, 280)) . "</i>\n\n"
+            . 'Hệ thống sẽ tự động phản hồi ngay tại khung chat này khi Quản trị viên xử lý xong.'
         );
         return;
+    }
+
+    // If customer was prompted to state a clear reason for an IMX-... lock code, validate before processing!
+    $fromCaseReasonStep = false;
+    if ($curStep === 'await_case_reason' && $typedImx === '') {
+        $asciiWhy = pub_fold_ascii($text);
+        if ($text !== '' && !$hasPhoto && preg_match('/^(huy|thoi|khong can|ko can|cancel|khong)$/', $asciiWhy)) {
+            pub_conv_set($from, ['step' => '']);
+            pub_send_reply($chatId, '❖ Đã huỷ yêu cầu thẩm định mã khoá. Khi cần kiểm tra lại, bạn chỉ cần gửi mã <code>IMX-...</code> kèm lý do rõ ràng.');
+            return;
+        }
+        if (!$hasPhoto && !pub_is_clear_reason($text, 10)) {
+            pub_send_reply(
+                $chatId,
+                '◈ <b>Vui lòng nêu rõ lý do cụ thể</b> cho mã <code>' . tg_e((string) ($mem['last_code'] ?? '')) . "</code>\n\n"
+                . 'Hãy mô tả cụ thể tình huống dẫn đến lệnh khoá (ví dụ: quên tắt VPN/1.1.1.1, lỡ bấm nhanh nút Get khi chưa kích hoạt Key, hoặc cài sẵn tiện ích cho trang khác...) để hệ thống thẩm định chính xác.'
+            );
+            return;
+        }
+        // Clear reason provided! Clear step and force routing straight into PATH 2 with $activeCode + $reasonInput!
+        pub_conv_set($from, ['step' => '']);
+        $curStep            = '';
+        $fromCaseReasonStep = true;
     }
 
     // Extract actual human explanation (STRICT: empty when user ONLY pasted IMX-... code!)
     $reasonInput = '';
     if ($typedImx !== '') {
         $stripped = trim(preg_replace('/[\s,.;:\-\[\]()]+/', ' ', str_ireplace($typedImx, ' ', $text)));
-        if ((function_exists('mb_strlen') ? mb_strlen($stripped, 'UTF-8') : strlen($stripped)) >= 6) {
+        if (pub_is_clear_reason($stripped, 10)) {
             $reasonInput = $stripped;
         }
     } else {
@@ -5570,15 +5617,16 @@ function bot_public_appeal_handler(array $m)
     }
     $cleanReasonLen = function_exists('mb_strlen') ? mb_strlen($reasonInput, 'UTF-8') : strlen($reasonInput);
     $isAbusive      = ($reasonInput !== '' && (bool) preg_match('/\b(dm|dmm|vcl|vl|cc|fuck|shit|địt|đụ|lồn|cặc)\b/iu', $reasonInput));
-    $hasRealAppeal  = ($cleanReasonLen >= 6 && !$isAbusive && !in_array($intent, ['greeting', 'thanks_ok', 'ask_why', 'unknown_slash'], true));
+    $hasClearReason = ($reasonInput !== '' && !$isAbusive && pub_is_clear_reason($reasonInput, 10));
+    $hasRealAppeal  = ($hasClearReason && !in_array($intent, ['greeting', 'thanks_ok', 'ask_why', 'unknown_slash'], true));
 
     $isVpnTurnedOff  = pub_is_vpn_turned_off_phrase($text);
     $isExplicitAdm   = pub_is_explicit_admin_escalation($text, $intent);
-    $isSecurityTopic = pub_is_security_unlock_topic($text, $typedImx, $intent);
+    $isSecurityTopic = $fromCaseReasonStep || pub_is_security_unlock_topic($text, $typedImx, $intent);
 
     // If user explicitly asks to send a request to Admin or unlock a KEY (no IMX code pasted!), route to Admin Support Ticket FIRST
     // instead of falling into Path 2 "no active IP ban"!
-    if ($typedImx === '' && $isExplicitAdm && !$isAbusive) {
+    if (!$fromCaseReasonStep && $typedImx === '' && $isExplicitAdm && !$isAbusive) {
         $isSecurityTopic = false;
     }
 
@@ -5630,22 +5678,22 @@ function bot_public_appeal_handler(array $m)
     // PATH 1: IOSMODS.XYZ SUPPORT & WEBSITE INFO ASSISTANT (STRICT WEBSITE SCOPE + ADMIN TICKET RELAY!)
     // =========================================================================
     if (!$isSecurityTopic) {
-        // If customer asks to message Admin / request support -> either prompt for details OR forward immediately!
+        // If customer asks to message Admin / request support -> ALWAYS require clear, detailed message before sending!
         if (pub_is_support_request($text, $intent) && !$isAbusive) {
             $asciiReq     = pub_fold_ascii($text);
-            $isPureAskAdm = (bool) preg_match('/^(toi |minh |em )?(muon |can |xin |hay )?(gui|lien he|gap|nhan|bao).{0,24}\b(admin|quan tri|chu web)\b[.!?~\s]*$/', $asciiReq);
-            $isShortAsk   = !$hasPhoto && ($isPureAskAdm || $cleanReasonLen < 24);
-            if ($isShortAsk) {
+            $isPureAskAdm = (bool) preg_match('/^(toi |minh |em )?(muon |can |xin |hay )?(gui|lien he|gap|nhan|bao).{0,28}\b(admin|quan tri|chu web)\b[.!?~\s]*$/', $asciiReq);
+            $hasDetailMsg = !$isPureAskAdm && pub_is_clear_reason($text, 22);
+            if (!$hasPhoto && !$hasDetailMsg) {
                 pub_conv_set($from, ['step' => 'await_support_msg']);
                 pub_send_reply(
                     $chatId,
-                    '📩 <b>GỬI YÊU CẦU HỖ TRỢ TỚI QUẢN TRỊ VIÊN IOSMODS.XYZ</b> ✨' . "\n\n"
-                    . 'Chào <b>' . $nameSafe . '</b> 😊 Bạn hãy <b>nhắn rõ nội dung cần hỗ trợ</b> (kèm tên tài khoản web hoặc <b>ảnh chụp màn hình</b> 📸 nếu có — ví dụ: mở khoá Key, quên mật khẩu, mua VIP, báo lỗi web...).' . "\n\n"
-                    . 'Mình sẽ chuyển thẳng lên Quản trị viên và <b>gửi lại phản hồi của Admin ngay tại đây</b> cho bạn nhé! 💬 <i>(Nhắn "huỷ" nếu không cần nữa)</i>'
+                    '❖ <b>GỬI TIN NHẮN HỖ TRỢ TỚI QUẢN TRỊ VIÊN IOSMODS.XYZ</b>' . "\n\n"
+                    . 'Chào <b>' . $nameSafe . '</b>. Để yêu cầu được xử lý chính xác, vui lòng <b>viết rõ nội dung cụ thể bạn cần Admin hỗ trợ</b> (tên tài khoản web, sự cố gặp phải, mã Key hoặc kèm ảnh chụp màn hình).' . "\n\n"
+                    . 'Hệ thống chỉ chuyển đi khi có nội dung rõ ràng và sẽ phản hồi trực tiếp tại đây ngay khi Admin trả lời. <i>(Nhắn "huỷ" để dừng)</i>'
                 );
                 return;
             }
-            // User already wrote a detailed support request -> forward straight to Admin IMMEDIATELY!
+            // User already wrote a clear, detailed support request -> forward straight to Admin immediately!
             $supIp  = (string) ($mem['real_ip'] ?? ($mem['last_ip'] ?? ($mentionedIp !== '' ? $mentionedIp : '')));
             $supUsr = (string) ($mem['username'] ?? '');
             $supMsg = $text . ($photoOcr !== '' ? (' [OCR ảnh: ' . tg_clip($photoOcr, 180) . ']') : '');
@@ -5668,13 +5716,13 @@ function bot_public_appeal_handler(array $m)
             }
             $hist   = isset($mem['hist']) && is_array($mem['hist']) ? $mem['hist'] : [];
             $hist[] = ['role' => 'user', 'content' => tg_clip($supMsg, 400)];
-            $hist[] = ['role' => 'assistant', 'content' => 'Mình đã chuyển yêu cầu hỗ trợ của bạn trực tiếp tới Quản trị viên iosmods.xyz rồi nhé!'];
+            $hist[] = ['role' => 'assistant', 'content' => 'Yêu cầu hỗ trợ chi tiết của bạn đã được chuyển tới Quản trị viên iosmods.xyz.'];
             pub_conv_set($from, ['hist' => array_slice($hist, -14), 'step' => '']);
             pub_send_reply(
                 $chatId,
-                '✅ <b>Mình đã chuyển yêu cầu hỗ trợ' . ($photoPath !== '' ? ' (kèm ảnh 📸)' : '') . ' của bạn trực tiếp tới Quản trị viên iosmods.xyz!</b>' . "\n\n"
-                . '📝 Nội dung gửi Admin: <i>' . tg_e(tg_clip($text, 280)) . "</i>\n\n"
-                . '🔔 Bạn giữ nguyên khung chat này nhé — ngay khi Admin phản hồi hoặc xử lý, mình sẽ <b>nhắn báo lại liền tại đây</b> cho bạn nha! 💬✨'
+                '✓ <b>Đã chuyển yêu cầu hỗ trợ' . ($photoPath !== '' ? ' (kèm ảnh)' : '') . ' trực tiếp tới Quản trị viên iosmods.xyz</b>' . "\n\n"
+                . '◈ Nội dung gửi Admin: <i>' . tg_e(tg_clip($text, 280)) . "</i>\n\n"
+                . 'Ngay khi Admin phản hồi hoặc xử lý xong, tôi sẽ thông báo trực tiếp tại đây.'
             );
             return;
         }
@@ -5715,13 +5763,13 @@ function bot_public_appeal_handler(array $m)
             }
         }
 
-        $sysPrompt = "Bạn là TRỢ LÝ AI QUẢN LÝ & GIÁM SÁT CAO CẤP 24/7 của website iosmods.xyz, đang trao đổi với khách tên \"$firstName\".\n"
+        $sysPrompt = "Bạn là TRỢ LÝ AI ĐIỀU HÀNH & GIÁM SÁT BẢO MẬT CAO CẤP 24/7 của website iosmods.xyz, đang trao đổi với khách tên \"$firstName\".\n"
             . "QUY TẮC BẮT BUỘC TUYỆT ĐỐI:\n"
-            . "1. Nếu khách hỏi bạn có quản lý website iosmods.xyz không hay vai trò của bạn là gì: HÃY TỰ HÀO KHẲNG ĐỊNH RÕ RÀNG rằng bạn đang trực tiếp quản lý, giám sát bảo mật 24/7 và điều phối hỗ trợ toàn bộ website iosmods.xyz (danh mục công cụ, Key Free/VIP, tài khoản/IP, chống DDoS/VPN/Script, xét mở khoá mã IMX-... và kết nối 2 chiều với Admin).\n"
+            . "1. Nếu khách hỏi bạn có quản lý website iosmods.xyz không hay vai trò của bạn là gì: HÃY KHẲNG ĐỊNH RÕ RÀNG VÀ TỰ TIN rằng bạn trực tiếp quản lý, giám sát bảo mật 24/7 và điều phối toàn bộ hệ thống iosmods.xyz (danh mục công cụ, Key Free/VIP, tài khoản/IP, chống DDoS/VPN/Script, thẩm định mã IMX-... và kết nối 2 chiều với Quản trị viên).\n"
             . "2. CHỈ hỗ trợ các vấn đề liên quan đến website iosmods.xyz. TUYỆT ĐỐI TỪ CHỐI viết code (Python, JS, PHP, HTML, C++, script...), giải bài tập, viết văn, dịch thuật hay prompt ngoài phạm vi iosmods.xyz.\n"
-            . "3. PHONG CÁCH: Cực kỳ nghiêm túc, điềm tĩnh, sắc bén, chuyên nghiệp, thông minh cao cấp (2-3 câu rõ ý, ghi nhớ ngữ cảnh, không lặp lại máy móc). TUYỆT ĐỐI không dùng ngôn ngữ nhí nhảnh (tránh 'nè', 'nha', 'xíu nha', 'hihi'). Chỉ sử dụng TỐI ĐA 1 hoặc 2 icon bình thường cho cả tin nhắn.\n"
-            . "4. QUAN TRỌNG: Khi khách muốn gửi yêu cầu/khiếu nại tới Quản trị viên (Admin), HÃY gắn đúng thẻ [SEND_ADMIN: tóm tắt rõ yêu cầu] ở cuối câu để hệ thống chuyển đơn thật sang Telegram Admin (KHÔNG BAO GIỜ nói đã gửi cho Admin nếu không có thẻ [SEND_ADMIN: ...]).\n"
-            . "5. Nếu khách gõ lệnh gạch chéo (/menu...), nhắc ngắn gọn họ nhắn trực tiếp bằng ngôn ngữ tự nhiên (không lộ lệnh Admin).\n\n"
+            . "3. PHONG CÁCH & TRÍ TUỆ: Nghiêm túc, tư duy logic sắc bén, phân tích mạch lạc, sâu sắc, đi thẳng vào giải pháp (2-3 câu chất lượng cao, ghi nhớ đầy đủ ngữ cảnh). TUYỆT ĐỐI tránh ngôn ngữ nhí nhảnh ('nè', 'nha', 'xíu nha'). Chỉ chọn lọc TỐI ĐA 1-2 icon tinh tế, đẳng cấp (❖ ◈ ⚡ 🛡️ 🔐 ⚖️ ✦ 🧭) cho cả câu trả lời.\n"
+            . "4. QUAN TRỌNG: Chỉ gắn thẻ [SEND_ADMIN: tóm tắt đầy đủ] khi khách ĐÃ nêu rõ nội dung cụ thể cần Admin xử lý. Nếu khách chỉ nói chung chung muốn gửi cho Admin mà chưa ghi nội dung, HÃY yêu cầu khách viết rõ chi tiết vấn đề trước (KHÔNG gửi tin nhắn rỗng tới Admin).\n"
+            . "5. Nếu khách gõ lệnh gạch chéo (/menu...), nhắc ngắn gọn họ nhắn trực tiếp bằng tiếng Việt tự nhiên (không lộ lệnh Admin).\n\n"
             . "[DỮ LIỆU TRỰC TIẾP TỪ MÁY CHỦ IOSMODS.XYZ]:\n- " . implode("\n- ", $bgFacts);
 
         $fallbackHtml = pub_ai_handle_unlocked_topic($from, $nameSafe, $text, $intent, $mem);
@@ -5783,6 +5831,21 @@ function bot_public_appeal_handler(array $m)
     $aiReduced   = !empty($info['ai_reduced']);
     $device      = isset($info['device']) ? (string) $info['device'] : 'Thiết bị trình duyệt';
     $isScriptUa  = (strpos($device, 'Công cụ Script') === 0);
+
+    // MANDATORY CLEAR REASON GATE: When customer sends ONLY an IMX-... code (without a clear explanation),
+    // ALWAYS require them to explain the reason clearly BEFORE unlocking or forwarding to Admin!
+    if ($typedImx !== '' && !$hasClearReason && !$isVpnTurnedOff) {
+        pub_conv_set($from, ['step' => 'await_case_reason', 'last_code' => $code]);
+        $statusTag = $isAdminPerm ? 'Cấm vĩnh viễn bởi Quản trị viên' : ($expTs > 0 ? ('Tạm khoá · còn ' . $leftMin . ' phút') : 'Khoá bảo mật cấp cao');
+        pub_send_reply(
+            $chatId,
+            '❖ <b>Đã tiếp nhận mã xác minh</b> <code>' . tg_e($code) . "</code>\n"
+            . '◈ Trạng thái: <b>' . $statusTag . "</b>\n"
+            . '◈ Nguyên nhân hệ thống ghi nhận: <i>' . tg_e($reasonOrig) . "</i>\n\n"
+            . 'Vui lòng <b>trình bày rõ lý do sự cố vừa xảy ra</b> (tối thiểu 1 câu cụ thể — ví dụ: bạn đã tắt VPN chưa, thao tác nào gây khoá hoặc cần giải trình gì) để tôi thẩm định mở khoá hoặc chuyển hồ sơ chính xác tới Quản trị viên.'
+        );
+        return;
+    }
 
     // -------------------------------------------------------------------------
     // SUBCASE B1: ADMIN PERMANENT BAN (STRICT — NEVER UNLOCK, EXACT REASON,
@@ -6442,10 +6505,10 @@ function bot_admin_ai_copilot($text, array $m = [])
     $shineOn = ((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_enabled'", '', [], '1') !== '0');
     $scfg   = function_exists('sh_cfg') ? sh_cfg() : [];
 
-    $sys = "Bạn là TRỢ LÝ AI ĐIỀU HÀNH CẤP CAO của Quản trị viên (\"$aName\") chịu trách nhiệm vận hành toàn bộ hệ thống website iosmods.xyz.\n"
-        . "PHONG CÁCH BẮT BUỘC:\n"
-        . "1. Cực kỳ nghiêm túc, sắc bén, logic, chuyên nghiệp, thông minh vượt trội, trả lời đi thẳng trọng tâm (2-4 câu). TUYỆT ĐỐI không nói nhí nhảnh, không vòng vo.\n"
-        . "2. TỐI ĐA 1 hoặc 2 icon bình thường trong toàn bộ câu trả lời (không lạm dụng emoji).\n"
+    $sys = "Bạn là TRỢ LÝ AI ĐIỀU HÀNH CẤP CAO của Quản trị viên (\"$aName\") chịu trách nhiệm vận hành và tham mưu toàn bộ hệ thống website iosmods.xyz.\n"
+        . "PHONG CÁCH & TRÍ TUỆ BẮT BUỘC:\n"
+        . "1. Tư duy sắc bén, phân tích sâu sắc, nghiêm túc, ngắn gọn, chuẩn mực như Giám đốc Kỹ thuật & Bảo mật thực thụ (2-4 câu sắc nét, đi thẳng trọng tâm, không sáo rỗng hay nhí nhảnh).\n"
+        . "2. Chọn lọc TỐI ĐA 1-2 icon tinh tế, đẳng cấp (❖ ◈ ⚡ 🛡️ 🔐 ⚖️ ✦ 🧭) trong toàn bộ câu trả lời.\n"
         . "3. BẠN CÓ TOÀN QUYỀN THỰC THI LỆNH THẬT TRÊN MÁY CHỦ! Khi Admin yêu cầu bật/tắt/điều chỉnh bất kỳ chức năng nào, HÃY gắn đúng thẻ lệnh [EXEC: ...] ở cuối câu để hệ thống thực thi thật (có thể gắn nhiều thẻ cho nhiều lệnh trong 1 câu). KHÔNG BAO GIỜ tự bịa là đã làm mà không gắn thẻ [EXEC: ...]!\n"
         . "DANH SÁCH THẺ LỆNH HỢP LỆ:\n"
         . "- [EXEC: maint_on] / [EXEC: maint_off] (bật/tắt bảo trì web)\n"
