@@ -1,27 +1,34 @@
 <?php
-/* DEVNVIOS - docs.php v27 (tai lieu ve website, giao dien giong shopdsgm.vn)
-   - v26: header + thanh tab duoi giong het devnvios_theme.php: logo devnvios.io.vn (lap loa), nut EN, nut sang/toi, avatar + menu tai khoan,
-          thanh tab Home / Keys / Tools / History / Me (hoac Log in). Logo + tai khoan: theme (trang chu) ghi vao localStorage 'ds-docs-acc', docs doc ra (du phong: lay tu trang chu).
-   - /docs.php            => danh sach tai lieu (chi hien Privacy Policy + Terms of Service)
-   - /docs.php?doc=privacy | terms  => trang day du
-   - v25: tieu de co icon cung dong + mau rieng, "Last Updated", muc danh so chu dam, tu khoa in dam,
-          khoi footer (ten site, Legal Disclaimer, Policies, copyright), lien he qua Telegram @iosnea (khong dung Gmail).
-   - about / keys / disclaimer van con trong mang $docs (vao bang ?doc=about ...), muon hien trong danh sach: them ten vao $listed.
-   File doc lap: khong can db.php. Dung chung giao dien sang/toi (localStorage 'ds-theme') voi trang chinh.
-   Cu phap noi dung: **chu dam**, {tg} = link Telegram, dong bat dau bang "- " = gach dau dong.
-   Luu file o dang UTF-8 (khong BOM). */
+if (is_file(__DIR__ . '/security_shield.php')) {
+    require_once __DIR__ . '/security_shield.php';
+    sh_early_guard();
+}
+if (is_file(__DIR__ . '/db.php')) {
+    require_once __DIR__ . '/db.php';
+}
+/* IOSMODS - docs.php (Privacy Policy & Terms of Service) */
 if (!headers_sent()) {
     header('Content-Type: text/html; charset=UTF-8');
 }
 $e = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
 
-$siteName = 'DEVNVIOS';
-$siteHost = 'iosmods.xyz';
-$siteUrl  = 'https://iosmods.xyz';
-$homeUrl  = '/';
-$updated  = 'October 21, 2026';
-$tgUser   = 'iosnea';
-$tgUrl    = 'https://t.me/' . $tgUser;
+$siteName   = 'IOSMODS';
+$footerName = 'iosmods';
+$siteHost   = 'iosmods.xyz';
+$siteUrl    = 'https://iosmods.xyz';
+$homeUrl    = '/';
+$updated    = 'October 21, 2026';
+$tgUser     = 'iosnea';
+$tgUrl      = 'https://t.me/' . $tgUser;
+$docLogoUrl = function_exists('sh_logo_url') ? sh_logo_url() : '/index.php?brand_logo=1';
+$docLogoM   = function_exists('sh_brand_logo_metrics') ? sh_brand_logo_metrics() : ['height' => 42, 'scale' => 1.4, 'skew' => 10.0, 'shine_on' => true, 'shine_sec' => 2.2];
+$docLogoH   = (int) $docLogoM['height'];
+$docLogoS   = rtrim(rtrim(number_format((float) $docLogoM['scale'], 2, '.', ''), '0'), '.') ?: '1.4';
+$docLogoSk  = rtrim(rtrim(number_format((float) $docLogoM['skew'], 2, '.', ''), '0'), '.') ?: '10';
+$docShineOn = !empty($docLogoM['shine_on']);
+$docShineS  = max(1.2, (float) $docLogoM['shine_sec']);
+$docShineDu = rtrim(rtrim(number_format($docShineS, 2, '.', ''), '0'), '.');
+$docShineHf = rtrim(rtrim(number_format($docShineS / 2.0, 2, '.', ''), '0'), '.');
 
 /* tai lieu duoc hien trong danh sach */
 $listed = ['privacy', 'terms'];
@@ -241,7 +248,7 @@ $renderParas = function ($paras) use ($fmt) {
 <meta name="theme-color" content="#000000">
 <script>try{var __t=localStorage.getItem('ds-theme');if(__t==='light'||(__t==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches))document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
 <style>
-    :root { color-scheme: dark; --bg: #000; --card: #0b0b0d; --field: #141416; --line: #1f1f23; --line2: #2a2a30; --h: #f5f5f7; --p: #a1a1aa; --link: #3b9eff; --soft: #141416; --nav: #0e0e10; --pill: rgba(59, 158, 255, .2); --hd: 54px; --logo-h: 47px; --hbtn: 32px; --nav-h: 56px; --red: #ff6961; --nav-glass: rgba(22, 22, 26, .46); --nav-glass-line: rgba(255, 255, 255, .07);
+    :root { color-scheme: dark; --bg: #000; --card: #0b0b0d; --field: #141416; --line: #1f1f23; --line2: #2a2a30; --h: #f5f5f7; --p: #a1a1aa; --link: #3b9eff; --soft: #141416; --nav: #0e0e10; --pill: rgba(59, 158, 255, .2); --hd: 54px; --logo-h: <?= $docLogoH ?>px; --brand-logo-scale: <?= $docLogoS ?>; --hbtn: 32px; --nav-h: 56px; --red: #ff6961; --nav-glass: rgba(22, 22, 26, .46); --nav-glass-line: rgba(255, 255, 255, .07);
         --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
     :root[data-theme="light"] { color-scheme: light; --bg: #f5f7fa; --card: #fff; --field: #f3f4f6; --line: #e5e7eb; --line2: #d1d5db; --h: #111827; --p: #4b5563; --link: #0a6cdc; --soft: #f3f4f6; --nav: #fff; --pill: rgba(10, 108, 220, .13); --red: #dc2626; --nav-glass: rgba(255, 255, 255, .52); --nav-glass-line: rgba(0, 0, 0, .06); }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -253,16 +260,17 @@ $renderParas = function ($paras) use ($fmt) {
     @keyframes soft-in { from { opacity: 0; transform: translate3d(0, 6px, 0); } to { opacity: 1; transform: none; } }
     @media (prefers-reduced-motion: reduce) { .wrap { animation: none; } }
 
-    .hd { position: fixed; top: 0; left: 0; right: 0; z-index: 900; display: flex; align-items: center; justify-content: space-between; height: var(--hd); padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--line); -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); }
-    .brand { display: flex; align-items: center; height: 100%; min-width: 0; margin: 0; padding: 0; }
+    .hd { position: fixed; top: 0; left: 0; right: 0; z-index: 900; display: flex; align-items: center; justify-content: space-between; height: var(--hd); padding: 0 14px; overflow: visible; background: var(--bg); border-bottom: 1px solid var(--line); -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); isolation: isolate; }
+    .brand { display: flex; align-items: center; height: 100%; min-width: 0; margin: 0; padding: 0; line-height: 0; }
+    .brand__mark { position: relative; display: block; height: var(--logo-h); margin-left: -6px; -webkit-transform: scale(var(--brand-logo-scale, 1.4)); transform: scale(var(--brand-logo-scale, 1.4)); -webkit-transform-origin: 0 50%; transform-origin: 0 50%; pointer-events: none; }
     .brand__txt { font-size: 20px; font-weight: 800; letter-spacing: -.02em; color: var(--h); }
     [hidden] { display: none !important; }
 
-    .ds-logo { position: relative; display: block; flex: 0 1 auto; min-width: 0; max-width: 70vw; height: var(--logo-h); line-height: 0; overflow: hidden; contain: paint; -webkit-transform: translateZ(0) skewX(10deg); transform: translateZ(0) skewX(10deg); transform-origin: 50% 50%; }
-    .brand__logo { display: block; width: auto; height: var(--logo-h); max-width: 70vw; margin: 0; padding: 0; object-fit: contain; }
-    .ds-sw { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transform-origin: 50% 50%; -webkit-mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .4) 28%, rgba(0, 0, 0, .72) 50%, rgba(0, 0, 0, .4) 72%, rgba(0, 0, 0, 0) 92%); mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .4) 28%, rgba(0, 0, 0, .72) 50%, rgba(0, 0, 0, .4) 72%, rgba(0, 0, 0, 0) 92%); will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; -webkit-transition: opacity .6s ease; transition: opacity .6s ease; -webkit-animation: ds-sw35 1.6s linear infinite; animation: ds-sw35 1.6s linear infinite; -webkit-animation-delay: var(--ds-ph, 0s); animation-delay: var(--ds-ph, 0s); }
-    .ds-swi { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; max-width: none; object-fit: contain; -webkit-filter: brightness(0) invert(1); filter: brightness(0) invert(1); opacity: 1; transform-origin: 50% 50%; will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; -webkit-animation: ds-swi35 1.6s linear infinite; animation: ds-swi35 1.6s linear infinite; -webkit-animation-delay: var(--ds-ph, 0s); animation-delay: var(--ds-ph, 0s); }
-    .ds-sw2, .ds-sw2 .ds-swi { -webkit-animation-delay: var(--ds-ph2, -.8s); animation-delay: var(--ds-ph2, -.8s); }
+    .ds-logo { position: relative; display: inline-block; flex: 0 1 auto; min-width: 0; height: var(--logo-h); line-height: 0; overflow: hidden; contain: paint; -webkit-transform: translateZ(0) skewX(<?= $docLogoSk ?>deg); transform: translateZ(0) skewX(<?= $docLogoSk ?>deg); transform-origin: 50% 50%; }
+    .brand__logo { display: block; width: auto; height: var(--logo-h); min-height: var(--logo-h); max-height: var(--logo-h); max-width: 260px; margin: 0; padding: 0; object-fit: contain; }
+    .ds-sw { position: absolute; top: 0; left: 0; display: <?= $docShineOn ? 'block' : 'none' ?>; width: 100%; height: 100%; opacity: .48; pointer-events: none; transform-origin: 50% 50%; -webkit-mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .52) 28%, #000 50%, rgba(0, 0, 0, .52) 72%, rgba(0, 0, 0, 0) 92%); mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .52) 28%, #000 50%, rgba(0, 0, 0, .52) 72%, rgba(0, 0, 0, 0) 92%); will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; -webkit-transition: opacity .6s ease; transition: opacity .6s ease; -webkit-animation: ds-sw35 <?= $docShineDu ?>s linear infinite; animation: ds-sw35 <?= $docShineDu ?>s linear infinite; -webkit-animation-delay: var(--ds-ph, 0s); animation-delay: var(--ds-ph, 0s); }
+    .ds-swi { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; max-width: none; object-fit: contain; -webkit-filter: brightness(0) invert(1); filter: brightness(0) invert(1); opacity: 1; transform-origin: 50% 50%; will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; -webkit-animation: ds-swi35 <?= $docShineDu ?>s linear infinite; animation: ds-swi35 <?= $docShineDu ?>s linear infinite; -webkit-animation-delay: var(--ds-ph, 0s); animation-delay: var(--ds-ph, 0s); }
+    .ds-sw2, .ds-sw2 .ds-swi { -webkit-animation-delay: var(--ds-ph2, -<?= $docShineHf ?>s); animation-delay: var(--ds-ph2, -<?= $docShineHf ?>s); }
     @keyframes ds-sw35 { from { -webkit-transform: translate3d(-78%, 0, 0); transform: translate3d(-78%, 0, 0); } to { -webkit-transform: translate3d(78%, 0, 0); transform: translate3d(78%, 0, 0); } }
     @keyframes ds-swi35 { from { -webkit-transform: translate3d(78%, 0, 0); transform: translate3d(78%, 0, 0); } to { -webkit-transform: translate3d(-78%, 0, 0); transform: translate3d(-78%, 0, 0); } }
     html.ds-lg-off .ds-logo .ds-sw { opacity: 0; -webkit-transition-duration: .3s; transition-duration: .3s; }
@@ -375,7 +383,15 @@ $renderParas = function ($paras) use ($fmt) {
 </head>
 <body>
 <header class="hd">
-    <a class="brand" id="dsBrand" href="<?= $e($homeUrl) ?>" data-txt="<?= $e(ucfirst(strtolower($siteHost))) ?>"></a>
+    <a class="brand brand--logo" id="dsBrand" href="<?= $e($homeUrl) ?>" aria-label="iosmods">
+        <span class="brand__mark">
+            <span class="ds-logo" id="ds-logo">
+                <img class="brand__logo" id="brand-logo" src="<?= $e($docLogoUrl) ?>" alt="iosmods" fetchpriority="high" decoding="sync" draggable="false">
+                <i class="ds-sw" aria-hidden="true"><img class="ds-swi" src="<?= $e($docLogoUrl) ?>" alt="" decoding="async" draggable="false"></i>
+                <i class="ds-sw ds-sw2" aria-hidden="true"><img class="ds-swi" src="<?= $e($docLogoUrl) ?>" alt="" decoding="async" draggable="false"></i>
+            </span>
+        </span>
+    </a>
     <div class="hd__r">
         <span class="hbtn">EN</span>
         <button class="hbtn" id="themeBtn" type="button" aria-label="Theme"></button>
@@ -441,10 +457,10 @@ $renderParas = function ($paras) use ($fmt) {
         <a class="ds-doclink" href="<?= $e($self . '?doc=privacy') ?>"><span>Privacy Policy</span></a>
         <a class="ds-doclink" href="<?= $e($self . '?doc=terms') ?>"><span>Terms of Service</span></a>
     </section>
-    <footer class="site-footer" id="dsSiteFt">
+    <footer class="site-footer is-ready" id="dsSiteFt">
         Made with
         <svg class="site-footer__heart" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-        by <a href="<?= $e($homeUrl) ?>"><?= $e($siteName) ?></a>
+        by <a href="<?= $e($homeUrl) ?>"><?= $e($footerName) ?></a>
         <span class="site-footer__year">@2024</span>
     </footer>
 </main>
@@ -492,7 +508,7 @@ $renderParas = function ($paras) use ($fmt) {
 
     function paintLogo(src) {
         var b = $('dsBrand');
-        if (!b || curLogo === src) return;
+        if (!b || b.querySelector('.brand__mark') || curLogo === src) return;
         curLogo = src;
         b.textContent = '';
         function txt() {
@@ -645,9 +661,9 @@ $renderParas = function ($paras) use ($fmt) {
     try {
         var root = document.documentElement, last = 0, tmA = 0, tmB = 0, hid = false, beat = Date.now(), t0 = Date.now(), ready = false;
         function phase() {
-            var p = Date.now() % 1600;
+            var P = <?= (int) round($docShineS * 1000) ?>, H = <?= (int) round($docShineS * 500) ?>, p = Date.now() % P;
             root.style.setProperty('--ds-ph', (-p / 1000) + 's');
-            root.style.setProperty('--ds-ph2', (-((p + 800) % 1600) / 1000) + 's');
+            root.style.setProperty('--ds-ph2', (-((p + H) % P) / 1000) + 's');
         }
         function off() { root.classList.add('ds-lg-off'); }
         function on() { root.classList.remove('ds-lg-off'); }
@@ -746,6 +762,6 @@ window.addEventListener('pageshow',function(){setTimeout(on,300);});
 document.addEventListener('visibilitychange',function(){if(!document.hidden)setTimeout(on,300);});
 window.addEventListener('scroll',function(){clearTimeout(t);t=setTimeout(on,600);},{passive:true});
 setTimeout(on,3500);})();</script>
-<style id="ds-shine-soft">html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:not(.ds-lg-off) .ds-logo .ds-sw{opacity:.65!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi{-webkit-animation-duration:0.9s!important;animation-duration:0.9s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-0.45s!important;animation-delay:-0.45s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{-webkit-animation-duration:0.9s!important;animation-duration:0.9s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important;-webkit-animation-delay:0s!important;animation-delay:0s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2 .dsx-si{-webkit-animation-delay:-0.45s!important;animation-delay:-0.45s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{opacity:.6!important}</style>
+<style id="ds-shine-soft"><?php if (!$docShineOn): ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important}<?php else: ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:not(.ds-lg-off) .ds-logo .ds-sw{opacity:.48!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi{-webkit-animation-duration:<?= $docShineDu ?>s!important;animation-duration:<?= $docShineDu ?>s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-<?= $docShineHf ?>s!important;animation-delay:-<?= $docShineHf ?>s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{-webkit-animation-duration:<?= $docShineDu ?>s!important;animation-duration:<?= $docShineDu ?>s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important;-webkit-animation-delay:0s!important;animation-delay:0s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2 .dsx-si{-webkit-animation-delay:-<?= $docShineHf ?>s!important;animation-delay:-<?= $docShineHf ?>s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{opacity:.48!important}<?php endif; ?></style>
 </body>
 </html>

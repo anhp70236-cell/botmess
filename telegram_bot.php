@@ -444,6 +444,28 @@ function bot_ban_counts()
     return ['perm' => $perm, 'temp' => $temp, 'all' => $perm + $temp];
 }
 
+function bot_snow_is_on()
+{
+    $v = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_snow'", '', [], '1'));
+    return $v !== '0';
+}
+
+function bot_purge_logo_caches()
+{
+    $GLOBALS['SH_LOGO_MEMO_RESET'] = 1;
+    foreach (glob(__DIR__ . '/cache/brandlogo_*') ?: [] as $f) {
+        @unlink($f);
+    }
+    foreach (glob(__DIR__ . '/cache/favicon_*') ?: [] as $f) {
+        @unlink($f);
+    }
+    if (function_exists('sh_dir')) {
+        foreach (glob(sh_dir() . '/logo_*') ?: [] as $f) {
+            @unlink($f);
+        }
+    }
+}
+
 function screen_home($note = '')
 {
     $users   = (int) bq_val('SELECT COUNT(*) FROM users');
@@ -453,7 +475,7 @@ function screen_home($note = '')
     $sVip    = (int) bq_val('SELECT COUNT(*) FROM keys_vip WHERE status = 0');
     $pTotal  = (int) bq_val('SELECT COUNT(*) FROM products');
     $maint   = (string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'maintenance_mode'", '', [], '0') === '1';
-    $blocked = bt_valid('tg_user_blocks') ? (int) bq_val('SELECT COUNT(*) FROM tg_user_blocks WHERE active = 1') : 0;
+    $snowOn  = bot_snow_is_on();
     $bans    = bot_ban_counts();
     $shCfg   = function_exists('sh_cfg') ? sh_cfg() : ['enabled' => true];
     $adSec   = tg_autodelete_ttl();
@@ -464,28 +486,31 @@ function screen_home($note = '')
     $actTotal  = count($allActive);
 
     $t = '🛡 <b>' . tg_e(tg_cfg('site_name', 'IOSMODS.XYZ')) . '</b> · <b>TRUNG TÂM ĐIỀU HÀNH</b>' . "\n"
-        . '<i>' . ($maint ? '🔴 ĐANG BẢO TRÌ TOÀN WEB' : '🟢 WEBSITE ĐANG MỞ') . ' · ' . (!empty($shCfg['enabled']) ? '🛡 KHIÊN AI 24/7' : '⚠️ KHIÊN TẮT') . '</i>' . "\n";
+        . '<i>' . ($maint ? '🔴 ĐANG BẢO TRÌ TOÀN WEB' : '🟢 WEBSITE ĐANG MỞ')
+        . ' · ' . (!empty($shCfg['enabled']) ? '🛡 KHIÊN AI 24/7' : '⚠️ KHIÊN TẮT')
+        . ' · ' . ($snowOn ? '❄️ TUYẾT: BẬT' : '🌤 TUYẾT: TẮT') . '</i>' . "\n";
     if ($note !== '') {
         $t .= '<blockquote>' . $note . '</blockquote>' . "\n";
     }
     $t .= '<blockquote>'
-        . '👥 Thành viên: <b>' . $users . '</b> · 🟢 Có Key: <b>' . ($aFree + $aVip) . '</b> <i>(F:' . $aFree . ' · V:' . $aVip . ')</i>' . "\n"
-        . '🔑 Kho Key: <b>FREE ' . $sFree . '</b> · <b>VIP ' . $sVip . '</b> · 📦 Sản phẩm: <b>' . $pTotal . '</b>'
+        . '👥 Thành viên: <b>' . $users . '</b> · 🟢 Đang có Key: <b>' . ($aFree + $aVip) . '</b> <i>(Free: ' . $aFree . ' · VIP: ' . $aVip . ')</i>' . "\n"
+        . '🔑 Kho Key tồn: <b>Free ' . $sFree . '</b> · <b>VIP ' . $sVip . '</b> · 📦 Sản phẩm: <b>' . $pTotal . '</b>'
         . '</blockquote>' . "\n"
         . '<blockquote>'
         . '📋 Đang bị chặn hiện tại: ' . ($actTotal > 0 ? '🔴 <b>' . $actTotal . ' đối tượng</b> <i>(Tạm khoá ' . $bans['temp'] . ' · Cấm ' . $bans['perm'] . ')</i>' : '🟢 <b>Không có ai bị chặn</b>') . "\n"
-        . '🧹 Tự xoá lệnh: <b>' . ($adSec > 0 ? $adSec . 's' : 'Tắt') . '</b>'
-        . ($emCnt > 0 ? ' · 🎨 Emoji: <b>Premium</b>' : '')
+        . '🧹 Tự xoá lệnh: <b>' . ($adSec > 0 ? $adSec . ' giây' : 'Đang tắt') . '</b>'
+        . ($emCnt > 0 ? ' · 🎨 Biểu tượng: <b>Đã bật</b>' : '')
         . '</blockquote>' . "\n"
-        . '<i>💡 Gửi trực tiếp <code>tên_user</code>, <code>IP</code> hoặc mã <code>IMX-...</code> vào chat để kiểm tra ai đang bị chặn · ' . tg_e(tg_now('H:i:s d/m')) . '</i>';
+        . '<i>💡 Gửi trực tiếp <code>tên_tài_khoản</code>, <code>IP</code> hoặc mã <code>IMX-...</code> vào chat để kiểm tra ngay · ' . tg_e(tg_now('H:i:s d/m')) . '</i>';
 
     ui_send($t, kb([
-        [btn('📋 Danh sách đang bị chặn (' . $actTotal . ')', 'abl|0'), btn('🔍 Kiểm tra User / IP / Mã', 'chk|ask')],
-        [btn($maint ? '🟢 Tắt bảo trì ngay' : '🛠 Chế độ bảo trì', 'mt|menu'), btn('🔓 Mở khoá Get Key', 'uk|0')],
-        [btn('🔑 Kho Key & Tạo Key', 'ky'), btn('🛡 Chống DDoS & IP', 'bn|0')],
+        [btn('📋 Danh sách đang bị chặn (' . $actTotal . ')', 'abl|0'), btn('🔍 Kiểm tra Tài khoản / IP', 'chk|ask')],
+        [btn($snowOn ? '❄️ Tắt tuyết rơi trang chính' : '❄️ Bật tuyết rơi trang chính', 'ui|snow_home', $snowOn ? '' : 'success'), btn('🖼 Đổi Logo & Giao diện', 'ui|menu')],
+        [btn($maint ? '🟢 Tắt bảo trì ngay' : '🛠 Chế độ bảo trì', 'mt|menu'), btn('🔓 Mở khoá nhận Key', 'uk|0')],
+        [btn('🔑 Kho Key & Tạo Key', 'ky'), btn('🛡 Chống DDoS & Khoá IP', 'bn|0')],
         [btn('🧠 AI Giám sát 24/7', 'aihub'), btn('👥 Thành viên (' . $users . ')', cbd('us', '', 0))],
-        [btn('📦 Sản phẩm (' . $pTotal . ')', 'pr|0'), btn('🎨 Emoji Premium', 'em|0')],
-        [btn('🔔 Thông báo & Tự xoá', 'al'), btn('⚙️ Cấu hình', 'cf|0'), btn('🔄 Làm mới', 'home')],
+        [btn('📦 Sản phẩm (' . $pTotal . ')', 'pr|0'), btn('⚙️ Cài đặt Web (Tiếng Việt)', 'cf|menu')],
+        [btn('🎨 Kho Biểu tượng (60)', 'em|0'), btn('🔔 Thông báo & Tự xoá', 'al'), btn('🔄 Làm mới', 'home')],
     ]));
 }
 
@@ -590,7 +615,7 @@ function bot_maintenance($step)
         return ui_send('📝 <b>ĐỔI TIÊU ĐỀ BẢO TRÌ</b>' . "\n" . hr() . "\nGửi tiêu đề trang bảo trì mới:", kb([[btn('✖ Huỷ', 'mt|menu')]]));
     }
 
-    $title  = (string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'maintenance_title'", '', [], 'System Maintenance');
+    $title  = (string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'maintenance_title'", '', [], 'Hệ thống đang bảo trì');
     $notice = (string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'maintenance_notice'", '', [], 'Đang nâng cấp hệ thống, vui lòng quay lại sau.');
     $meta   = bot_tool_meta_load();
     $mTools = 0;
@@ -1295,23 +1320,624 @@ function bot_toggle_product_maint($id)
     return bot_row_view('products', $id, $nowOn ? '🛠 <b>Sản phẩm đang ở chế độ bảo trì riêng.</b>' : '🟢 <b>Sản phẩm đã hoạt động lại bình thường.</b>');
 }
 
-function screen_config($page = 0)
+function bot_set_product_pkg($id, $pkg)
 {
-    $per   = 10;
+    $id   = (int) $id;
+    $pkg  = (int) $pkg;
+    $meta = bot_tool_meta_load();
+    $k    = (string) $id;
+    if (!isset($meta[$k]) || !is_array($meta[$k])) {
+        $meta[$k] = [];
+    }
+    if ($pkg <= 0) {
+        unset($meta[$k]['pkg']);
+        $msg = 'Đã đặt về tự động phân gói theo loại sản phẩm';
+    } else {
+        $meta[$k]['pkg'] = max(1, min(8, $pkg));
+        $msg = 'Đã chuyển sản phẩm vào Gói số ' . $meta[$k]['pkg'];
+    }
+    bot_tool_meta_save($meta);
+    bot_log('tg_product_pkg', 'products#' . $id . ': ' . $msg);
+    toast('📦 ' . $msg);
+    return bot_row_view('products', $id, '✅ <b>' . tg_e($msg) . '</b>');
+}
+
+/* ------------------------------------------------------------------
+ * 8B. 100% Vietnamese Website Customization & Full Admin CP Settings Hub
+ *     - Snow toggle (ds_snow), All iosmods.xyz Logos (direct image upload OR URL),
+ *       Banner slides, Packages 1–8, Texts, System Notices, Colors & Security.
+ *     - 100% Vietnamese UI labels; preserves 100% verbatim English/Vietnamese values!
+ * ------------------------------------------------------------------ */
+
+function bt_vi_table($table)
+{
+    $map = [
+        'users'            => 'Danh sách Thành viên',
+        'products'         => 'Danh sách Sản phẩm / Công cụ',
+        'keys_free'        => 'Kho Key Miễn phí (Free)',
+        'keys_vip'         => 'Kho Key VIP',
+        'site_config'      => 'Cài đặt Website',
+        'ip_bans'          => 'Danh sách Khoá địa chỉ IP',
+        'tg_user_blocks'   => 'Danh sách Khoá tài khoản',
+        'tg_activity'      => 'Nhật ký Hoạt động Website',
+        'admin_logs'       => 'Nhật ký Thao tác Quản trị',
+        'key_attempts'     => 'Nhật ký Nhập sai mã Key',
+        'login_attempts'   => 'Nhật ký Đăng nhập sai',
+        'free_key_claims'  => 'Lịch sử Nhận Key Miễn phí',
+        'free_key_ip_log'  => 'Nhật ký Kiểm soát VPN / Trùng IP',
+        'free_key_seen'    => 'Liên kết Thiết bị & Tài khoản',
+        'free_key_pass'    => 'Quyền ưu tiên Nhận Key 1 lần',
+    ];
+    return isset($map[$table]) ? $map[$table] : ('Bảng ' . $table);
+}
+
+function bt_vi_col($col)
+{
+    $map = [
+        'id'                  => 'Mã số',
+        'username'            => 'Tài khoản web',
+        'password'            => 'Mật khẩu',
+        'role'                => 'Quyền hạn (1=Admin, 0=Thành viên)',
+        'key_type'            => 'Loại Key đang dùng',
+        'expiry_date'         => 'Thời hạn hết hạn Key',
+        'turns_left'          => 'Số lượt còn lại',
+        'alert_msg'           => 'Thông báo riêng cho tài khoản',
+        'vip_free_clicks'     => 'Số lần bấm nhầm mục miễn phí',
+        'password_changed_at' => 'Đổi mật khẩu lúc',
+        'name'                => 'Tên sản phẩm',
+        'link'                => 'Đường dẫn mở công cụ',
+        'image'               => 'Ảnh đại diện sản phẩm',
+        'type'                => 'Phân loại (FREE / VIP)',
+        'description'         => 'Mô tả sản phẩm',
+        'ios_version'         => 'Phiên bản iOS hỗ trợ',
+        'key_code'            => 'Mã Key',
+        'duration_hours'      => 'Thời hạn (số giờ)',
+        'status'              => 'Trạng thái (0=Chưa dùng, 1=Đã dùng)',
+        'used_by'             => 'Người đã kích hoạt',
+        'used_at'             => 'Kích hoạt lúc',
+        'config_key'          => 'Mã cài đặt',
+        'config_value'        => 'Giá trị đang lưu',
+        'ip'                  => 'Địa chỉ IP',
+        'reason'              => 'Nguyên nhân / Lý do',
+        'ban_type'            => 'Phân loại khoá',
+        'banned_by'           => 'Người thực hiện khoá',
+        'active'              => 'Đang áp dụng (1=Có, 0=Đã gỡ)',
+        'hits'                => 'Số lượt bị chặn',
+        'created_at'          => 'Thời gian tạo',
+        'expires_at'          => 'Thời gian tự mở khoá',
+        'unbanned_by'         => 'Người mở khoá',
+        'unbanned_at'         => 'Thời gian mở khoá',
+    ];
+    return isset($map[$col]) ? $map[$col] : $col;
+}
+
+function bot_vi_cfg_groups()
+{
+    $groups = [
+        'logo' => [
+            'title' => '🖼 Logo, Hiệu ứng Tuyết rơi & Nhận diện',
+            'desc'  => 'Đổi toàn bộ Logo iosmods.xyz (Trang chủ, Đăng nhập, Đăng ký, Chính sách, Điều khoản, Màn hình khoá), tốc độ lấp loá và bật/tắt tuyết rơi.',
+            'items' => [
+                'ds_snow'           => ['❄️ Hiệu ứng tuyết rơi giao diện chính', 'tri', 'Bật hoặc tắt hiệu ứng tuyết rơi trên trang chủ iosmods.xyz'],
+                'brand_logo'        => ['🖼 Logo chính toàn bộ web iosmods.xyz', 'img_logo', 'Áp dụng đồng bộ 100% cho Trang chủ, Đăng nhập, Đăng ký, Chính sách, Điều khoản và Màn hình khoá (có thể gửi ảnh trực tiếp hoặc dán link)'],
+                'brand_logo_scale'  => ['🔍 Độ phóng to Logo (chuẩn: 1.4)', 'text', 'Nhập số từ 1.0 đến 2.4 (mặc định giao diện chính là 1.4)'],
+                'ds_logo_h'         => ['📏 Chiều cao gốc của Logo (chuẩn: 42 px)', 'text', 'Nhập số từ 28 đến 64 (mặc định 42)'],
+                'ds_logo_skew'      => ['📐 Góc nghiêng bù thẳng Logo (chuẩn: 10)', 'text', 'Nhập từ -30 đến 30 (mặc định 10 để chữ đứng thẳng đẹp)'],
+                'ds_shine'          => ['✨ Bật hiệu ứng lấp loá trên Logo', 'tri', 'Bật hoặc tắt dải sáng lướt nhẹ qua Logo'],
+                'ds_shine_seconds'  => ['⏱ Tốc độ lấp loá Logo (chuẩn vừa: 2.2 giây)', 'text', 'Số nhỏ chạy nhanh, số lớn chạy chậm (2.2 = vừa đẹp, 3.2 = chậm dịu)'],
+                'favicon_url'       => ['🔖 Logo nhỏ trên Tab trình duyệt (Favicon)', 'img_fav', 'Gửi ảnh vuông trực tiếp hoặc dán link ảnh icon cho tab trình duyệt'],
+                'favicon_bg'        => ['🎨 Màu nền Icon Tab trình duyệt', 'text', 'Mã màu dạng #14161c hoặc gõ none nếu muốn nền trong suốt'],
+                'ds_avatar_url'     => ['👤 Ảnh đại diện mặc định trên Header', 'img_av', 'Gửi ảnh trực tiếp hoặc dán link ảnh đại diện góc phải màn hình'],
+                'ds_avatar_shape'   => ['⭕ Hình dáng khung ảnh đại diện', 'select:circle,rounded,square', 'Chọn tròn (circle), bo góc (rounded) hoặc vuông (square)'],
+            ],
+        ],
+        'home' => [
+            'title' => '🏞 Banner trượt, Tiêu đề & Gói sản phẩm (1–8)',
+            'desc'  => 'Quản lý ảnh trượt trang chủ, tiêu đề đầu trang và đặt tên/mô tả cho các gói sản phẩm (nhập tiếng Anh sẽ lưu đúng nguyên bản tiếng Anh).',
+            'items' => [
+                'ds_hero_title'     => ['🏷 Tiêu đề lớn đầu trang chủ', 'text', 'Để trống = mặc định (ví dụ nhập tiếng Anh: Apps)'],
+                'ds_hero_desc'      => ['📝 Dòng mô tả dưới tiêu đề lớn', 'text', 'Dòng giới thiệu ngắn dưới tiêu đề trang chủ'],
+                'ds_hero_images'    => ['🖼 Danh sách ảnh Banner trượt trang chủ', 'img_hero', 'Gửi ảnh trực tiếp để thêm vào Banner hoặc gửi nhiều link (mỗi dòng 1 link)'],
+                'ds_hero_seconds'   => ['⏱ Số giây tự chuyển ảnh Banner (2–60)', 'text', 'Ví dụ: 4 hoặc 5 giây'],
+                'ds_chips'          => ['🏷 Hàng thẻ nhỏ chạy dưới Banner', 'text', 'Mỗi dòng 1 thẻ dạng Tên|icon (giữ nguyên đúng tiếng Anh/Việt bạn nhập)'],
+                'ds_pkg_count'      => ['📦 Số lượng Gói sản phẩm hiển thị (3–8)', 'text', 'Nhập từ 3 đến 8 gói hiển thị ngoài trang chủ'],
+                'ds_pkg1_title'     => ['📦 Tên hiển thị Gói số 1 (VIP)', 'text', 'Tên gói 1 trên trang chủ (nhập tiếng Anh sẽ lưu đúng tiếng Anh)'],
+                'ds_pkg1_sub'       => ['💬 Mô tả phụ dưới Gói số 1', 'text', 'Dòng chữ nhỏ bên dưới tên Gói 1'],
+                'ds_pkg2_title'     => ['📦 Tên hiển thị Gói số 2 (Miễn phí)', 'text', 'Tên gói 2 trên trang chủ'],
+                'ds_pkg2_sub'       => ['💬 Mô tả phụ dưới Gói số 2', 'text', 'Dòng chữ nhỏ bên dưới tên Gói 2'],
+                'ds_pkg3_title'     => ['📦 Tên hiển thị Gói số 3 (iOS)', 'text', 'Tên gói 3 trên trang chủ'],
+                'ds_pkg3_sub'       => ['💬 Mô tả phụ dưới Gói số 3', 'text', 'Dòng chữ nhỏ bên dưới tên Gói 3'],
+                'ds_pkg4_title'     => ['📦 Tên hiển thị Gói số 4', 'text', 'Tên gói 4 (khi bật từ 4 gói trở lên)'],
+                'ds_pkg5_title'     => ['📦 Tên hiển thị Gói số 5', 'text', 'Tên gói 5 (khi bật từ 5 gói trở lên)'],
+                'ds_home_preview'   => ['🔢 Số sản phẩm hiện sẵn mỗi gói (0 = hiện hết)', 'text', 'Nhập 0 để hiện toàn bộ sản phẩm trong gói'],
+                'ds_reopen_seconds' => ['🔄 Số giây mở lại sản phẩm không mất lượt', 'text', 'Ví dụ: 20 hoặc 90 giây'],
+            ],
+        ],
+        'text' => [
+            'title' => '✍️ Chữ hiển thị, Nút bấm & Liên kết Telegram',
+            'desc'  => 'Chỉnh sửa mọi dòng chữ, nút bấm và liên kết trên website. Bạn gõ tiếng Anh hay tiếng Việt thì hệ thống đều lưu chính xác 100% từng ký tự.',
+            'items' => [
+                'site_title'          => ['🌐 Tên Website trên thanh tiêu đề trình duyệt', 'text', 'Ví dụ: iosmods'],
+                'link_admin_tele'     => ['✈️ Đường dẫn Telegram Admin (nút mua Key VIP)', 'text', 'Ví dụ: https://t.me/iosnea'],
+                'text_telegram_group' => ['📢 Dòng chữ nút tham gia nhóm Telegram', 'text', 'Ví dụ: JOIN THE TELEGRAM GROUP'],
+                'text_key_vip'        => ['💎 Tiêu đề khung nhập Key VIP', 'text', 'Chữ tiêu đề trên ô nhập Key VIP'],
+                'text_key_free'       => ['🟢 Tiêu đề khung nhập Key Miễn phí', 'text', 'Chữ tiêu đề trên ô nhập Key Free'],
+                'placeholder_key_vip' => ['✏️ Chữ gợi ý mờ trong ô nhập Key VIP', 'text', 'Ví dụ: Enter your VIP key...'],
+                'placeholder_key_free'=> ['✏️ Chữ gợi ý mờ trong ô nhập Key Free', 'text', 'Ví dụ: Enter your Free key...'],
+                'text_kich_hoat'      => ['🔘 Chữ trên nút Kích hoạt Key', 'text', 'Ví dụ: Activate'],
+                'text_get_key_free'   => ['🎁 Chữ trên nút nhận Key Miễn phí', 'text', 'Ví dụ: Get Free Key'],
+                'text_buy_vip'        => ['💳 Dòng chữ hướng dẫn mua Key VIP', 'text', 'Nội dung hiển thị phần mua Key VIP'],
+                'text_buy_vip_link'   => ['🔗 Chữ gắn link liên hệ mua Key VIP', 'text', 'Chữ bấm mở Telegram Admin'],
+                'chao_khach'          => ['👋 Lời chào khi khách chưa đăng nhập', 'text', 'Lời chào dành cho khách'],
+                'xin_chao'            => ['👋 Lời chào khi thành viên đã đăng nhập', 'text', 'Ví dụ: Hello,'],
+                'footer_made_by'      => ['❤️ Tên thương hiệu ở chân trang (sau chữ by)', 'text', 'Mặc định: iosmods'],
+                'footer_year'         => ['📅 Năm hiển thị dưới chân trang', 'text', 'Ví dụ: @2024'],
+                'ds_replace'          => ['🔄 Thay thế chữ tự do toàn trang (Chữ gốc|Chữ mới)', 'text', 'Mỗi dòng 1 cặp dạng Chữ gốc|Chữ muốn đổi'],
+            ],
+        ],
+        'notice' => [
+            'title' => '💬 Thanh thông báo & Câu báo khi nhập Key / Mở sản phẩm',
+            'desc'  => 'Tất cả thông báo nổi và hộp thoại báo trạng thái trên trang chủ (hỗ trợ biến {turns}, {plan}, {minutes}; gõ tiếng Anh lưu đúng tiếng Anh).',
+            'items' => [
+                'show_announcement'     => ['📢 Bật thanh thông báo chạy đầu trang chủ', 'bool', 'Bật hoặc tắt khung thông báo chung'],
+                'site_announcement'     => ['📝 Nội dung thanh thông báo đầu trang', 'text', 'Nội dung thông báo gửi toàn bộ thành viên'],
+                'notice_success'        => ['✅ Câu báo khi kích hoạt Key thành công', 'text', 'Có thể dùng {turns} và {plan}'],
+                'notice_key_wrong'      => ['❌ Câu báo khi nhập sai mã Key', 'text', 'Ví dụ: Invalid key. Please check it and try again!'],
+                'notice_not_logged_in'  => ['🔐 Câu báo nhắc đăng nhập khi bấm thao tác', 'text', 'Ví dụ: Please log in to continue!'],
+                'notice_need_login'     => ['👤 Câu báo cần đăng nhập khi mở sản phẩm', 'text', 'Ví dụ: You need to log in!'],
+                'notice_has_turn'       => ['🎟 Câu báo khi vẫn còn lượt mà nhập thêm Key', 'text', 'Có thể dùng {turns}'],
+                'notice_need_vip'       => ['💎 Câu báo khi dùng Key Free bấm sản phẩm VIP', 'text', 'Nhắc sản phẩm yêu cầu Key VIP'],
+                'notice_need_key'       => ['🔑 Câu báo khi tài khoản đã hết lượt', 'text', 'Ví dụ: You are out of turns. Please enter a key!'],
+                'notice_key_expired'    => ['⌛ Câu báo khi mã Key đã hết hạn', 'text', 'Nhắc nhập mã Key mới'],
+                'notice_tool_ok'        => ['🚀 Câu báo khi mở sản phẩm trừ 1 lượt', 'text', 'Có thể dùng {turns}'],
+                'notice_tool_reopen'    => ['♻️ Câu báo khi mở lại sản phẩm miễn phí', 'text', 'Khi mở lại trong khung thời gian cho phép'],
+                'notice_key_daily_limit'=> ['🛑 Câu báo khi chạm giới hạn nhập Key trong ngày', 'text', 'Thông báo giới hạn nhận/nhập Key ngày'],
+            ],
+        ],
+        'style' => [
+            'title' => '🎨 Màu sắc Sáng/Tối, Ẩn/Hiện mục & Khung giao diện',
+            'desc'  => 'Tuỳ chỉnh màu sắc giao diện Tối/Sáng, nút bấm và ẩn/hiện từng thành phần trên trang chủ.',
+            'items' => [
+                'ds_show_title'     => ['👁 Hiện tiêu đề & mô tả lớn đầu trang chủ', 'tri', 'Bật hoặc ẩn khối tiêu đề lớn'],
+                'ds_show_slider'    => ['👁 Hiện khung ảnh Banner trượt trang chủ', 'tri', 'Bật hoặc ẩn khung ảnh trượt'],
+                'ds_show_chips'     => ['👁 Hiện hàng thẻ nhỏ dưới Banner', 'tri', 'Bật hoặc ẩn dải thẻ nhỏ'],
+                'ds_show_join'      => ['👁 Hiện nút tham gia nhóm Telegram', 'tri', 'Bật hoặc ẩn dòng nhóm Telegram'],
+                'ds_show_docs'      => ['👁 Hiện khối giới thiệu & tài liệu cuối trang', 'tri', 'Bật hoặc ẩn phần thông tin cuối trang'],
+                'ds_show_theme_btn' => ['🌗 Hiện nút chuyển Sáng / Tối trên Header', 'tri', 'Bật hoặc ẩn nút mặt trăng/mặt trời'],
+                'ds_show_lang'      => ['🌐 Hiện nút chuyển Ngôn ngữ trên Header', 'tri', 'Bật hoặc ẩn nút ngôn ngữ'],
+                'ds_nav_see'        => ['✨ Hiệu ứng kính mờ thanh điều hướng dưới đáy', 'tri', 'Làm trong mờ thanh menu dưới cùng'],
+                'ds_c_bg'           => ['🌑 Giao diện Tối: Màu nền trang (#000000)', 'text', 'Nhập mã màu HEX ví dụ #000000'],
+                'ds_c_card'         => ['🌑 Giao diện Tối: Màu nền khung thẻ (#0a0a0b)', 'text', 'Nhập mã màu HEX ví dụ #0a0a0b'],
+                'ds_c_accent'       => ['🔵 Giao diện Tối: Màu nhấn nút chính', 'text', 'Nhập mã màu HEX ví dụ #0a84ff'],
+                'ds_l_bg'           => ['☀️ Giao diện Sáng: Màu nền trang (#f5f7fa)', 'text', 'Nhập mã màu HEX ví dụ #f5f7fa'],
+                'ds_get_bg'         => ['🔘 Màu nền nút GET mở sản phẩm', 'text', 'Nhập mã màu HEX hoặc để trống dùng mặc định'],
+                'ds_get_fg'         => ['🔤 Màu chữ nút GET mở sản phẩm', 'text', 'Nhập mã màu HEX hoặc để trống dùng mặc định'],
+                'ds_custom_css'     => ['🧩 Mã CSS tuỳ chỉnh thêm cho giao diện', 'text', 'Dành cho tuỳ biến CSS nâng cao'],
+            ],
+        ],
+        'sec' => [
+            'title' => '🔐 Bảo mật Đăng nhập, Giới hạn Tài khoản & SEO Google',
+            'desc'  => 'Cấu hình giới hạn sai mật khẩu, từ khoá tên tài khoản bị cấm, phiên đăng nhập và mô tả tìm kiếm Google.',
+            'items' => [
+                'login_max_attempts'      => ['🔑 Số lần nhập sai mật khẩu tối đa', 'text', 'Ví dụ: 5 lần'],
+                'login_lock_minutes'      => ['⏱ Số phút khoá đăng nhập khi nhập sai quá mức', 'text', 'Ví dụ: 15 phút'],
+                'admin_max_attempts'      => ['👑 Số lần nhập sai tối đa khi vào trang Admin', 'text', 'Ví dụ: 5 lần'],
+                'session_timeout_minutes' => ['⌛ Tự đăng xuất thành viên sau N phút nghỉ (0 = tắt)', 'text', 'Nhập 0 để giữ phiên không tự thoát'],
+                'min_password_length'     => ['🔒 Độ dài mật khẩu tối thiểu (6–64)', 'text', 'Ví dụ: 8 ký tự'],
+                'reserved_usernames'      => ['🚫 Danh sách tên đăng ký bị cấm (cách dấu phẩy)', 'text', 'Ví dụ: admin,root,support'],
+                'admin_ip_allow'          => ['🛡 Giới hạn IP được vào trang Admin CP (trống = mọi IP)', 'text', 'Cách nhau dấu phẩy hoặc để trống'],
+                'seo_title'               => ['🔍 Tiêu đề chuẩn SEO hiển thị trên Google', 'text', 'Tiêu đề khi chia sẻ link hoặc tìm trên Google'],
+                'seo_description'         => ['📄 Mô tả chuẩn SEO hiển thị trên Google', 'text', 'Đoạn giới thiệu website trên Google'],
+                'ds_privacy_url'          => ['📜 Đường dẫn trang Chính sách bảo mật', 'text', 'Mặc định: /docs.php?doc=privacy'],
+                'ds_terms_url'            => ['⚖️ Đường dẫn trang Điều khoản sử dụng', 'text', 'Mặc định: /docs.php?doc=terms'],
+            ],
+        ],
+    ];
+    return $groups;
+}
+
+function bot_vi_cfg_lookup($key)
+{
+    foreach (bot_vi_cfg_groups() as $gid => $g) {
+        if (isset($g['items'][$key])) {
+            return [$gid, $g['items'][$key][0], $g['items'][$key][1], $g['items'][$key][2]];
+        }
+    }
+    if (preg_match('/^ds_pkg([1-8])_(title|sub)$/', (string) $key, $m)) {
+        return ['home', ($m[2] === 'title' ? '📦 Tên hiển thị Gói số ' : '💬 Mô tả phụ Gói số ') . $m[1], 'text', 'Cấu hình hiển thị cho Gói sản phẩm số ' . $m[1]];
+    }
+    if (strpos((string) $key, 'notice_') === 0) {
+        return ['notice', '💬 Câu thông báo hệ thống (' . substr((string) $key, 7) . ')', 'text', 'Nội dung thông báo hiển thị cho người dùng (nhập tiếng Anh sẽ lưu đúng tiếng Anh)'];
+    }
+    return ['all', '⚙️ Cài đặt «' . $key . '»', 'text', 'Mục cấu hình lưu trong bảng site_config của website'];
+}
+
+function bot_save_uploaded_image(array $m, $prefix = 'dslogo_')
+{
+    $fileId = '';
+    $ext    = 'png';
+    if (!empty($m['photo']) && is_array($m['photo'])) {
+        $best   = end($m['photo']);
+        $fileId = isset($best['file_id']) ? (string) $best['file_id'] : '';
+        $ext    = 'jpg';
+    } elseif (!empty($m['document']) && is_array($m['document'])) {
+        $doc  = $m['document'];
+        $mime = strtolower((string) (isset($doc['mime_type']) ? $doc['mime_type'] : ''));
+        $fn   = strtolower((string) (isset($doc['file_name']) ? $doc['file_name'] : ''));
+        if (strpos($mime, 'image/') === 0 || preg_match('/\.(png|webp|jpe?g|gif|ico)$/', $fn, $em)) {
+            $fileId = isset($doc['file_id']) ? (string) $doc['file_id'] : '';
+            if (preg_match('/\.(png|webp|jpe?g|gif|ico)$/', $fn, $em2)) {
+                $ext = $em2[1] === 'jpeg' ? 'jpg' : $em2[1];
+            } elseif (strpos($mime, 'webp') !== false) {
+                $ext = 'webp';
+            } elseif (strpos($mime, 'jpeg') !== false) {
+                $ext = 'jpg';
+            } elseif (strpos($mime, 'gif') !== false) {
+                $ext = 'gif';
+            }
+        }
+    } elseif (!empty($m['sticker']) && is_array($m['sticker']) && empty($m['sticker']['is_animated']) && empty($m['sticker']['is_video'])) {
+        $fileId = isset($m['sticker']['file_id']) ? (string) $m['sticker']['file_id'] : '';
+        $ext    = 'webp';
+    }
+
+    if ($fileId === '') {
+        return [false, 'Tin nhắn không chứa ảnh hợp lệ. Hãy gửi 1 bức ảnh, tệp ảnh PNG/WEBP hoặc dán đường dẫn https://...'];
+    }
+
+    $gf = tg_api_raw('getFile', ['file_id' => $fileId], 10);
+    if (empty($gf['ok']) || empty($gf['result']['file_path'])) {
+        return [false, 'Không tải được tệp ảnh từ máy chủ Telegram, vui lòng thử lại.'];
+    }
+    $remotePath = (string) $gf['result']['file_path'];
+    if (preg_match('/\.(png|webp|jpe?g|gif|ico)$/i', $remotePath, $rm)) {
+        $ext = strtolower($rm[1]) === 'jpeg' ? 'jpg' : strtolower($rm[1]);
+    }
+    $dlUrl = rtrim((string) tg_cfg('api_base', 'https://api.telegram.org'), '/') . '/file/bot' . (string) tg_cfg('bot_token', '') . '/' . ltrim($remotePath, '/');
+
+    $bytes = false;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($dlUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_FOLLOWLOCATION => true,
+        ]);
+        $bytes = @curl_exec($ch);
+        curl_close($ch);
+    } elseif (ini_get('allow_url_fopen')) {
+        $bytes = @file_get_contents($dlUrl);
+    }
+    if (!is_string($bytes) || strlen($bytes) < 32 || strlen($bytes) > 12 * 1024 * 1024) {
+        return [false, 'Dữ liệu ảnh tải về không hợp lệ hoặc vượt quá 12MB.'];
+    }
+    if (function_exists('getimagesizefromstring') && $ext !== 'ico') {
+        $info = @getimagesizefromstring($bytes);
+        if ($info === false) {
+            return [false, 'Tệp gửi lên không phải định dạng hình ảnh chuẩn.'];
+        }
+        $mimeMap = ['image/png' => 'png', 'image/webp' => 'webp', 'image/jpeg' => 'jpg', 'image/gif' => 'gif'];
+        if (!empty($info['mime']) && isset($mimeMap[$info['mime']])) {
+            $ext = $mimeMap[$info['mime']];
+        }
+    }
+
+    $upDir = __DIR__ . '/uploads';
+    if (!is_dir($upDir)) {
+        @mkdir($upDir, 0755, true);
+    }
+    $relFile = 'uploads/' . $prefix . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+    if (@file_put_contents(__DIR__ . '/' . $relFile, $bytes, LOCK_EX) === false) {
+        return [false, 'Không thể ghi tệp vào thư mục uploads/ trên máy chủ.'];
+    }
+    bot_purge_logo_caches();
+    return [true, $relFile];
+}
+
+function screen_appearance($note = '')
+{
+    $snowOn   = bot_snow_is_on();
+    $logoCur  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'brand_logo'", '', [], ''));
+    $scaleCur = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'brand_logo_scale'", '', [], '1.4')) ?: '1.4';
+    $hCur     = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_logo_h'", '', [], '42')) ?: '42';
+    $shineOn  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine'", '', [], '1')) !== '0';
+    $shineSec = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '2.2')) ?: '2.2';
+    $favCur   = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'favicon_url'", '', [], ''));
+    $avCur    = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_avatar_url'", '', [], ''));
+    $heroRaw  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_hero_images'", '', [], ''));
+    $heroArr  = $heroRaw !== '' ? array_values(array_filter(array_map('trim', preg_split('/[\r\n]+/', $heroRaw)))) : [];
+
+    $t = '🖼 <b>QUẢN LÝ LOGO TOÀN WEBSITE &amp; HIỆU ỨNG TUYẾT RƠI</b>' . "\n";
+    if ($note !== '') {
+        $t .= '<blockquote>' . $note . "</blockquote>\n";
+    }
+    $t .= '<blockquote>'
+        . '❄️ Hiệu ứng Tuyết rơi trang chính: ' . ($snowOn ? '🟢 <b>ĐANG BẬT</b>' : '🔴 <b>ĐANG TẮT</b>') . "\n"
+        . '🖼 Logo chính toàn web (<code>iosmods.xyz</code>): <code>' . tg_e($logoCur !== '' ? tg_clip($logoCur, 42) : 'Mặc định tự nhận từ uploads/') . "</code>\n"
+        . '📐 Cỡ &amp; Phóng to: <b>Cao ' . tg_e($hCur) . 'px · Tỷ lệ ' . tg_e($scaleCur) . 'x</b>' . "\n"
+        . '✨ Độ lấp loá Logo: ' . ($shineOn ? '🟢 <b>Đang bật (chu kỳ ' . tg_e($shineSec) . ' giây)</b>' : '⚪ <b>Đang tắt</b>') . "\n"
+        . '🔖 Icon Tab trình duyệt: <code>' . tg_e($favCur !== '' ? tg_clip($favCur, 36) : 'Mặc định') . "</code>\n"
+        . '👤 Ảnh đại diện Header: <code>' . tg_e($avCur !== '' ? tg_clip($avCur, 36) : 'Mặc định') . "</code>\n"
+        . '🏞 Ảnh Banner trượt trang chủ: <b>' . count($heroArr) . ' ảnh</b>'
+        . '</blockquote>' . "\n"
+        . '<i>📌 Khi bạn đổi Logo chính tại đây, toàn bộ Trang chủ, Đăng nhập, Đăng ký, Chính sách bảo mật, Điều khoản sử dụng và Màn hình khoá sẽ tự động cập nhật đồng bộ 100%!</i>';
+
+    $kbd = [
+        [btn($snowOn ? '❄️ Tuyết rơi: ĐANG BẬT (Bấm để Tắt)' : '❄️ Tuyết rơi: ĐANG TẮT (Bấm để Bật)', 'ui|snow', $snowOn ? 'success' : '')],
+        [btn('🖼 Đổi Logo chính toàn web (Gửi ảnh / Link)', 'ui|ask_logo', 'primary')],
+        [
+            btn('🔍 Tỷ lệ: ' . $scaleCur . 'x', 'ui|cycle_scale'),
+            btn('📏 Cao: ' . $hCur . 'px', 'ui|cycle_h'),
+        ],
+        [
+            btn($shineOn ? '✨ Lấp loá: ' . $shineSec . 's' : '⚪ Lấp loá: TẮT', 'ui|cycle_shine'),
+            btn('♻️ Đặt chuẩn (1.4x · 2.2s)', 'ui|std_logo'),
+        ],
+        [
+            btn('🔖 Đổi Icon Tab (Favicon)', 'ui|ask_fav'),
+            btn('👤 Đổi Ảnh đại diện Web', 'ui|ask_av'),
+        ],
+        [
+            btn('🏞 Thêm ảnh Banner trượt (' . count($heroArr) . ')', 'ui|ask_hero_add'),
+            btn('🧹 Xoá bớt Banner', 'ui|hero_clear'),
+        ],
+        [btn('⚙️ Mở toàn bộ Cài đặt Admin CP (Tiếng Việt)', 'cf|menu')],
+        home_row(),
+    ];
+    return ui_send($t, kb($kbd));
+}
+
+function bot_ui_action($act, $arg = '')
+{
+    $admin = $GLOBALS['CTX']['admin'];
+    if ($act === 'snow' || $act === 'snow_home') {
+        $next = !bot_snow_is_on();
+        bot_set_config('ds_snow', $next ? '1' : '0');
+        bot_log('tg_snow', ($next ? 'Bật' : 'Tắt') . ' hiệu ứng tuyết rơi trang chính');
+        toast($next ? '❄️ Đã BẬT tuyết rơi trên trang chính' : '🌤 Đã TẮT tuyết rơi trên trang chính');
+        if ($act === 'snow_home') {
+            return screen_home($next ? '❄️ Đã <b>BẬT</b> hiệu ứng tuyết rơi ở giao diện chính.' : '🌤 Đã <b>TẮT</b> hiệu ứng tuyết rơi ở giao diện chính.');
+        }
+        return screen_appearance($next ? '❄️ Đã <b>BẬT</b> hiệu ứng tuyết rơi trên giao diện chính.' : '🌤 Đã <b>TẮT</b> hiệu ứng tuyết rơi trên giao diện chính.');
+    }
+    if ($act === 'ask_logo') {
+        conv_set($admin, 'up_brand_logo');
+        return ui_send('🖼 <b>ĐỔI LOGO CHÍNH TOÀN WEBSITE IOSMODS.XYZ</b>' . "\n" . hr() . "\n"
+            . "Bạn có thể thực hiện theo <b>1 trong 2 cách</b>:\n"
+            . "1️⃣ <b>Gửi trực tiếp ảnh hoặc tệp PNG/WEBP không nén</b> ngay vào khung chat này (khuyên dùng ảnh nền trong suốt).\n"
+            . "2️⃣ Hoặc <b>dán đường dẫn ảnh</b> (<code>https://...</code>).\n\n"
+            . "<i>Logo mới sẽ áp dụng đồng bộ 100% cho Trang chủ, Đăng nhập, Đăng ký, Chính sách, Điều khoản và Màn hình khoá!</i>",
+            kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+    }
+    if ($act === 'ask_fav') {
+        conv_set($admin, 'up_favicon');
+        return ui_send('🔖 <b>ĐỔI ICON TAB TRÌNH DUYỆT (FAVICON)</b>' . "\n" . hr() . "\n"
+            . 'Hãy <b>gửi trực tiếp 1 bức ảnh vuông</b> hoặc <b>dán đường dẫn ảnh</b> (<code>https://...</code>) vào khung chat:',
+            kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+    }
+    if ($act === 'ask_av') {
+        conv_set($admin, 'up_avatar');
+        return ui_send('👤 <b>ĐỔI ẢNH ĐẠI DIỆN MẶC ĐỊNH TRÊN HEADER</b>' . "\n" . hr() . "\n"
+            . 'Hãy <b>gửi trực tiếp bức ảnh</b> hoặc <b>dán đường dẫn ảnh</b> (<code>https://...</code>) vào khung chat (gõ <code>MACDINH</code> nếu muốn xoá về mặc định):',
+            kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+    }
+    if ($act === 'ask_hero_add') {
+        conv_set($admin, 'up_hero_add');
+        return ui_send('🏞 <b>THÊM ẢNH BANNER TRƯỢT TRANG CHỦ</b>' . "\n" . hr() . "\n"
+            . 'Hãy <b>gửi trực tiếp bức ảnh</b> hoặc <b>gửi 1 hay nhiều đường dẫn ảnh</b> (mỗi dòng 1 link <code>https://...</code>) để thêm vào khung Banner trượt:',
+            kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+    }
+    if ($act === 'hero_clear') {
+        bot_set_config('ds_hero_images', '');
+        bot_log('tg_hero_clear', 'Xoá danh sách ảnh Banner tuỳ chỉnh về mặc định');
+        toast('🧹 Đã đặt lại ảnh Banner');
+        return screen_appearance('✅ Đã xoá danh sách Banner tuỳ chỉnh (quay về mặc định).');
+    }
+    if ($act === 'cycle_scale') {
+        $steps = ['1.2', '1.4', '1.55', '1.7', '1.0'];
+        $cur   = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'brand_logo_scale'", '', [], '1.4')) ?: '1.4';
+        $idx   = array_search($cur, $steps, true);
+        $next  = $steps[$idx === false ? 1 : (($idx + 1) % count($steps))];
+        bot_set_config('brand_logo_scale', $next);
+        bot_purge_logo_caches();
+        toast('🔍 Độ phóng to Logo: ' . $next . 'x');
+        return screen_appearance('✅ Đã chỉnh độ phóng to Logo toàn web thành <b>' . $next . 'x</b>.');
+    }
+    if ($act === 'cycle_h') {
+        $steps = ['38', '42', '46', '50'];
+        $cur   = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_logo_h'", '', [], '42')) ?: '42';
+        $idx   = array_search($cur, $steps, true);
+        $next  = $steps[$idx === false ? 1 : (($idx + 1) % count($steps))];
+        bot_set_config('ds_logo_h', $next);
+        bot_set_config('brand_logo_height', $next);
+        bot_purge_logo_caches();
+        toast('📏 Chiều cao Logo: ' . $next . 'px');
+        return screen_appearance('✅ Đã chỉnh chiều cao gốc Logo thành <b>' . $next . 'px</b>.');
+    }
+    if ($act === 'cycle_shine') {
+        $shineOn = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine'", '', [], '1')) !== '0';
+        $curSec  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '2.2')) ?: '2.2';
+        if (!$shineOn) {
+            bot_set_config('ds_shine', '1');
+            bot_set_config('ds_shine_seconds', '2.2');
+            $msg = 'Đã bật lấp loá mức vừa phải (2.2 giây)';
+        } elseif ($curSec === '2.2') {
+            bot_set_config('ds_shine_seconds', '3.2');
+            $msg = 'Đã chuyển sang lấp loá chậm dịu (3.2 giây)';
+        } elseif ($curSec === '3.2') {
+            bot_set_config('ds_shine_seconds', '1.6');
+            $msg = 'Đã chuyển sang lấp loá hơi nhanh (1.6 giây)';
+        } else {
+            bot_set_config('ds_shine', '0');
+            $msg = 'Đã tắt hẳn hiệu ứng lấp loá trên Logo';
+        }
+        bot_purge_logo_caches();
+        toast('✨ ' . $msg);
+        return screen_appearance('✅ <b>' . tg_e($msg) . '</b>');
+    }
+    if ($act === 'std_logo') {
+        bot_set_config('brand_logo_scale', '1.4');
+        bot_set_config('ds_logo_h', '42');
+        bot_set_config('brand_logo_height', '42');
+        bot_set_config('ds_logo_skew', '10');
+        bot_set_config('ds_shine', '1');
+        bot_set_config('ds_shine_seconds', '2.2');
+        bot_purge_logo_caches();
+        bot_log('tg_logo_std', 'Đặt chuẩn Logo 1.4x · cao 42px · nghiêng 10° · lấp loá vừa 2.2s');
+        toast('✅ Đã đặt chuẩn Logo toàn web');
+        return screen_appearance('✅ Đã đồng bộ chuẩn 100%: <b>Tỷ lệ 1.4x · Cao 42px · Nghiêng 10° · Lấp loá vừa 2.2s</b> trên toàn bộ trang!');
+    }
+    return screen_appearance();
+}
+
+function screen_config($sub = 'menu', $page = 0, $note = '')
+{
+    $groups = bot_vi_cfg_groups();
+    if ($sub === '' || $sub === 'menu' || ($sub === '0' && $page === 0)) {
+        $total = (int) bq_val("SELECT COUNT(*) FROM site_config WHERE config_key <> 'tg_emoji_vault'");
+        $t = '⚙️ <b>CÀI ĐẶT TOÀN DIỆN WEBSITE (100% TIẾNG VIỆT)</b>' . "\n";
+        if ($note !== '') {
+            $t .= '<blockquote>' . $note . "</blockquote>\n";
+        }
+        $t .= '<blockquote>'
+            . '📌 Quản lý đầy đủ mọi tính năng như bảng <b>Admin CP</b> trên web bằng giao diện <b>100% Tiếng Việt</b> dễ hiểu.' . "\n"
+            . '🔤 <b>Lưu chuẩn nguyên bản:</b> Khi bạn gõ nội dung bằng <b>tiếng Anh</b> (hoặc tiếng Việt), Bot sẽ tự động lưu <b>đúng chính xác 100% tiếng Anh</b> bạn vừa nhập mà không tự ý dịch hay sửa chữ!'
+            . '</blockquote>';
+
+        $kbd = [];
+        foreach ($groups as $gid => $g) {
+            $kbd[] = [btn($g['title'], 'cf|' . $gid . '|0')];
+        }
+        $kbd[] = [
+            btn('📋 Tất cả mục đang lưu (' . $total . ')', 'cf|all|0'),
+            btn('➕ Thêm mục mới', 'cn'),
+        ];
+        $kbd[] = [btn('🗄 Quản lý Bảng dữ liệu & SQL', 'db'), btn('🏠 Menu chính', 'home')];
+        return ui_send($t, kb($kbd));
+    }
+
+    if ($sub !== 'all' && isset($groups[$sub])) {
+        $g     = $groups[$sub];
+        $keys  = array_keys($g['items']);
+        $per   = 8;
+        $total = count($keys);
+        $pages = max(1, (int) ceil($total / $per));
+        $page  = max(0, min((int) $page, $pages - 1));
+        $slice = array_slice($keys, $page * $per, $per);
+
+        $vals = [];
+        foreach (bq_all("SELECT config_key, config_value FROM site_config") as $r) {
+            $vals[$r['config_key']] = (string) $r['config_value'];
+        }
+
+        $t = '<b>' . $g['title'] . '</b>' . "\n";
+        if ($note !== '') {
+            $t .= '<blockquote>' . $note . "</blockquote>\n";
+        }
+        $t .= '<i>' . tg_e($g['desc']) . '</i>';
+
+        $kbd = [];
+        foreach ($slice as $ck) {
+            $meta = $g['items'][$ck];
+            $rawV = isset($vals[$ck]) ? $vals[$ck] : '';
+            if ($meta[1] === 'tri') {
+                $disp = ($rawV === '0') ? 'Đang Tắt' : 'Đang Bật';
+            } elseif ($meta[1] === 'bool') {
+                $disp = ($rawV === '1') ? 'Đang Bật' : 'Đang Tắt';
+            } else {
+                $disp = ($rawV === '') ? 'Mặc định' : bv($rawV, 16);
+            }
+            $kbd[] = [btn($meta[0] . ' · [' . $disp . ']', cbd('cfk', $ck, $sub, $page))];
+        }
+        if ($pages > 1) {
+            $kbd[] = pager_row('cf', [$sub], $page, $pages);
+        }
+        $kbd[] = [btn('⬅ Nhóm cài đặt', 'cf|menu'), btn('🏠 Menu chính', 'home')];
+        return ui_send($t, kb($kbd));
+    }
+
+    // Fallback 'all': show every site_config row with Vietnamese explanation
+    $per   = 8;
     $total = (int) bq_val("SELECT COUNT(*) FROM site_config WHERE config_key <> 'tg_emoji_vault'");
     $pages = max(1, (int) ceil($total / $per));
     $page  = max(0, min((int) $page, $pages - 1));
     $rows  = bq_all("SELECT config_key, config_value FROM site_config WHERE config_key <> 'tg_emoji_vault' ORDER BY config_key ASC LIMIT " . $per . ' OFFSET ' . ($page * $per));
-    $kbd   = [[btn('➕ Thêm cấu hình mới', 'cn')]];
+    $kbd   = [[btn('➕ Thêm mục cài đặt mới', 'cn')]];
     foreach ($rows as $r) {
-        $val   = bt_secret('config_value', $r, 'site_config') ? '••••' : bv($r['config_value'], 18);
-        $kbd[] = [btn('⚙️ ' . $r['config_key'] . ' = ' . $val, cbd('dr', 'site_config', $r['config_key']))];
+        list(, $viLabel) = bot_vi_cfg_lookup($r['config_key']);
+        $val   = bt_secret('config_value', $r, 'site_config') ? '••••' : ($r['config_value'] === '' ? 'Trống' : bv($r['config_value'], 16));
+        $kbd[] = [btn(tg_clip($viLabel, 34) . ' = ' . $val, cbd('cfk', $r['config_key'], 'all', $page))];
     }
     if ($pages > 1) {
-        $kbd[] = pager_row('cf', [], $page, $pages);
+        $kbd[] = pager_row('cf', ['all'], $page, $pages);
     }
-    $kbd[] = home_row();
-    ui_send('⚙️ <b>CẤU HÌNH WEBSITE (SITE_CONFIG)</b> · ' . $total . " mục\nĐồng bộ trực tiếp với bảng điều khiển <code>admin_cp.php</code>.", kb($kbd));
+    $kbd[] = [btn('⬅ Nhóm cài đặt', 'cf|menu'), btn('🏠 Menu chính', 'home')];
+    return ui_send('📋 <b>TẤT CẢ MỤC CÀI ĐẶT TRONG CƠ SỞ DỮ LIỆU</b> · ' . $total . ' mục', kb($kbd));
+}
+
+function screen_cfg_item($key, $backGroup = 'menu', $backPage = 0, $note = '')
+{
+    $key = trim((string) $key);
+    list($gid, $viLabel, $kind, $viDesc) = bot_vi_cfg_lookup($key);
+    if ($backGroup === '') {
+        $backGroup = $gid;
+    }
+    $row  = bq_row('SELECT config_key, config_value FROM site_config WHERE config_key = ? LIMIT 1', 's', [$key]);
+    $curV = $row ? (string) $row['config_value'] : '';
+    $shown = ($row && bt_secret('config_value', $row, 'site_config')) ? '••••••••' : ($curV === '' ? '(Đang để trống — dùng chuẩn mặc định)' : $curV);
+
+    $t = '⚙️ <b>' . tg_e($viLabel) . '</b>' . "\n";
+    if ($note !== '') {
+        $t .= '<blockquote>' . $note . "</blockquote>\n";
+    }
+    $t .= '<blockquote>'
+        . '📌 Giải thích: ' . tg_e($viDesc) . "\n"
+        . '🔑 Mã hệ thống: <code>' . tg_e($key) . "</code>\n"
+        . '💾 Giá trị hiện tại: <code>' . tg_e(tg_clip($shown, 350)) . '</code>'
+        . '</blockquote>' . "\n"
+        . '<i>💡 Bấm nút bên dưới để đổi nhanh hoặc nhập giá trị mới (nếu bạn gõ tiếng Anh, hệ thống sẽ lưu nguyên văn tiếng Anh 100%).</i>';
+
+    $kbd = [];
+    if ($kind === 'img_logo') {
+        $kbd[] = [btn('🖼 Tải ảnh lên / Dán link Logo mới', 'ui|ask_logo', 'primary')];
+    } elseif ($kind === 'img_fav') {
+        $kbd[] = [btn('🔖 Tải ảnh lên / Dán link Icon Tab mới', 'ui|ask_fav', 'primary')];
+    } elseif ($kind === 'img_av') {
+        $kbd[] = [btn('👤 Tải ảnh lên / Dán link Ảnh đại diện', 'ui|ask_av', 'primary')];
+    } elseif ($kind === 'img_hero') {
+        $kbd[] = [btn('🏞 Tải ảnh lên / Thêm link Banner trượt', 'ui|ask_hero_add', 'primary')];
+    }
+
+    if ($kind === 'tri') {
+        $isOn = ($curV !== '0');
+        $kbd[] = [
+            btn($isOn ? '🟢 Đang BẬT' : '🟢 Bật tính năng này', cbd('cfs', $key, '1', $backGroup, $backPage), $isOn ? 'success' : ''),
+            btn(!$isOn ? '🔴 Đang TẮT' : '🔴 Tắt tính năng này', cbd('cfs', $key, '0', $backGroup, $backPage), !$isOn ? 'danger' : ''),
+        ];
+    } elseif ($kind === 'bool') {
+        $isOn = ($curV === '1');
+        $kbd[] = [
+            btn($isOn ? '🟢 Đang BẬT' : '🟢 Bật tính năng này', cbd('cfs', $key, '1', $backGroup, $backPage), $isOn ? 'success' : ''),
+            btn(!$isOn ? '🔴 Đang TẮT' : '🔴 Tắt tính năng này', cbd('cfs', $key, '0', $backGroup, $backPage), !$isOn ? 'danger' : ''),
+        ];
+    } elseif (strpos($kind, 'select:') === 0) {
+        $opts = explode(',', substr($kind, 7));
+        $optBtns = [];
+        $viOpt = ['circle' => '⭕ Tròn', 'rounded' => '▢ Bo góc', 'square' => '⬜ Vuông'];
+        foreach ($opts as $op) {
+            $lbl = isset($viOpt[$op]) ? $viOpt[$op] : $op;
+            $optBtns[] = btn(($curV === $op ? '✓ ' : '') . $lbl, cbd('cfs', $key, $op, $backGroup, $backPage), $curV === $op ? 'primary' : '');
+        }
+        $kbd[] = $optBtns;
+    }
+
+    $kbd[] = [
+        btn('✏️ Nhập giá trị mới (Việt / Anh)', cbd('cfe', $key, $backGroup, $backPage), 'primary'),
+        btn('♻️ Đặt về mặc định', cbd('cfs', $key, '__EMPTY__', $backGroup, $backPage)),
+    ];
+    $kbd[] = [btn('⬅ Quay lại danh sách', 'cf|' . $backGroup . '|' . (int) $backPage), btn('🏠 Menu chính', 'home')];
+    return ui_send($t, kb($kbd));
 }
 
 function screen_db()
@@ -1320,7 +1946,8 @@ function screen_db()
     $kbd  = [[btn('🧮 Mở Bảng Lệnh SQL', 'sq'), btn('📜 Xem Nhật Ký Hệ Thống', 'lg')]];
     $line = [];
     foreach ($rows as $r) {
-        $line[] = btn('🗄 ' . $r['t'] . ' (' . ($r['n'] === null ? '?' : '~' . $r['n']) . ')', cbd('dt', $r['t'], 0));
+        $viT    = bt_vi_table($r['t']);
+        $line[] = btn('🗄 ' . tg_clip($viT, 22) . ' (' . ($r['n'] === null ? '?' : '~' . $r['n']) . ')', cbd('dt', $r['t'], 0));
         if (count($line) === 2) {
             $kbd[] = $line;
             $line  = [];
@@ -1330,7 +1957,7 @@ function screen_db()
         $kbd[] = $line;
     }
     $kbd[] = home_row();
-    ui_send('🗄 <b>CƠ SỞ DỮ LIỆU & SQL</b> · ' . count($rows) . ' bảng', kb($kbd));
+    ui_send('🗄 <b>QUẢN LÝ CƠ SỞ DỮ LIỆU &amp; TRUY VẤN SQL</b> · ' . count($rows) . ' bảng', kb($kbd));
 }
 
 function screen_table($table, $page)
@@ -1375,11 +2002,11 @@ function screen_table($table, $page)
 
 function screen_logs_menu()
 {
-    ui_send('📜 <b>NHẬT KÝ HỆ THỐNG</b>', kb([
-        [btn('👑 Thao tác Admin', 'lt|admin_logs|0'), btn('👁 Hoạt động Web', 'ac|a|0')],
-        [btn('🚫 Nhập sai Key', 'lt|key_attempts|0'), btn('🔐 Đăng nhập sai', 'lt|login_attempts|0')],
-        [btn('🧮 Lịch sử SQL', 'lt|sql|0')],
-        [btn('⬅ Database', 'db'), btn('🏠 Menu chính', 'home')],
+    ui_send('📜 <b>NHẬT KÝ HỆ THỐNG WEBSITE</b>', kb([
+        [btn('👑 Thao tác Quản trị', 'lt|admin_logs|0'), btn('👁 Hoạt động Website', 'ac|a|0')],
+        [btn('🚫 Nhập sai mã Key', 'lt|key_attempts|0'), btn('🔐 Đăng nhập sai', 'lt|login_attempts|0')],
+        [btn('🧮 Lịch sử lệnh SQL', 'lt|sql|0')],
+        [btn('⬅ Cơ sở dữ liệu', 'db'), btn('🏠 Menu chính', 'home')],
     ]));
 }
 
@@ -1499,12 +2126,15 @@ function screen_alerts()
 
 function bot_back_for($table)
 {
-    $map = ['users' => cbd('us', '', 0), 'keys_free' => 'kl|FREE|0|0', 'keys_vip' => 'kl|VIP|0|0', 'products' => 'pr|0', 'site_config' => 'cf|0'];
+    $map = ['users' => cbd('us', '', 0), 'keys_free' => 'kl|FREE|0|0', 'keys_vip' => 'kl|VIP|0|0', 'products' => 'pr|0', 'site_config' => 'cf|menu'];
     return isset($map[$table]) ? $map[$table] : cbd('dt', $table, 0);
 }
 
 function bot_row_view($table, $pkv, $note = '')
 {
+    if ($table === 'site_config') {
+        return screen_cfg_item($pkv, '', 0, $note);
+    }
     if (!bt_valid($table)) {
         return ui_error('Bảng không tồn tại', 'db');
     }
@@ -1517,14 +2147,14 @@ function bot_row_view($table, $pkv, $note = '')
         return ui_error('Không tìm thấy dữ liệu', bot_back_for($table));
     }
 
-    $t = '📄 <b>' . tg_e($table) . '</b> · <code>' . tg_e($pk) . ' = ' . tg_e($pkv) . '</code>' . "\n";
+    $t = '📄 <b>' . tg_e(bt_vi_table($table)) . '</b> · <code>#' . tg_e($pkv) . '</code>' . "\n";
     if ($note !== '') {
         $t .= $note . "\n";
     }
     $fields = '';
     foreach ($row as $col => $val) {
         $shown   = bt_secret($col, $row, $table) ? '••••••••' : bv($val, 200);
-        $fields .= '<b>' . tg_e($col) . ':</b> <code>' . tg_e($shown) . "</code>\n";
+        $fields .= '<b>' . tg_e(bt_vi_col($col)) . ':</b> <code>' . tg_e($shown) . "</code>\n";
     }
     $t .= '<blockquote>' . rtrim($fields) . "</blockquote>\n";
 
@@ -1535,25 +2165,33 @@ function bot_row_view($table, $pkv, $note = '')
         $t .= '🔎 <b>Key hiện tại:</b> ' . ($active ? '🟢 Đang chạy (' . tg_e($row['key_type']) . ' · ' . (int) $row['turns_left'] . ' lượt)' : '⚪ Chưa có / hết hạn') . "\n";
         $t .= '⛔ <b>Tài khoản:</b> ' . ($blk ? '🔴 ĐANG KHOÁ (' . tg_e(tg_clip($blk['reason'], 60)) . ')' : '🟢 Bình thường');
         $id = (int) $pkv;
-        $kbd[] = [btn('🎁 Cấp FREE 24h', 'ua|' . $id . '|free'), btn('💎 Cấp VIP 30d', 'ua|' . $id . '|vip')];
-        $kbd[] = [btn('➕ +1 lượt', 'ua|' . $id . '|t+'), btn('➖ −1 lượt', 'ua|' . $id . '|t-')];
-        $kbd[] = [btn('🔓 Mở khoá Get Key', cbd('uk', 'run', (string) $row['username'])), btn('🗑 Xoá lượt', 'ua|' . $id . '|clear')];
+        $kbd[] = [btn('🎁 Cấp Free 24h', 'ua|' . $id . '|free'), btn('💎 Cấp VIP 30 ngày', 'ua|' . $id . '|vip')];
+        $kbd[] = [btn('➕ Cộng 1 lượt', 'ua|' . $id . '|t+'), btn('➖ Trừ 1 lượt', 'ua|' . $id . '|t-')];
+        $kbd[] = [btn('🔓 Mở khoá nhận Key', cbd('uk', 'run', (string) $row['username'])), btn('🗑 Xoá lượt về 0', 'ua|' . $id . '|clear')];
         $kbd[] = [btn('⛔ Thu hồi Key', 'ua|' . $id . '|revoke'), btn('🔑 Đổi mật khẩu', 'ua|' . $id . '|pw')];
-        $kbd[] = [btn('🚫 Xem & Chặn IP', 'bu|' . $id), btn('👑 Quyền Admin', 'ua|' . $id . '|role')];
+        $kbd[] = [btn('🚫 Xem & Chặn IP', 'bu|' . $id), btn('👑 Quyền Quản trị', 'ua|' . $id . '|role')];
         $kbd[] = [$blk ? btn('✅ Mở khoá tài khoản', 'uu|' . $id) : btn('⛔ Khoá tài khoản', 'ub|' . $id)];
     } elseif ($table === 'keys_free' || $table === 'keys_vip') {
         $kbd[] = [(int) $row['status'] === 0
             ? btn('🚫 Huỷ hiệu lực Key này', 'kx|' . $table . '|' . (int) $pkv . '|void')
             : btn('♻️ Khôi phục thành chưa dùng', 'kx|' . $table . '|' . (int) $pkv . '|restore')];
     } elseif ($table === 'products') {
-        $meta = bot_tool_meta_load();
-        $isM  = !empty($meta[(string) (int) $pkv]['maint']);
+        $meta   = bot_tool_meta_load();
+        $pMeta  = isset($meta[(string) (int) $pkv]) && is_array($meta[(string) (int) $pkv]) ? $meta[(string) (int) $pkv] : [];
+        $isM    = !empty($pMeta['maint']);
+        $curPkg = !empty($pMeta['pkg']) ? (int) $pMeta['pkg'] : 0;
+        $t     .= '📦 <b>Gói hiển thị trên trang chủ:</b> ' . ($curPkg > 0 ? '<b>Gói số ' . $curPkg . '</b>' : '<i>Tự động theo loại sản phẩm</i>');
         $kbd[] = [
-            btn('🔁 Đổi FREE ⇄ VIP', 'px|' . (int) $pkv),
-            btn($isM ? '🟢 Tắt bảo trì Tool này' : '🛠 Bảo trì riêng Tool này', 'pm|' . (int) $pkv, $isM ? 'success' : 'danger'),
+            btn('🔁 Đổi Miễn phí ⇄ VIP', 'px|' . (int) $pkv),
+            btn($isM ? '🟢 Tắt bảo trì riêng' : '🛠 Bật bảo trì riêng', 'pm|' . (int) $pkv, $isM ? 'success' : 'danger'),
         ];
-    } elseif ($table === 'site_config' && isset($row['config_value']) && ($row['config_value'] === '0' || $row['config_value'] === '1')) {
-        $kbd[] = [btn('🔀 Đảo trạng thái 0 / 1', cbd('ct', $pkv))];
+        $kbd[] = [
+            btn(($curPkg === 1 ? '✓ ' : '') . '📦 Gói 1', 'ppk|' . (int) $pkv . '|1'),
+            btn(($curPkg === 2 ? '✓ ' : '') . '📦 Gói 2', 'ppk|' . (int) $pkv . '|2'),
+            btn(($curPkg === 3 ? '✓ ' : '') . '📦 Gói 3', 'ppk|' . (int) $pkv . '|3'),
+            btn($curPkg === 0 ? '✓ Tự động' : '♻️ Tự động', 'ppk|' . (int) $pkv . '|0'),
+        ];
+        $kbd[] = [btn('🖼 Tải ảnh mới cho sản phẩm này', 'pim|' . (int) $pkv, 'primary')];
     }
 
     $line = [];
@@ -1561,7 +2199,7 @@ function bot_row_view($table, $pkv, $note = '')
         if ($col === $pk) {
             continue;
         }
-        $line[] = btn('✏️ ' . $col, cbd('de', $table, $pkv, $col), '');
+        $line[] = btn('✏️ ' . tg_clip(bt_vi_col($col), 20), cbd('de', $table, $pkv, $col), '');
         if (count($line) === 2) {
             $kbd[] = $line;
             $line  = [];
@@ -1571,7 +2209,7 @@ function bot_row_view($table, $pkv, $note = '')
         $kbd[] = $line;
     }
     if (tg_cfg('allow_destructive')) {
-        $kbd[] = [btn('🗑 Xoá dòng này', cbd('dd', $table, $pkv))];
+        $kbd[] = [btn('🗑 Xoá mục này', cbd('dd', $table, $pkv))];
     }
     $kbd[] = [btn('⬅ Quay lại', bot_back_for($table)), btn('🏠 Menu chính', 'home')];
     ui_send($t, kb($kbd));
@@ -1582,18 +2220,18 @@ function bot_edit_prompt($table, $pkv, $col)
     $pk   = bt_valid($table) ? bt_pk($table) : null;
     $cols = bt_cols($table);
     if ($pk === null || !isset($cols[$col]) || $col === $pk) {
-        return ui_error('Không thể sửa cột này', 'db');
+        return ui_error('Không thể sửa mục này', 'db');
     }
     $row = bq_row('SELECT * FROM `' . $table . '` WHERE `' . $pk . '` = ? LIMIT 1', 's', [(string) $pkv]);
     if (!$row) {
-        return ui_error('Không tìm thấy dòng', bot_back_for($table));
+        return ui_error('Không tìm thấy dữ liệu', bot_back_for($table));
     }
     conv_set($GLOBALS['CTX']['admin'], 'edit', ['t' => $table, 'pk' => (string) $pkv, 'c' => $col]);
     $cur = bt_secret($col, $row, $table) ? '••••••••' : bv($row[$col], 300);
-    ui_send('✏️ <b>CHỈNH SỬA</b> <code>' . tg_e($table . '.' . $col) . '</code>' . "\n" . hr() . "\n"
+    ui_send('✏️ <b>CHỈNH SỬA: ' . tg_e(bt_vi_col($col)) . '</b>' . "\n" . hr() . "\n"
         . 'Giá trị hiện tại: <code>' . tg_e($cur) . "</code>\n\n"
-        . "Gửi giá trị mới vào khung chat:\n• Gửi <code>NULL</code> để đặt rỗng\n• Gửi <code>NOW</code> cho cột ngày giờ",
-        kb([[btn('✖ Huỷ', 'cx')]]));
+        . "Hãy gửi giá trị mới vào khung chat (nhập tiếng Anh hay tiếng Việt đều được giữ nguyên chính xác 100%):\n• Gõ <code>RONG</code> nếu muốn đặt trống\n• Gõ <code>HIENTAI</code> cho cột ngày giờ",
+        kb([[btn('✖ Huỷ bỏ', 'cx')]]));
 }
 
 function bot_apply_edit($table, $pkv, $col, $text)
@@ -1612,13 +2250,13 @@ function bot_apply_edit($table, $pkv, $col, $text)
     $val    = $text;
     $useNow = false;
 
-    if ($upper === 'NULL') {
+    if ($upper === 'NULL' || $upper === 'RONG') {
         if ($cols[$col]['Null'] !== 'YES') {
             conv_set($GLOBALS['CTX']['admin'], 'edit', ['t' => $table, 'pk' => (string) $pkv, 'c' => $col]);
-            return ui_send('❌ Cột này không cho phép NULL. Hãy gửi giá trị khác.', kb([[btn('✖ Huỷ', 'cx')]]));
+            return ui_send('❌ Mục này không cho phép để rỗng. Hãy gửi giá trị khác.', kb([[btn('✖ Huỷ bỏ', 'cx')]]));
         }
         $val = null;
-    } elseif ($upper === 'NOW' && preg_match('/date|time/', $type)) {
+    } elseif (($upper === 'NOW' || $upper === 'HIENTAI') && preg_match('/date|time/', $type)) {
         $useNow = true;
     } elseif (preg_match('/^(tiny|small|medium|big)?int/', $type) && !preg_match('/^-?\d+$/', trim($text))) {
         conv_set($GLOBALS['CTX']['admin'], 'edit', ['t' => $table, 'pk' => (string) $pkv, 'c' => $col]);
@@ -2602,9 +3240,134 @@ function bot_conv_input(array $conv, $text, array $m)
 
         case 'cfg_val':
             bot_set_config($d['k'], $text);
-            bot_log('tg_config', $d['k'] . ' set');
-            toast('✅ Đã lưu cấu hình');
-            return bot_row_view('site_config', $d['k'], '✅ <b>Đã lưu</b>');
+            if (in_array($d['k'], ['brand_logo', 'brand_logo_scale', 'brand_logo_height', 'ds_logo_h', 'ds_logo_skew', 'ds_shine', 'ds_shine_seconds', 'favicon_url', 'favicon_bg'], true)) {
+                bot_purge_logo_caches();
+            }
+            bot_log('tg_config', $d['k'] . ' = ' . tg_clip($text, 80));
+            toast('✅ Đã lưu chính xác giá trị vừa nhập');
+            return screen_cfg_item($d['k'], isset($d['g']) ? (string) $d['g'] : 'menu', isset($d['p']) ? (int) $d['p'] : 0, '✅ <b>Đã lưu nguyên bản 100% giá trị bạn vừa nhập!</b>');
+
+        case 'up_brand_logo':
+            $newLogo = '';
+            if (!empty($m['photo']) || !empty($m['document']) || !empty($m['sticker'])) {
+                list($okUp, $resUp) = bot_save_uploaded_image($m, 'dslogo_');
+                if (!$okUp) {
+                    conv_set($admin, 'up_brand_logo');
+                    return ui_send('❌ ' . tg_e($resUp), kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+                }
+                $newLogo = $resUp;
+            } elseif (preg_match('#^(https?://\S+|/?uploads/\S+)$#i', $text)) {
+                $newLogo = ltrim($text, '/');
+                if (stripos($text, 'http') === 0) {
+                    $newLogo = $text;
+                }
+                bot_purge_logo_caches();
+            } else {
+                conv_set($admin, 'up_brand_logo');
+                return ui_send('❌ Vui lòng <b>gửi trực tiếp 1 bức ảnh / tệp PNG</b> hoặc <b>dán đường dẫn ảnh (https://...)</b>:', kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+            }
+            bot_set_config('brand_logo', $newLogo);
+            bot_purge_logo_caches();
+            bot_log('tg_brand_logo', 'Đổi Logo toàn website -> ' . $newLogo);
+            toast('✅ Đã đổi Logo toàn bộ website');
+            return screen_appearance('✅ <b>Đã cập nhật Logo mới đồng bộ 100% trên toàn bộ trang iosmods.xyz!</b>' . "\n<code>" . tg_e($newLogo) . '</code>');
+
+        case 'up_favicon':
+            $newFav = '';
+            if (!empty($m['photo']) || !empty($m['document']) || !empty($m['sticker'])) {
+                list($okUp, $resUp) = bot_save_uploaded_image($m, 'dsfav_');
+                if (!$okUp) {
+                    conv_set($admin, 'up_favicon');
+                    return ui_send('❌ ' . tg_e($resUp), kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+                }
+                $newFav = '/' . ltrim($resUp, '/');
+            } elseif (preg_match('#^(https?://\S+|/?uploads/\S+)$#i', $text)) {
+                $newFav = $text;
+            } else {
+                conv_set($admin, 'up_favicon');
+                return ui_send('❌ Vui lòng gửi trực tiếp ảnh vuông hoặc đường dẫn https://...:', kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+            }
+            bot_set_config('favicon_url', $newFav);
+            bot_purge_logo_caches();
+            bot_log('tg_favicon', 'Đổi Icon Tab -> ' . $newFav);
+            toast('✅ Đã đổi Icon Tab trình duyệt');
+            return screen_appearance('✅ <b>Đã cập nhật Icon Tab trình duyệt mới!</b>');
+
+        case 'up_avatar':
+            if (strtoupper($text) === 'MACDINH' || $text === '-') {
+                bot_set_config('ds_avatar_url', '');
+                toast('♻️ Đã đặt lại ảnh đại diện mặc định');
+                return screen_appearance('✅ Đã khôi phục ảnh đại diện Header về mặc định.');
+            }
+            $newAv = '';
+            if (!empty($m['photo']) || !empty($m['document']) || !empty($m['sticker'])) {
+                list($okUp, $resUp) = bot_save_uploaded_image($m, 'dsav_');
+                if (!$okUp) {
+                    conv_set($admin, 'up_avatar');
+                    return ui_send('❌ ' . tg_e($resUp), kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+                }
+                $newAv = '/' . ltrim($resUp, '/');
+            } elseif (preg_match('#^(https?://\S+|/?uploads/\S+)$#i', $text)) {
+                $newAv = $text;
+            } else {
+                conv_set($admin, 'up_avatar');
+                return ui_send('❌ Vui lòng gửi trực tiếp bức ảnh hoặc đường dẫn https://...:', kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+            }
+            bot_set_config('ds_avatar_url', $newAv);
+            bot_log('tg_avatar', 'Đổi Ảnh đại diện Web -> ' . $newAv);
+            toast('✅ Đã cập nhật Ảnh đại diện Header');
+            return screen_appearance('✅ <b>Đã cập nhật Ảnh đại diện mặc định trên Header!</b>');
+
+        case 'up_hero_add':
+            $curHero = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_hero_images'", '', [], ''));
+            $lines   = $curHero !== '' ? array_values(array_filter(array_map('trim', preg_split('/[\r\n]+/', $curHero)))) : [];
+            if (!empty($m['photo']) || !empty($m['document'])) {
+                list($okUp, $resUp) = bot_save_uploaded_image($m, 'dshero_');
+                if (!$okUp) {
+                    conv_set($admin, 'up_hero_add');
+                    return ui_send('❌ ' . tg_e($resUp), kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+                }
+                $lines[] = '/' . ltrim($resUp, '/');
+            } else {
+                $addedAny = false;
+                foreach (preg_split('/[\r\n]+/', $text) as $ln) {
+                    $ln = trim($ln);
+                    if ($ln !== '' && preg_match('#^(https?://\S+|/?uploads/\S+)$#i', $ln)) {
+                        $lines[]  = $ln;
+                        $addedAny = true;
+                    }
+                }
+                if (!$addedAny) {
+                    conv_set($admin, 'up_hero_add');
+                    return ui_send('❌ Vui lòng gửi ảnh trực tiếp hoặc đường dẫn ảnh bắt đầu bằng https://...:', kb([[btn('✖ Huỷ bỏ', 'ui|menu')]]));
+                }
+            }
+            $lines = array_slice(array_values(array_unique($lines)), -15);
+            bot_set_config('ds_hero_images', implode("\n", $lines));
+            bot_log('tg_hero_add', 'Cập nhật Banner trượt (' . count($lines) . ' ảnh)');
+            toast('✅ Đã thêm vào Banner trang chủ');
+            return screen_appearance('✅ Đã cập nhật khung Banner trượt trang chủ (hiện có <b>' . count($lines) . ' ảnh</b>).');
+
+        case 'up_prod_img':
+            $pid = isset($d['id']) ? (int) $d['id'] : 0;
+            $newPImg = '';
+            if (!empty($m['photo']) || !empty($m['document'])) {
+                list($okUp, $resUp) = bot_save_uploaded_image($m, 'dsprod_');
+                if (!$okUp) {
+                    conv_set($admin, 'up_prod_img', $d);
+                    return ui_send('❌ ' . tg_e($resUp), kb([[btn('✖ Huỷ bỏ', cbd('dr', 'products', $pid))]]));
+                }
+                $newPImg = '/' . ltrim($resUp, '/');
+            } elseif (preg_match('#^(https?://\S+|/?uploads/\S+)$#i', $text)) {
+                $newPImg = $text;
+            } else {
+                conv_set($admin, 'up_prod_img', $d);
+                return ui_send('❌ Hãy gửi trực tiếp ảnh sản phẩm hoặc dán link https://...:', kb([[btn('✖ Huỷ bỏ', cbd('dr', 'products', $pid))]]));
+            }
+            bq_exec('UPDATE products SET image = ? WHERE id = ? LIMIT 1', 'si', [$newPImg, $pid]);
+            bot_log('tg_prod_img', 'products#' . $pid . ' đổi ảnh');
+            toast('✅ Đã đổi ảnh sản phẩm');
+            return bot_row_view('products', $pid, '✅ <b>Đã cập nhật ảnh mới cho sản phẩm!</b>');
 
         case 'pn':
             conv_set($admin, 'pl', ['name' => tg_clip($text, 255)]);
@@ -3179,16 +3942,408 @@ function bot_case_action($act, $code)
 
 function bot_help()
 {
-    ui_send('🤖 <b>DANH SÁCH LỆNH ĐIỀU HÀNH NHANH</b>' . "\n" . '<blockquote>'
-        . "/menu · Bảng điều khiển trung tâm\n"
+    ui_send('🤖 <b>DANH SÁCH LỆNH ĐIỀU HÀNH TIẾNG VIỆT</b>' . "\n" . '<blockquote>'
+        . "/menu · Mở bảng điều khiển trung tâm\n"
+        . "/tuyet · Bật / Tắt hiệu ứng tuyết rơi giao diện chính\n"
+        . "/logo · Đổi toàn bộ Logo iosmods.xyz &amp; độ lấp loá\n"
+        . "/cauhinh · Mở cài đặt Website tiếng Việt (như Admin CP)\n"
         . "/dangbi · Xem danh sách ai đang bị chặn\n"
-        . "/check <code>tên_user / IP / IMX-...</code> · Kiểm tra có bị chặn không\n"
-        . "/baotri · Bật / Tắt bảo trì website\n"
-        . "/mokhoa <code>user_hoặc_IP</code> · Mở khoá Get Key\n"
+        . "/check <code>tài_khoản / IP / IMX-...</code> · Kiểm tra chặn\n"
+        . "/baotri · Bật / Tắt chế độ bảo trì website\n"
+        . "/mokhoa <code>tài_khoản_hoặc_IP</code> · Mở khoá nhận Key\n"
         . "/user <code>tên</code> · /key <code>MÃ</code> · /genkey <code>vip 5 720</code>\n"
         . "/ban <code>IP lý_do</code> · /unban <code>IP</code> · /ip <code>IP</code>\n"
         . "/xoaluot <code>tên</code> · /emoji · /cancel"
         . '</blockquote>', kb([home_row()]));
+}
+
+/* ------------------------------------------------------------------
+ * 14B. Autonomous Human-Like AI Unban Assistant (@devios_bot)
+ *      - Sandboxed 100%: Non-admin private users ONLY interact with this AI assistant
+ *        (zero access to Admin commands, SQL, database tables, or keys).
+ *      - Tier 1 (Very Minor / First-time light spam <=6m, 0 evasions): Instant 100% Unban!
+ *      - Tier 2 (Normal / Moderate temp lock + reasonable explanation): Moderate ~45% time reduction!
+ *      - Tier 3 (Severe: DDoS / WAF / Script Bug / Manual perm ban / Repeat evasion):
+ *        Intelligent human explanation + "Vui lòng liên hệ Admin vì điều này tôi không thể mở giúp bạn."
+ *        + Instant Admin Telegram card with 1-tap [🔓 Admin mở khoá ngay] override button!
+ * ------------------------------------------------------------------ */
+
+function pub_send_reply($chatId, $html)
+{
+    $params = [
+        'chat_id'                  => (string) $chatId,
+        'text'                     => tg_clip($html, 3800),
+        'parse_mode'               => 'HTML',
+        'disable_web_page_preview' => true,
+    ];
+    $res = tg_api_raw('sendMessage', $params, 6);
+    if (empty($res['ok']) && stripos((string) (isset($res['description']) ? $res['description'] : ''), 'parse') !== false) {
+        unset($params['parse_mode']);
+        $params['text'] = html_entity_decode(strip_tags($params['text']), ENT_QUOTES, 'UTF-8');
+        tg_api_raw('sendMessage', $params, 6);
+    }
+}
+
+function pub_rate_allow($tgUid)
+{
+    $now   = time();
+    $allow = true;
+    tg_store_update('pub_rate', function ($s) use ($tgUid, $now, &$allow) {
+        if (!is_array($s)) {
+            $s = [];
+        }
+        foreach ($s as $k => $arr) {
+            if (!is_array($arr) || empty($arr['u']) || (int) $arr['u'] < $now - 120) {
+                unset($s[$k]);
+            }
+        }
+        $hits = isset($s[$tgUid]['h']) && is_array($s[$tgUid]['h']) ? $s[$tgUid]['h'] : [];
+        $keep = [];
+        foreach ($hits as $ts) {
+            if ((int) $ts >= $now - 60) {
+                $keep[] = (int) $ts;
+            }
+        }
+        if (count($keep) >= 6) {
+            $allow = false;
+            $s[$tgUid] = ['h' => $keep, 'u' => $now];
+            return $s;
+        }
+        $keep[]    = $now;
+        $s[$tgUid] = ['h' => $keep, 'u' => $now];
+        return $s;
+    });
+    return $allow;
+}
+
+function pub_conv_get($tgUid)
+{
+    $s = tg_store_read('pub_conv');
+    if (isset($s[$tgUid]) && is_array($s[$tgUid]) && (int) (isset($s[$tgUid]['at']) ? $s[$tgUid]['at'] : 0) > time() - 1800) {
+        return $s[$tgUid];
+    }
+    return null;
+}
+
+function pub_conv_set($tgUid, array $state)
+{
+    $state['at'] = time();
+    tg_store_update('pub_conv', function ($s) use ($tgUid, $state) {
+        if (!is_array($s)) {
+            $s = [];
+        }
+        if (count($s) > 300) {
+            $s = array_slice($s, -200, null, true);
+        }
+        $s[$tgUid] = $state;
+        return $s;
+    });
+}
+
+function pub_conv_clear($tgUid)
+{
+    tg_store_update('pub_conv', function ($s) use ($tgUid) {
+        if (is_array($s)) {
+            unset($s[$tgUid]);
+        }
+        return is_array($s) ? $s : [];
+    });
+}
+
+function pub_was_recently_forgiven($ip, $tgUid)
+{
+    $h   = tg_store_read('pub_forgive_hist');
+    $now = time();
+    if (!is_array($h)) {
+        return false;
+    }
+    if ($ip !== '' && !empty($h['ip:' . $ip]) && ($now - (int) $h['ip:' . $ip]) < 43200) {
+        return true;
+    }
+    if ($tgUid !== '' && !empty($h['tg:' . $tgUid]) && ($now - (int) $h['tg:' . $tgUid]) < 43200) {
+        return true;
+    }
+    return false;
+}
+
+function pub_mark_forgiven($ip, $tgUid)
+{
+    $now = time();
+    tg_store_update('pub_forgive_hist', function ($h) use ($ip, $tgUid, $now) {
+        if (!is_array($h)) {
+            $h = [];
+        }
+        foreach ($h as $k => $ts) {
+            if ((int) $ts < $now - 86400) {
+                unset($h[$k]);
+            }
+        }
+        if ($ip !== '') {
+            $h['ip:' . $ip] = $now;
+        }
+        if ($tgUid !== '') {
+            $h['tg:' . $tgUid] = $now;
+        }
+        return $h;
+    });
+}
+
+function bot_public_appeal_handler(array $m)
+{
+    $from      = (string) (isset($m['from']['id']) ? $m['from']['id'] : '');
+    $chatId    = (string) (isset($m['chat']['id']) ? $m['chat']['id'] : '');
+    $firstName = trim((string) (isset($m['from']['first_name']) ? $m['from']['first_name'] : 'bạn'));
+    $text      = isset($m['text']) ? trim((string) $m['text']) : '';
+
+    if ($from === '' || $chatId === '' || !pub_rate_allow($from)) {
+        return;
+    }
+    if (!function_exists('sh_extract_case_code') || !function_exists('sh_enrich_case_dossier')) {
+        return;
+    }
+
+    // Handle /start (when user taps https://t.me/devios_bot?start=hotro from the Block screen)
+    if ($text !== '' && strpos($text, '/start') === 0) {
+        $argCode = sh_extract_case_code($text);
+        if ($argCode === '') {
+            pub_conv_set($from, ['step' => 'await_code']);
+            pub_send_reply(
+                $chatId,
+                'Chào <b>' . tg_e($firstName !== '' ? $firstName : 'bạn') . '</b>, mình là trợ lý kiểm duyệt bảo mật tự động của <b>iosmods.xyz</b>.' . "\n\n"
+                . 'Bạn hãy sao chép và gửi <b>Mã xác minh</b> (dạng <code>IMX-XXXXXX-...</code> đang hiển thị trên màn hình khoá của web) vào đây để mình kiểm tra xem kết nối của bạn vừa ghi nhận thao tác gì và xét hỗ trợ mở khoá nhé.'
+            );
+            return;
+        }
+        $text = $argCode;
+    }
+
+    if ($text === '') {
+        return;
+    }
+
+    $conv    = pub_conv_get($from);
+    $imxCode = sh_extract_case_code($text);
+
+    // If user is currently in 'await_reason' step and sent their explanation without repeating IMX-...
+    $reasonInput = '';
+    if ($imxCode === '' && is_array($conv) && ($conv['step'] ?? '') === 'await_reason' && !empty($conv['code'])) {
+        $imxCode     = (string) $conv['code'];
+        $reasonInput = $text;
+    } elseif ($imxCode !== '') {
+        // Extract any extra explanation written alongside the IMX-... code
+        $stripped = trim(preg_replace('/[\s,.;:-]+/', ' ', str_ireplace($imxCode, ' ', $text)));
+        if (strlen($stripped) >= 6) {
+            $reasonInput = $stripped;
+        }
+    } else {
+        pub_conv_set($from, ['step' => 'await_code']);
+        pub_send_reply(
+            $chatId,
+            'Mình chưa nhận diện được <b>Mã xác minh</b> trong tin nhắn của bạn.' . "\n"
+            . 'Bạn vui lòng quay lại màn hình khoá trên <b>iosmods.xyz</b>, bấm nút <b>Sao chép</b> ở mục <b>Mã xác minh</b> (bắt đầu bằng <code>IMX-...</code>) rồi dán nguyên mã đó gửi vào đây giúp mình nhé.'
+        );
+        return;
+    }
+
+    $info = sh_enrich_case_dossier(bdb(), $imxCode);
+    if (!$info || empty($info['active']) || empty($info['ip'])) {
+        pub_conv_clear($from);
+        pub_send_reply(
+            $chatId,
+            'Mình vừa kiểm tra mã <code>' . tg_e($imxCode) . '</code> thì thấy lệnh khoá của mã này <b>đã được gỡ hoặc đã hết thời gian khoá</b> rồi (mã xác minh sau khi mở sẽ tự huỷ bảo mật).' . "\n\n"
+            . 'Bạn hãy quay lại trang <b>iosmods.xyz</b>, tải lại trang và bấm nút <b>Got it</b> trên màn hình là vào lại web bình thường nhé!'
+        );
+        return;
+    }
+
+    $code       = (string) $info['code'];
+    $ip         = (string) $info['ip'];
+    $banType    = isset($info['ban_type']) ? (string) $info['ban_type'] : 'temp';
+    $reasonOrig = isset($info['reason']) ? (string) $info['reason'] : 'Vi phạm quy tắc bảo mật hệ thống';
+    $expTs      = isset($info['expires_ts']) ? (int) $info['expires_ts'] : 0;
+    $leftSec    = $expTs > 0 ? max(1, $expTs - time()) : 0;
+    $leftMin    = $leftSec > 0 ? max(1, (int) ceil($leftSec / 60)) : 0;
+    $initDur    = !empty($info['initial_dur']) ? (int) $info['initial_dur'] : $leftSec;
+    $hits       = (int) (isset($info['hits']) ? $info['hits'] : 1);
+    $evasions   = (int) (isset($info['evasion_attempts']) ? $info['evasion_attempts'] : 0);
+    $aiReduced  = !empty($info['ai_reduced']);
+    $device     = isset($info['device']) ? (string) $info['device'] : 'Thiết bị trình duyệt';
+    $isScriptUa = (strpos($device, 'Công cụ Script') === 0);
+    $uname      = !empty($info['username']) ? (string) $info['username'] : '';
+
+    // Check hostile / profane language in user message
+    $isAbusiveMsg = ($reasonInput !== '' && (bool) preg_match('/\b(dm|dmm|vcl|vl|cc|fuck|shit|ngu|địt|đụ|lồn|cặc)\b/iu', $reasonInput));
+
+    // =========================================================================
+    // TIER 3: SEVERE VIOLATION / ATTACK / REPEAT EVASION / PERMANENT ADMIN LOCK
+    // =========================================================================
+    $isSevere = in_array($banType, ['ddos', 'waf', 'bug_buff', 'manual'], true)
+        || $expTs === 0
+        || $evasions >= 2
+        || $isScriptUa
+        || $isAbusiveMsg;
+
+    if ($isSevere) {
+        pub_conv_clear($from);
+        if ($banType === 'ddos') {
+            $humanExplain = 'Hệ thống ghi nhận địa chỉ IP <code>' . tg_e($ip) . '</code> đã gửi luồng truy cập dồn dập bất thường vượt ngưỡng an toàn (cơ chế chống tấn công DDoS tự động kích hoạt với ' . $hits . ' yêu cầu bị chặn).';
+        } elseif ($banType === 'waf' || $banType === 'bug_buff' || $isScriptUa) {
+            $humanExplain = 'Hệ thống phát hiện kết nối từ <code>' . tg_e($ip) . '</code> (' . tg_e($device) . ') có hành vi chạy công cụ tự động / Script hoặc gửi tham số can thiệp trực tiếp vào cấu trúc bảo mật của website (' . tg_e($reasonOrig) . ').';
+        } elseif ($evasions >= 2) {
+            $humanExplain = 'Sau khi bị tạm khoá, thiết bị của bạn đã cố tình đổi mạng / đổi IP <b>' . $evasions . ' lần liên tiếp</b> để lách cơ chế bảo mật thay vì chờ hết hạn.';
+        } elseif ($expTs === 0 || $banType === 'manual') {
+            $humanExplain = 'Địa chỉ IP <code>' . tg_e($ip) . '</code> đang nằm trong diện khoá bảo mật trực tiếp bởi Quản trị viên (' . tg_e($reasonOrig) . ').';
+        } else {
+            $humanExplain = 'Nội dung phản hồi hoặc mức độ vi phạm hiện tại (' . tg_e($reasonOrig) . ') không đủ điều kiện để hệ thống tự động gỡ khoá.';
+        }
+
+        pub_send_reply(
+            $chatId,
+            'Mình đã kiểm tra kỹ toàn bộ nhật ký bảo mật của mã <code>' . tg_e($code) . '</code> rồi nhé.' . "\n\n"
+            . '🔎 <b>Nguyên nhân ghi nhận:</b> ' . $humanExplain . "\n\n"
+            . 'Đối với các trường hợp liên quan đến luồng tấn công, can thiệp kỹ thuật hoặc lệnh khoá nghiêm trọng này, quyền hạn của mình không được phép tự ý mở khoá. <b>Vui lòng liên hệ Admin vì điều này tôi không thể mở giúp bạn.</b>' . "\n\n"
+            . '<i>(Mình cũng đã chuyển hồ sơ mã xác minh của bạn sang cho Admin kiểm tra — nếu xác nhận nhầm lẫn, Admin vẫn có thể mở khoá trực tiếp cho bạn).</i>'
+        );
+
+        // Notify Admin once per case so Admin can still override & unban with 1 tap!
+        $denyOnceKey = 'pub_deny_' . md5($code);
+        $alreadySent = tg_store_read('pub_notified');
+        if (empty($alreadySent[$denyOnceKey])) {
+            tg_store_update('pub_notified', function ($s) use ($denyOnceKey) {
+                if (!is_array($s)) $s = [];
+                $s[$denyOnceKey] = time();
+                return count($s) > 200 ? array_slice($s, -150, null, true) : $s;
+            });
+            tg_event('bot_appeal_deny', [
+                'ip'        => $ip,
+                'username'  => $uname,
+                'case_code' => $code,
+                'reason'    => $reasonOrig,
+                'message'   => $reasonInput,
+                'note'      => 'Bot từ chối mở ban (' . $banType . ')',
+            ]);
+            tg_flush(false);
+        }
+        return;
+    }
+
+    // =========================================================================
+    // TIER 1: VERY MINOR FIRST-TIME MISTAKE -> UNBAN 100% IMMEDIATELY!
+    // =========================================================================
+    $isVeryMinor = in_array($banType, ['prod_spam', 'key_spam'], true)
+        && $expTs > 0
+        && $initDur <= 360
+        && $evasions === 0
+        && $hits <= 8
+        && !pub_was_recently_forgiven($ip, $from);
+
+    if ($isVeryMinor) {
+        pub_conv_clear($from);
+        pub_mark_forgiven($ip, $from);
+        if (bot_ipg_ready()) {
+            ipg_unban(bdb(), $ip, 'devios_bot_ai', true);
+        } elseif (function_exists('sh_full_clean_slate_unban')) {
+            sh_full_clean_slate_unban(bdb(), $ip, $uname, true, true, 'devios_bot_ai');
+        }
+
+        $whatDid = ($banType === 'key_spam')
+            ? 'nhập sai mã Key liên tiếp hơi nhanh trong thời gian ngắn'
+            : 'bấm lấy sản phẩm lặp lại liên tục khi tài khoản chưa kích hoạt Key';
+
+        pub_send_reply(
+            $chatId,
+            'Mình vừa xem xét kỹ mã <code>' . tg_e($code) . '</code> của bạn rồi nhé.' . "\n\n"
+            . '🔎 <b>Kết quả kiểm tra:</b> Địa chỉ IP <code>' . tg_e($ip) . '</code> trên <b>' . tg_e($device) . '</b> chỉ vừa ' . $whatDid . ' (vi phạm lần đầu rất nhẹ, không bật công cụ gian lận và không cố lách khoá).' . "\n\n"
+            . '✅ Vì lỗi này rất nhẹ do thao tác tay hơi vội nên <b>mình đã mở khoá hoàn toàn luôn cho bạn rồi nhé</b>, không cần phải chờ giảm giờ đâu!' . "\n\n"
+            . '👉 Bây giờ bạn quay lại <b>iosmods.xyz</b>, màn hình sẽ hiện <b>Đã tự động mở khoá</b> — bạn chỉ cần bấm nút <b>Got it</b> là vào web bình thường. Lần sau nhớ kích hoạt Key hợp lệ trước khi bấm mở sản phẩm giúp mình nha!'
+        );
+
+        tg_event('bot_appeal_unban', [
+            'ip'        => $ip,
+            'username'  => $uname,
+            'case_code' => $code,
+            'reason'    => $reasonOrig,
+            'note'      => 'Bot tự mở khoá luôn (lỗi nhẹ lần đầu)',
+        ]);
+        tg_flush(false);
+        return;
+    }
+
+    // =========================================================================
+    // TIER 2: NORMAL / MODERATE VIOLATION -> ASK REASON & MODERATELY REDUCE TIME
+    // =========================================================================
+    if ($aiReduced) {
+        pub_conv_clear($from);
+        pub_send_reply(
+            $chatId,
+            'Mã xác minh <code>' . tg_e($code) . '</code> của bạn trước đó <b>đã được mình hỗ trợ giảm thời gian chờ 1 lần rồi</b> (hiện chỉ còn khoảng <b>' . $leftMin . ' phút</b> nữa là hệ thống tự động mở khoá).' . "\n\n"
+            . 'Mỗi phiên tạm khoá mình chỉ được phép giảm thời gian một lần vừa phải để đảm bảo công bằng. Bạn chịu khó đợi nốt ít phút còn lại rồi bấm <b>Got it</b> trên web nhé; nếu thật sự cần mở ngay lập tức, vui lòng liên hệ Admin vì điều này tôi không thể mở giúp bạn thêm nữa.'
+        );
+        return;
+    }
+
+    if ($reasonInput === '') {
+        pub_conv_set($from, ['step' => 'await_reason', 'code' => $code]);
+        pub_send_reply(
+            $chatId,
+            'Mình đã tra cứu mã <code>' . tg_e($code) . '</code> của bạn:' . "\n"
+            . '• Địa chỉ IP: <code>' . tg_e($ip) . '</code> (' . tg_e($device) . ')' . "\n"
+            . '• Nguyên nhân tạm khoá: <b>' . tg_e($reasonOrig) . '</b>' . "\n"
+            . '• Thời gian còn lại: <b>' . $leftMin . ' phút</b>' . "\n\n"
+            . 'Bạn nhắn ngắn gọn cho mình biết <b>lúc nãy bạn đang thao tác gì mà bị khoá</b> (ví dụ quên tắt VPN/1.1.1.1, mạng chậm bấm nhầm nhiều lần, hay lỡ chạm phím tắt...) để mình xem xét giảm bớt thời gian chờ giúp bạn nhé!'
+        );
+        return;
+    }
+
+    $cleanLen = function_exists('mb_strlen') ? mb_strlen($reasonInput, 'UTF-8') : strlen($reasonInput);
+    if ($cleanLen < 5 || preg_match('/^(.)\1{4,}$/u', $reasonInput)) {
+        pub_conv_set($from, ['step' => 'await_reason', 'code' => $code]);
+        pub_send_reply(
+            $chatId,
+            'Bạn miêu tả rõ hơn bằng một câu bình thường giúp mình nhé (ví dụ lúc nãy bạn đang làm thao tác gì trên web) để mình có cơ sở xét giảm thời gian cho bạn nha.'
+        );
+        return;
+    }
+
+    pub_conv_clear($from);
+    if ($leftSec <= 210) {
+        pub_send_reply(
+            $chatId,
+            'Cảm ơn bạn đã phản hồi nhé. Hiện tại lệnh tạm khoá của IP <code>' . tg_e($ip) . '</code> chỉ còn chưa đầy <b>' . $leftMin . ' phút</b> nữa là tự động mở hoàn toàn rồi, bạn đợi thêm đôi chút rồi tải lại trang bấm <b>Got it</b> để vào web bình thường nhé!'
+        );
+        return;
+    }
+
+    // Moderate reduction (~45% cut, keeping at least 3 minutes = 180s — "giảm vừa phải")
+    $newLeftSec = max(180, (int) round($leftSec * 0.55));
+    if ($leftSec - $newLeftSec < 90) {
+        $newLeftSec = max(180, $leftSec - 120);
+    }
+    $newExpTs = function_exists('sh_reduce_ban_duration') ? sh_reduce_ban_duration(bdb(), $ip, $newLeftSec, $code) : (time() + $newLeftSec);
+    $newMin   = max(1, (int) ceil($newLeftSec / 60));
+
+    $remindTip = ($banType === 'vpn_abuse' || !empty($info['is_vpn']))
+        ? 'Trong lúc chờ bạn nhớ tắt hẳn ứng dụng VPN / 1.1.1.1 trước khi vào lại web nhé!'
+        : 'Khi vào lại web bạn nhớ thao tác từ tốn và tuân thủ nội quy để không bị hệ thống khoá lại nhé!';
+
+    pub_send_reply(
+        $chatId,
+        'Cảm ơn bạn đã chia sẻ rõ ràng nhé. Mình đã đối chiếu lời giải thích của bạn với nhật ký hệ thống và thấy trường hợp này ở mức độ bình thường, không có mục đích phá hoại.' . "\n\n"
+        . '⏱ Mình vừa hỗ trợ <b>giảm thời gian tạm khoá vừa phải</b> cho IP <code>' . tg_e($ip) . '</code> từ <b>' . $leftMin . ' phút</b> xuống còn <b>' . $newMin . ' phút</b> (tự động mở lúc <b>' . date('H:i', (int) $newExpTs) . '</b>).' . "\n\n"
+        . 'Đợi hết ' . $newMin . ' phút này bạn quay lại <b>iosmods.xyz</b> bấm <b>Got it</b> là sử dụng bình thường nha. ' . $remindTip
+    );
+
+    tg_event('bot_appeal_reduce', [
+        'ip'        => $ip,
+        'username'  => $uname,
+        'case_code' => $code,
+        'reason'    => $reasonOrig,
+        'message'   => $reasonInput,
+        'old_min'   => $leftMin,
+        'new_min'   => $newMin,
+        'note'      => 'Bot giảm thời gian từ ' . $leftMin . 'p xuống ' . $newMin . 'p',
+    ]);
+    tg_flush(false);
 }
 
 function bot_on_message(array $m)
@@ -3197,13 +4352,17 @@ function bot_on_message(array $m)
     $chatId  = (string) (isset($m['chat']['id']) ? $m['chat']['id'] : '');
     $private = (isset($m['chat']['type']) ? $m['chat']['type'] : '') === 'private';
 
-    // STRICT ADMIN-ONLY SILENCE: Non-admins receive ZERO reply!
-    if ($from === '' || !$private || !in_array($from, tg_admin_ids(), true)) {
+    if ($from === '' || !$private) {
         return;
     }
 
+    // Non-admin private users ONLY interact with the sandboxed Autonomous AI Unban Assistant (@devios_bot)!
+    if (!in_array($from, tg_admin_ids(), true)) {
+        return bot_public_appeal_handler($m);
+    }
+
     $msgId = isset($m['message_id']) ? (int) $m['message_id'] : 0;
-    $text  = isset($m['text']) ? trim((string) $m['text']) : '';
+    $text  = isset($m['text']) ? trim((string) $m['text']) : (isset($m['caption']) ? trim((string) $m['caption']) : '');
     $GLOBALS['CTX'] = [
         'admin'        => $from,
         'chat'         => $chatId,
@@ -3227,8 +4386,20 @@ function bot_on_message(array $m)
         return bot_handle_auto_emoji($ceIds, $ceHints);
     }
 
-    if ($text === '' && !$convNow) {
+    $hasMedia = !empty($m['photo']) || !empty($m['document']) || !empty($m['sticker']);
+    if ($text === '' && !$convNow && !$hasMedia) {
         return;
+    }
+
+    // If Admin sent a photo/PNG directly without active conversation, offer 1-tap assignment as Main Website Logo!
+    if ($hasMedia && !$convNow && ($text === '' || $text[0] !== '/')) {
+        list($okUp, $resUp) = bot_save_uploaded_image($m, 'dslogo_');
+        if ($okUp) {
+            bot_set_config('brand_logo', $resUp);
+            bot_purge_logo_caches();
+            bot_log('tg_brand_logo', 'Đổi nhanh Logo toàn web -> ' . $resUp);
+            return screen_appearance('✅ <b>Đã nhận ảnh &amp; cập nhật làm Logo chính cho toàn bộ trang iosmods.xyz!</b>' . "\n<code>" . tg_e($resUp) . '</code>');
+        }
     }
 
     if ($text !== '' && $text[0] === '/') {
@@ -3244,6 +4415,26 @@ function bot_on_message(array $m)
             case 'cancel':
                 conv_clear($from);
                 return screen_home('✖ Đã huỷ thao tác đang nhập.');
+            case 'tuyet':
+            case 'snow':
+                conv_clear($from);
+                if ($arg === 'on' || $arg === 'bat' || $arg === '1') {
+                    bot_set_config('ds_snow', '1');
+                    return screen_appearance('❄️ Đã <b>BẬT</b> hiệu ứng tuyết rơi trên giao diện chính.');
+                }
+                if ($arg === 'off' || $arg === 'tat' || $arg === '0') {
+                    bot_set_config('ds_snow', '0');
+                    return screen_appearance('🌤 Đã <b>TẮT</b> hiệu ứng tuyết rơi trên giao diện chính.');
+                }
+                return bot_ui_action('snow');
+            case 'logo':
+            case 'giaodien':
+                conv_clear($from);
+                return screen_appearance();
+            case 'cauhinh':
+            case 'caidat':
+                conv_clear($from);
+                return screen_config('menu');
             case 'baotri':
                 conv_clear($from);
                 return bot_maintenance($arg === 'on' ? 'on' : ($arg === 'off' ? 'off' : 'menu'));
@@ -3321,6 +4512,11 @@ function bot_on_message(array $m)
         return bot_help();
     }
 
+    // If Admin is currently answering a prompt (e.g. typing English/Vietnamese config text), process conv FIRST!
+    if ($convNow && !in_array($convNow['mode'], ['case_ask', 'smart_check'], true)) {
+        return bot_conv_input($convNow, $text, $m);
+    }
+
     // Smart Auto-Extraction: Paste or forward ANY message containing IMX-... (even inside a sentence!)
     if (function_exists('sh_extract_case_code')) {
         $extractedCode = sh_extract_case_code($text);
@@ -3333,16 +4529,16 @@ function bot_on_message(array $m)
         return screen_case_lookup($text);
     }
 
-    // Smart Direct IP or Single-Token Username Check when no conversation is active!
-    if (!$convNow && filter_var($text, FILTER_VALIDATE_IP) !== false) {
-        return screen_smart_check($text);
-    }
-    if (!$convNow && preg_match('/^[A-Za-z0-9_.-]{3,36}$/', $text)) {
-        return screen_smart_check($text);
-    }
-
     if ($convNow) {
         return bot_conv_input($convNow, $text, $m);
+    }
+
+    // Smart Direct IP or Single-Token Username Check when no conversation is active!
+    if (filter_var($text, FILTER_VALIDATE_IP) !== false) {
+        return screen_smart_check($text);
+    }
+    if (preg_match('/^[A-Za-z0-9_.-]{3,36}$/', $text)) {
+        return screen_smart_check($text);
     }
 
     return screen_home();
@@ -3387,6 +4583,15 @@ function bot_route($data, array $origMessage = [])
             return bot_maintenance($a !== '' ? $a : 'menu');
         case 'pm':
             return bot_toggle_product_maint((int) $a);
+        case 'ppk':
+            return bot_set_product_pkg((int) $a, (int) $b);
+        case 'pim':
+            conv_set($admin, 'up_prod_img', ['id' => (int) $a]);
+            return ui_send('🖼 <b>ĐỔI ẢNH ĐẠI DIỆN SẢN PHẨM #' . (int) $a . '</b>' . "\n" . hr() . "\n"
+                . 'Hãy <b>gửi trực tiếp bức ảnh</b> hoặc <b>dán đường dẫn ảnh (https://...)</b> vào khung chat:',
+                kb([[btn('✖ Huỷ bỏ', cbd('dr', 'products', (int) $a))]]));
+        case 'ui':
+            return bot_ui_action($a, $b);
         case 'ad':
             $sec = tg_autodelete_set_ttl((int) $a);
             toast($sec > 0 ? '⏱ Tự xoá lệnh sau ' . $sec . 's' : '⏸ Đã tắt tự xoá lệnh');
@@ -3417,10 +4622,31 @@ function bot_route($data, array $origMessage = [])
         case 'px':
             return bot_product_swap((int) $a);
         case 'cf':
-            return screen_config((int) $a);
+            return screen_config($a !== '' ? $a : 'menu', (int) $b);
+        case 'cfk':
+            return screen_cfg_item($a, $b !== '' ? $b : 'menu', (int) $c);
+        case 'cfs':
+            $dArg = isset($p[3]) ? (int) $p[3] : 0;
+            $newV = ($b === '__EMPTY__') ? '' : $b;
+            bot_set_config($a, $newV);
+            if (in_array($a, ['brand_logo', 'brand_logo_scale', 'brand_logo_height', 'ds_logo_h', 'ds_logo_skew', 'ds_shine', 'ds_shine_seconds', 'favicon_url', 'favicon_bg'], true)) {
+                bot_purge_logo_caches();
+            }
+            bot_log('tg_config', $a . ' = ' . ($newV === '' ? '(mặc định)' : $newV));
+            toast('✅ Đã cập nhật cài đặt');
+            return screen_cfg_item($a, $c !== '' ? $c : 'menu', $dArg, '✅ <b>Đã cập nhật thành công!</b>');
+        case 'cfe':
+            list(, $viLabel, , $viDesc) = bot_vi_cfg_lookup($a);
+            $curV = (string) bq_val('SELECT config_value FROM site_config WHERE config_key = ?', 's', [$a], '');
+            conv_set($admin, 'cfg_val', ['k' => $a, 'g' => $b !== '' ? $b : 'menu', 'p' => (int) $c]);
+            return ui_send('✏️ <b>NHẬP GIÁ TRỊ MỚI CHO: ' . tg_e($viLabel) . '</b>' . "\n" . hr() . "\n"
+                . '📌 ' . tg_e($viDesc) . "\n"
+                . '💾 Đang lưu: <code>' . tg_e($curV === '' ? '(Trống / Mặc định)' : tg_clip($curV, 300)) . "</code>\n\n"
+                . 'Hãy gửi nội dung mới vào khung chat (bạn nhập <b>tiếng Anh</b> hay <b>tiếng Việt</b> hệ thống đều lưu <b>chính xác 100% từng ký tự</b>):',
+                kb([[btn('✖ Huỷ bỏ', cbd('cfk', $a, $b !== '' ? $b : 'menu', (int) $c))]]));
         case 'cn':
             conv_set($admin, 'cfg_key');
-            return ui_send('⚙️ Gửi <b>tên cấu hình mới</b> (chữ, số, _):', $cancel);
+            return ui_send('⚙️ Gửi <b>mã cấu hình mới</b> (gồm chữ, số hoặc dấu gạch dưới _):', $cancel);
         case 'ct':
             return bot_config_toggle($a);
         case 'db':
@@ -3605,19 +4831,23 @@ function bot_setup()
     $lines[] = (!empty($wh['ok']) ? '✅' : '❌') . ' Webhook: ' . $url;
 
     $cmds = [
-        ['command' => 'menu',    'description' => 'Mở bảng điều khiển Admin CP'],
+        ['command' => 'start',   'description' => 'Hỗ trợ mở khoá tự động / Mở bảng Quản trị'],
+        ['command' => 'menu',    'description' => 'Mở bảng điều khiển trung tâm (Admin)'],
+        ['command' => 'tuyet',   'description' => 'Bật / Tắt hiệu ứng tuyết rơi giao diện chính'],
+        ['command' => 'logo',    'description' => 'Đổi Logo toàn website iosmods.xyz & độ lấp loá'],
+        ['command' => 'cauhinh', 'description' => 'Cài đặt toàn diện Website bằng tiếng Việt'],
         ['command' => 'dangbi',  'description' => 'Xem danh sách ai đang bị chặn'],
-        ['command' => 'check',   'description' => 'Kiểm tra User / IP / Mã IMX có bị chặn không'],
-        ['command' => 'baotri',  'description' => 'Bật / Tắt bảo trì website'],
-        ['command' => 'mokhoa',  'description' => 'Mở khoá Get Key Free cho User / IP'],
-        ['command' => 'ai',      'description' => 'AI Giám sát Chống DDoS & VPN'],
+        ['command' => 'check',   'description' => 'Kiểm tra Tài khoản / IP / Mã IMX có bị chặn không'],
+        ['command' => 'baotri',  'description' => 'Bật / Tắt chế độ bảo trì website'],
+        ['command' => 'mokhoa',  'description' => 'Mở khoá nhận Key cho Tài khoản / IP'],
+        ['command' => 'ai',      'description' => 'AI Giám sát Chống DDoS & VPN 24/7'],
         ['command' => 'genkey',  'description' => 'Tạo Key nhanh: /genkey vip 5 720'],
         ['command' => 'user',    'description' => 'Tìm thành viên: /user tên'],
         ['command' => 'key',     'description' => 'Tra cứu mã Key: /key MÃ'],
-        ['command' => 'bans',    'description' => 'Danh sách IP đang khoá'],
+        ['command' => 'bans',    'description' => 'Danh sách địa chỉ IP đang khoá'],
         ['command' => 'ban',     'description' => 'Chặn IP: /ban IP lý_do'],
         ['command' => 'unban',   'description' => 'Gỡ chặn IP: /unban IP'],
-        ['command' => 'emoji',   'description' => 'Kho Emoji Premium vĩnh viễn'],
+        ['command' => 'emoji',   'description' => 'Kho Biểu tượng tuỳ chỉnh vĩnh viễn'],
         ['command' => 'health',  'description' => 'Kiểm tra sức khoẻ hệ thống'],
         ['command' => 'cancel',  'description' => 'Huỷ thao tác đang nhập'],
     ];

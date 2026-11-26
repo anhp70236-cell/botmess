@@ -370,17 +370,20 @@ $siteTitle  = cfg($config, 'site_title', 'Devnvios'); if ($isIosmods) { $siteTit
    Edit in site_config: login_seo_title, login_seo_description (leave empty = use the defaults below). */
 $seoTitle = cfg($config, 'login_seo_title', 'Login - Devnvios.io.vn | Trusted Tool & Automation Platform');
 $seoDesc  = cfg($config, 'login_seo_description', 'Log in to your Devnvios.io.vn account to access trusted tools and automation, activate your key and manage your turns securely.');
-$madeBy     = $config['footer_made_by'] ?? 'DEVNVIOS';
+$madeBy     = $config['footer_made_by'] ?? 'iosmods';
+if (strcasecmp(trim((string) $madeBy), 'DEVNVIOS') === 0) {
+    $madeBy = 'iosmods';
+}
 $footerYear = $config['footer_year']    ?? '@2024';
 $textMadeWith = cfg($config, 'text_footer_made', 'Made with');
 $textBy       = cfg($config, 'text_footer_by', 'by');
 
-/* Header logo: uses the very same processed image + cache from index.php (?brand_logo=1) */
+/* Header logo: uses the exact uncropped 600x200 main logo from security_shield.php / index.php */
 $brandSource = cfg($config, 'brand_logo', DEFAULT_BRAND_LOGO);
 if (!preg_match('#^https?://#i', $brandSource)) {
     $brandSource = '/' . ltrim($brandSource, '/\\');
 }
-$brandUrl = 'index.php?brand_logo=1&v=' . substr(md5($brandSource), 0, 8);
+$brandUrl = function_exists('sh_logo_url') ? sh_logo_url() : ('index.php?brand_logo=1&v=' . substr(md5($brandSource), 0, 8));
 
 /* spinner v3: lay DUNG gia tri logo / header cua theme chinh (site_config: ds_hd, ds_logo_h, ds_logo_skew, ds_shine_seconds, ds_shine) */
 function dsp_num(array $config, string $key, float $min, float $max, ?float $default): ?float
@@ -398,11 +401,12 @@ function dsp_fmt(float $n): string
     return ($s === '' || $s === '-0') ? '0' : $s;
 }
 
-$dspHd      = dsp_num($config, 'ds_hd', 40, 80, null);
-$dspLogoH   = dsp_num($config, 'ds_logo_h', 24, 70, null);
-$dspSkew    = dsp_num($config, 'ds_logo_skew', -30, 30, 10.0);
-$dspSecs    = dsp_num($config, 'ds_shine_seconds', 0.8, 20, 1.6);
-$dspShineOn = trim((string) ($config['ds_shine'] ?? '')) !== '0';
+$dspHd         = dsp_num($config, 'ds_hd', 40, 80, null);
+$dspLogoH      = dsp_num($config, 'ds_logo_h', 24, 70, dsp_num($config, 'brand_logo_height', 28, 64, 42.0));
+$dspBrandScale = dsp_num($config, 'brand_logo_scale', 1.0, 3.0, 1.4);
+$dspSkew       = dsp_num($config, 'ds_logo_skew', -30, 30, 10.0);
+$dspSecs       = dsp_num($config, 'ds_shine_seconds', 1.2, 20, 2.2);
+$dspShineOn    = trim((string) ($config['ds_shine'] ?? '')) !== '0';
 
 $faviconVer = FAVICON_VERSION . '-' . substr(md5(cfg($config, 'favicon_url', DEFAULT_FAVICON) . '|' . cfg($config, 'favicon_bg', FAVICON_BG)), 0, 6);
 
@@ -482,13 +486,14 @@ $termsUrl   = DOCS_URL . '?doc=terms';
         html.ds-typing body { padding-bottom: 30vh; }
         html.ds-typing .ds-nav { display: none; }
 
-        /* Header (same as the main site) */
-        .site-header { position: -webkit-sticky; position: sticky; top: 0; z-index: 900; display: flex; align-items: center; justify-content: space-between; box-sizing: border-box; height: var(--hd); padding: 0 14px; background: var(--ds-hd-bg); border-bottom: 1px solid var(--ds-hd-line); -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); }
-        .brand { display: flex; align-items: center; min-width: 0; height: 100%; text-decoration: none; }
+        /* Header (exact 1.4x scaled main logo as iosmods.xyz) */
+        .site-header { position: -webkit-sticky; position: sticky; top: 0; z-index: 900; display: flex; align-items: center; justify-content: space-between; box-sizing: border-box; height: var(--hd); padding: 0 14px; overflow: visible; background: var(--ds-hd-bg); border-bottom: 1px solid var(--ds-hd-line); -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); isolation: isolate; }
+        .brand { display: flex; align-items: center; min-width: 0; height: 100%; text-decoration: none; line-height: 0; }
+        .brand__mark { position: relative; display: block; height: var(--logo-h); margin-left: -6px; -webkit-transform: scale(<?= dsp_fmt($dspBrandScale) ?>); transform: scale(<?= dsp_fmt($dspBrandScale) ?>); -webkit-transform-origin: 0 50%; transform-origin: 0 50%; pointer-events: none; }
 
-        /* Logo devnvios.io.vn: dung THANG lai (bu goc nghieng cua anh logo, giong trang chu) + lap loa 2 dai chay lien tuc */
-        .ds-logo { position: relative; display: inline-block; flex: 0 1 auto; min-width: 0; max-width: 70vw; height: var(--logo-h); line-height: 0; overflow: hidden; contain: paint; -webkit-transform: translateZ(0) skewX(10deg); transform: translateZ(0) skewX(10deg); transform-origin: 50% 50%; }
-        .brand__logo { display: block; width: auto; height: var(--logo-h); max-width: 70vw; object-fit: contain; }
+        /* Logo iosmods.xyz: dung THANG lai + lap loa vua phai (2.2s) */
+        .ds-logo { position: relative; display: inline-block; flex: 0 1 auto; min-width: 0; height: var(--logo-h); line-height: 0; overflow: hidden; contain: paint; -webkit-transform: translateZ(0) skewX(<?= dsp_fmt($dspSkew) ?>deg); transform: translateZ(0) skewX(<?= dsp_fmt($dspSkew) ?>deg); transform-origin: 50% 50%; }
+        .brand__logo { display: block; width: auto; height: var(--logo-h); min-height: var(--logo-h); max-height: var(--logo-h); max-width: 260px; object-fit: contain; }
         .ds-sw { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; pointer-events: none; transform-origin: 50% 50%; -webkit-mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .55) 28%, #000 50%, rgba(0, 0, 0, .55) 72%, rgba(0, 0, 0, 0) 92%); mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .55) 28%, #000 50%, rgba(0, 0, 0, .55) 72%, rgba(0, 0, 0, 0) 92%); will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; animation: ds-sw35 1.6s linear infinite; }
         .ds-swi { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; max-width: none; object-fit: contain; -webkit-filter: brightness(0) invert(1); filter: brightness(0) invert(1); opacity: 1; transform-origin: 50% 50%; will-change: transform; animation: ds-swi35 1.6s linear infinite; }
         .ds-sw2, .ds-sw2 .ds-swi { animation-delay: -.8s; }
@@ -558,7 +563,7 @@ $termsUrl   = DOCS_URL . '?doc=terms';
         .ds-doclink:active { opacity: .6; }
         .ds-doclink:last-child { padding-bottom: 0; }
 
-        .site-footer { padding: 6px 16px 14px; font-size: 11px; font-weight: 600; text-align: center; text-transform: uppercase; color: var(--ds-p); }
+        .site-footer { padding: 6px 16px 14px; font-size: 11.5px; font-weight: 600; text-align: center; text-transform: none; color: var(--ds-p); }
         .site-footer a { color: var(--blue); text-decoration: none; }
         .site-footer__heart { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; color: #ff3b30; animation: beat .6s infinite; }
         .site-footer__year { display: block; margin-top: 2px; font-weight: 400; opacity: .7; }
@@ -775,9 +780,9 @@ html[data-theme="light"] .dsx-txt { color: var(--ds-h, #111827); }
         var LABEL = 'Login';
         var d = document.documentElement;
 
-        /* nhip lap loa khoa theo dong ho (2 dai lech nua nhip) */
+        /* nhip lap loa khoa theo dong ho (2 dai lech nua nhip, toc do vua phai) */
         function phase() {
-            try { var P = 1600, q = Date.now() % P; d.style.setProperty('--dsx-ph', (-q / 1000) + 's'); d.style.setProperty('--dsx-ph2', (-((q + 800) % P) / 1000) + 's'); } catch (e) {}
+            try { var P = <?= (int) round($dspSecs * 1000) ?>, H = <?= (int) round($dspSecs * 500) ?>, q = Date.now() % P; d.style.setProperty('--dsx-ph', (-q / 1000) + 's'); d.style.setProperty('--dsx-ph2', (-((q + H) % P) / 1000) + 's'); } catch (e) {}
         }
         phase();
 
@@ -944,10 +949,12 @@ html[data-theme="light"] .dsx-txt { color: var(--ds-h, #111827); }
 
 <header class="site-header">
     <a class="brand" href="/" aria-label="<?= h($siteTitle) ?>">
-        <span class="ds-logo" id="ds-logo">
-            <img class="brand__logo" id="brand-logo" src="<?= h($brandUrl) ?>" data-fallback="<?= h($brandSource) ?>" onerror="this.onerror=null;this.src=this.dataset.fallback" alt="<?= h($siteTitle) ?>" fetchpriority="high" decoding="sync" draggable="false">
-            <i class="ds-sw" aria-hidden="true"><img class="ds-swi" src="<?= h($brandUrl) ?>" alt="" decoding="async" draggable="false"></i>
-            <i class="ds-sw ds-sw2" aria-hidden="true"><img class="ds-swi" src="<?= h($brandUrl) ?>" alt="" decoding="async" draggable="false"></i>
+        <span class="brand__mark">
+            <span class="ds-logo" id="ds-logo">
+                <img class="brand__logo" id="brand-logo" src="<?= h($brandUrl) ?>" data-fallback="<?= h($brandSource) ?>" onerror="this.onerror=null;this.src=this.dataset.fallback" alt="<?= h($siteTitle) ?>" fetchpriority="high" decoding="sync" draggable="false">
+                <i class="ds-sw" aria-hidden="true"><img class="ds-swi" src="<?= h($brandUrl) ?>" alt="" decoding="async" draggable="false"></i>
+                <i class="ds-sw ds-sw2" aria-hidden="true"><img class="ds-swi" src="<?= h($brandUrl) ?>" alt="" decoding="async" draggable="false"></i>
+            </span>
         </span>
     </a>
     <div class="ds-hd">
@@ -1005,7 +1012,7 @@ html[data-theme="light"] .dsx-txt { color: var(--ds-h, #111827); }
 <section class="site-about">
     <div class="ds-docs">
         <div class="ds-docs__blk">
-            <h3 class="ds-docs__h ds-docs__h--brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M7 10v4M5 12h4M16 11h.01M18 13h.01"/></svg><span>DEVNVIOS</span></h3>
+            <h3 class="ds-docs__h ds-docs__h--brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M7 10v4M5 12h4M16 11h.01M18 13h.01"/></svg><span>IOSMODS</span></h3>
             <p class="ds-docs__p">Keys and tools for iOS in one place. Pick a package, activate a key, open a tool.</p>
         </div>
         <div class="ds-docs__blk">
@@ -1322,6 +1329,6 @@ window.addEventListener('pageshow',function(){setTimeout(on,300);});
 document.addEventListener('visibilitychange',function(){if(!document.hidden)setTimeout(on,300);});
 window.addEventListener('scroll',function(){clearTimeout(t);t=setTimeout(on,600);},{passive:true});
 setTimeout(on,3500);})();</script>
-<style id="ds-shine-soft">html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:not(.ds-lg-off) .ds-logo .ds-sw{opacity:.65!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi{-webkit-animation-duration:0.9s!important;animation-duration:0.9s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-0.45s!important;animation-delay:-0.45s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{-webkit-animation-duration:0.9s!important;animation-duration:0.9s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important;-webkit-animation-delay:0s!important;animation-delay:0s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2 .dsx-si{-webkit-animation-delay:-0.45s!important;animation-delay:-0.45s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{opacity:.6!important}</style>
+<style id="ds-shine-soft"><?php if (!$dspShineOn): ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important}<?php else: ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:not(.ds-lg-off) .ds-logo .ds-sw{opacity:.48!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi{-webkit-animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-<?= dsp_fmt($dspSecs / 2) ?>s!important;animation-delay:-<?= dsp_fmt($dspSecs / 2) ?>s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{-webkit-animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important;-webkit-animation-delay:var(--dsx-ph,0s)!important;animation-delay:var(--dsx-ph,0s)!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2 .dsx-si{-webkit-animation-delay:var(--dsx-ph2,-<?= dsp_fmt($dspSecs / 2) ?>s)!important;animation-delay:var(--dsx-ph2,-<?= dsp_fmt($dspSecs / 2) ?>s)!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{opacity:.48!important}<?php endif; ?></style>
 </body>
 </html>

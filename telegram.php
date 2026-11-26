@@ -1423,6 +1423,11 @@ function tg_activity_map($type, array $d)
         case 'user_appeal':
             return [$user !== '' ? $user : ('ip:' . (isset($d['ip']) ? $d['ip'] : '')), 'blocked', 'user_appeal', isset($d['message']) ? $d['message'] : 'yêu cầu mở khoá'];
 
+        case 'bot_appeal_unban':
+        case 'bot_appeal_reduce':
+        case 'bot_appeal_deny':
+            return [$user !== '' ? $user : ('ip:' . (isset($d['ip']) ? $d['ip'] : '')), 'bot', $type, isset($d['note']) ? $d['note'] : 'xét mở khoá tự động'];
+
         case 'ip_auto_unban':
             return ['auto-timer', 'bot', 'ip_auto_unban', (isset($d['ip']) ? $d['ip'] : '')];
     }
@@ -1758,6 +1763,72 @@ function tg_render($type, array $d)
                 'title' => '📩 <b>YÊU CẦU MỞ KHOÁ TỪ NGƯỜI DÙNG</b>',
                 'rows'  => $aRows,
                 'kb'    => $kbRows ? tg_alert_kb($kbRows) : null,
+            ];
+
+        case 'bot_appeal_unban':
+            $cc = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            return [
+                'cat'   => 'ban',
+                'title' => '🤖 <b>BOT AI TỰ ĐỘNG MỞ KHOÁ (LỖI RẤT NHẸ)</b>',
+                'rows'  => [
+                    '👤 Tài khoản: ' . $uTag . ' · 🌐 IP: ' . $ipTag,
+                    '🔎 Nguyên nhân gốc: ' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 140)),
+                    '✅ Quyết định AI: <b>Đã mở khoá ngay (lỗi nhẹ lần đầu, 0 lần lách khoá)</b>' . ($cc !== '' ? ' · 🗑 Huỷ mã ' . tg_c($cc) : ''),
+                ],
+                'kb'    => ($ip !== '' && strlen($ip) <= 42) ? tg_alert_kb([[['text' => '🚫 Khoá lại 30p', 'callback_data' => 'qa|tempban|' . $ip], ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip]]]) : null,
+            ];
+
+        case 'bot_appeal_reduce':
+            $cc   = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $oldM = (int) (isset($d['old_min']) ? $d['old_min'] : 0);
+            $newM = (int) (isset($d['new_min']) ? $d['new_min'] : 0);
+            $msg  = isset($d['message']) ? (string) $d['message'] : '';
+            $kbR  = [];
+            if ($ip !== '' && strlen($ip) <= 42) {
+                $r1 = [['text' => '🔓 Admin mở khoá luôn', 'callback_data' => 'qa|unban|' . $ip]];
+                if ($cc !== '' && strlen($cc) <= 40) {
+                    $r1[] = ['text' => '🔍 Hồ sơ mã', 'callback_data' => 'qa|case|' . $cc];
+                }
+                $kbR[] = $r1;
+            }
+            return [
+                'cat'   => 'ban',
+                'title' => '🤖 <b>BOT AI GIẢM THỜI GIAN KHOÁ VỪA PHẢI</b>',
+                'rows'  => [
+                    '👤 Tài khoản: ' . $uTag . ' · 🌐 IP: ' . $ipTag,
+                    '💬 Khách trình bày: <b>' . tg_e(tg_clip($msg, 180)) . '</b>',
+                    '⏱ Điều chỉnh: <b>' . $oldM . ' phút → còn ' . $newM . ' phút</b>' . ($cc !== '' ? ' · 🔐 ' . tg_c($cc) : ''),
+                ],
+                'kb'    => $kbR ? tg_alert_kb($kbR) : null,
+            ];
+
+        case 'bot_appeal_deny':
+            $cc  = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $msg = isset($d['message']) ? (string) $d['message'] : '';
+            $kbD = [];
+            if ($ip !== '' && strlen($ip) <= 42) {
+                $r1 = [['text' => '🔓 Admin mở khoá ngay', 'callback_data' => 'qa|unban|' . $ip]];
+                if ($user !== '' && strlen($user) <= 36) {
+                    $r1[] = ['text' => '🎁 Mở + Cấp Get Key', 'callback_data' => 'qa|unban_fk|' . $ip . ':' . $user];
+                }
+                $kbD[] = $r1;
+                if ($cc !== '' && strlen($cc) <= 40) {
+                    $kbD[] = [['text' => '🔍 Xem hồ sơ mã IMX', 'callback_data' => 'qa|case|' . $cc]];
+                }
+            }
+            $dRows = [
+                '👤 Tài khoản: ' . $uTag . ' · 🌐 IP: ' . $ipTag,
+                '🛑 Vi phạm: <b>' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 150)) . '</b>',
+            ];
+            if ($msg !== '') {
+                $dRows[] = '💬 Khách nhắn: <i>' . tg_e(tg_clip($msg, 180)) . '</i>';
+            }
+            $dRows[] = '🤖 Bot đã từ chối mở &amp; hướng dẫn khách liên hệ Admin (Admin vẫn có thể bấm nút bên dưới để mở).';
+            return [
+                'cat'   => 'ban',
+                'title' => '🛡 <b>BOT AI TỪ CHỐI MỞ BAN · CHUYỂN ADMIN XỬ LÝ</b>',
+                'rows'  => $dRows,
+                'kb'    => $kbD ? tg_alert_kb($kbD) : null,
             ];
 
         case 'ip_auto_unban':

@@ -217,7 +217,7 @@ function ipg_sweep_expired($conn, $priorityIp = '')
                 if ($st->affected_rows > 0) {
                     $lifted++;
                     if (function_exists('sh_full_clean_slate_unban')) {
-                        sh_full_clean_slate_unban($conn, $r['ip'], isset($r['username']) ? (string) $r['username'] : '');
+                        sh_full_clean_slate_unban($conn, $r['ip'], isset($r['username']) ? (string) $r['username'] : '', true, true, 'auto-timer');
                     } elseif (function_exists('sh_remove_ban_cache')) {
                         sh_remove_ban_cache($r['ip']);
                     }
@@ -376,24 +376,34 @@ function ipg_temp_ban($conn, $ip, $seconds, $reason, $by = 'bot-shield', $userna
     return ['ok' => true, 'msg' => 'Đã tạm khoá IP (' . ceil($seconds / 60) . ' phút).', 'row' => $row, 'new' => true];
 }
 
-/** Unban = active 0 + clear fast cache + clear keyfail strikes so visitor enters immediately. */
-function ipg_unban($conn, $ip, $by)
+/** Unban = active 0 + clear fast cache + clear keyfail strikes + arm Got-it unlock screen so visitor sees unlocked confirmation once. */
+function ipg_unban($conn, $ip, $by, $createUnlockGate = true)
 {
     $ip  = ipg_norm($ip);
     $row = ipg_find($conn, $ip);
+    $wasActiveDb = ($row && (int) $row['active'] === 1);
+    if ($wasActiveDb) {
+        $st = ipg_q($conn, 'UPDATE ip_bans SET active = 0, unbanned_by = ?, unbanned_at = NOW() WHERE ip = ?', 'ss', [(string) $by, $ip]);
+        if ($st === null) {
+            return ['ok' => false, 'msg' => 'Lỗi cơ sở dữ liệu khi gỡ chặn IP.', 'row' => $row];
+        }
+        $st->close();
+    }
     if (function_exists('sh_full_clean_slate_unban')) {
-        sh_full_clean_slate_unban($conn, $ip, $row && !empty($row['username']) ? (string) $row['username'] : '');
+        sh_full_clean_slate_unban(
+            $conn,
+            $ip,
+            $row && !empty($row['username']) ? (string) $row['username'] : '',
+            $createUnlockGate,
+            $wasActiveDb,
+            (string) $by
+        );
     } elseif (function_exists('sh_remove_ban_cache')) {
         sh_remove_ban_cache($ip);
     }
-    if (!$row || (int) $row['active'] !== 1) {
+    if (!$wasActiveDb) {
         return ['ok' => (bool) $row, 'msg' => $row ? 'IP này đã được gỡ chặn.' : 'IP này hiện không bị chặn.', 'row' => $row];
     }
-    $st = ipg_q($conn, 'UPDATE ip_bans SET active = 0, unbanned_by = ?, unbanned_at = NOW() WHERE ip = ?', 'ss', [(string) $by, $ip]);
-    if ($st === null) {
-        return ['ok' => false, 'msg' => 'Lỗi cơ sở dữ liệu khi gỡ chặn IP.', 'row' => $row];
-    }
-    $st->close();
     return ['ok' => true, 'msg' => 'Đã gỡ chặn IP thành công.', 'row' => ipg_find($conn, $ip)];
 }
 
