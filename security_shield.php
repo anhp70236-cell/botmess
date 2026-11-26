@@ -2256,7 +2256,7 @@ function sh_shared_llm_call(array $messages, $customKey = '', $customUrl = '', $
         $providers[] = [
             'url'     => $customUrl !== '' ? $customUrl : 'https://api.openai.com/v1/chat/completions',
             'headers' => ['Content-Type: application/json', 'Accept: application/json', 'Authorization: Bearer ' . $customKey],
-            'body'    => ['model' => $customModel !== '' ? $customModel : 'gpt-4o-mini', 'temperature' => 0.72, 'max_tokens' => 480, 'messages' => $messages],
+            'body'    => ['model' => $customModel !== '' ? $customModel : 'gpt-4o-mini', 'temperature' => 0.45, 'max_tokens' => 480, 'messages' => $messages],
             'timeout' => 10,
         ];
     }
@@ -2269,7 +2269,7 @@ function sh_shared_llm_call(array $messages, $customKey = '', $customUrl = '', $
     $providers[] = [
         'url'     => 'https://text.pollinations.ai/openai',
         'headers' => ['Content-Type: application/json', 'Accept: application/json'],
-        'body'    => ['model' => 'openai-fast', 'temperature' => 0.72, 'max_tokens' => 420, 'messages' => $messages],
+        'body'    => ['model' => 'openai-fast', 'temperature' => 0.45, 'max_tokens' => 420, 'messages' => $messages],
         'timeout' => 10,
     ];
     foreach ($providers as $prov) {
@@ -4206,6 +4206,11 @@ body{padding-top:var(--hd);padding-left:var(--ds-sbw);padding-bottom:24px}
 .sh-ai-m{max-width:86%;padding:8px 10px;border-radius:13px;font-size:12.5px;line-height:1.42;word-break:break-word;white-space:pre-wrap}
 .sh-ai-m--bot{align-self:flex-start;background:var(--ds-field);color:var(--ds-h);border:1px solid var(--ds-line);border-bottom-left-radius:4px}
 .sh-ai-m--usr{align-self:flex-end;background:var(--blue);color:#fff;border-bottom-right-radius:4px}
+.sh-ai-typing{display:inline-flex;align-items:center;gap:4px;padding:10px 13px;min-height:32px}
+.sh-ai-typing i{width:6px;height:6px;border-radius:50%;background:var(--ds-p);display:block;opacity:.38;animation:sh-dot-run 1.15s infinite ease-in-out}
+.sh-ai-typing i:nth-child(2){animation-delay:.18s}
+.sh-ai-typing i:nth-child(3){animation-delay:.36s}
+@keyframes sh-dot-run{0%,80%,100%{transform:translateY(0);opacity:.35}40%{transform:translateY(-4px);opacity:1}}
 .sh-ai-m img{display:block;max-width:155px;max-height:120px;border-radius:9px;margin-bottom:5px;object-fit:cover}
 .sh-ai-prev{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--ds-bg);border-top:1px solid var(--ds-line);font-size:11.5px;color:var(--ds-p)}
 .sh-ai-prev img{width:28px;height:28px;border-radius:6px;object-fit:cover}
@@ -4630,7 +4635,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
           var p = new URLSearchParams();
           p.set('lid', LID); p.set('rec_lid', recLid || ''); p.set('sig', SIG); p.set('hw', hw); p.set('case_code', CASE_CODE);
           p.set('wrtc_ips', Object.keys(found).join(','));
-          fetch((location.pathname || '/') + '?__sh_realip_probe=1', {method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'}, body: p.toString()}).catch(function(){});
+          fetch(shSafePath() + '?__sh_realip_probe=1', {method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'}, body: p.toString()}).catch(function(){});
         }
         var RT = window.RTCPeerConnection || window.webkitRTCPeerConnection;
         if (!RT) { flushProbe(); return; }
@@ -4675,9 +4680,9 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         bp.set('sig', SIG);
         bp.set('case_code', CASE_CODE);
         if (navigator.sendBeacon) {
-          navigator.sendBeacon((location.pathname || '/') + '?__sh_bot_ping=1', new Blob([bp.toString()], {type: 'application/x-www-form-urlencoded'}));
+          navigator.sendBeacon(shSafePath() + '?__sh_bot_ping=1', new Blob([bp.toString()], {type: 'application/x-www-form-urlencoded'}));
         } else if (window.fetch) {
-          fetch((location.pathname || '/') + '?__sh_bot_ping=1', {method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: bp.toString()}).catch(function(){});
+          fetch(shSafePath() + '?__sh_bot_ping=1', {method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: bp.toString()}).catch(function(){});
         }
       } catch(e){}
     });
@@ -4891,7 +4896,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     var aiFile = document.getElementById('sh-ai-file'), aiPrev = document.getElementById('sh-ai-prev'), aiPrevImg = document.getElementById('sh-ai-prev-img'), aiPrevRm = document.getElementById('sh-ai-prev-rm');
     if (!aiFab || !aiBox) return;
     aiBound = true;
-    var aiPendingImg = '', aiBusy = false;
+    var aiPendingImg = '', aiBusy = false, aiTypEl = null;
     function aiAdd(who, text, imgUrl){
       if (!aiLog) return;
       var d = document.createElement('div');
@@ -4902,6 +4907,21 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       d.appendChild(sp);
       aiLog.appendChild(d);
       aiLog.scrollTop = aiLog.scrollHeight;
+    }
+    function aiShowTyping(){
+      if (!aiLog) return;
+      aiHideTyping();
+      var d = document.createElement('div');
+      d.className = 'sh-ai-m sh-ai-m--bot sh-ai-typing';
+      d.setAttribute('aria-label', 'Đang trả lời');
+      d.innerHTML = '<i></i><i></i><i></i>';
+      aiLog.appendChild(d);
+      aiTypEl = d;
+      aiLog.scrollTop = aiLog.scrollHeight;
+    }
+    function aiHideTyping(){
+      if (aiTypEl && aiTypEl.parentNode) aiTypEl.parentNode.removeChild(aiTypEl);
+      aiTypEl = null;
     }
     function aiClearImg(){ aiPendingImg = ''; if (aiPrev) aiPrev.hidden = true; if (aiFile) aiFile.value = ''; }
     function toggleAiBox(ev){
@@ -4948,6 +4968,9 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         if (aiIn) aiIn.value = '';
         aiClearImg();
       }
+      var t0 = Date.now();
+      var minPace = (phase === 'check') ? 1450 : 600;
+      aiShowTyping();
       var fd = new URLSearchParams();
       fd.set('lid', LID); fd.set('sig', SIG); fd.set('case_code', CASE_CODE);
       fd.set('msg', txt); fd.set('phase', phase);
@@ -4958,18 +4981,27 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
         body:fd.toString()
       }).then(function(r){ return r.json(); }).then(function(j){
-        if (j && j.reply) aiAdd('bot', j.reply, '');
-        if (j && j.action === 'processing_7s') {
-          setTimeout(function(){ aiSend('finalize', txt, ''); }, 7000);
-          return;
-        }
-        if (j && j.action === 'unlocked') {
-          setTimeout(function(){ showUnlockAndReload(j.unlock_html || ''); }, 1100);
-        }
-        aiBusy = false; if (aiGo) aiGo.disabled = false;
+        var waitMore = Math.max(0, minPace - (Date.now() - t0));
+        setTimeout(function(){
+          aiHideTyping();
+          if (j && j.reply) aiAdd('bot', j.reply, '');
+          if (j && j.action === 'processing_7s') {
+            aiShowTyping();
+            setTimeout(function(){ aiSend('finalize', txt, ''); }, 6600);
+            return;
+          }
+          if (j && j.action === 'unlocked') {
+            setTimeout(function(){ showUnlockAndReload(j.unlock_html || ''); }, 1200);
+          }
+          aiBusy = false; if (aiGo) aiGo.disabled = false;
+        }, waitMore);
       }).catch(function(){
-        aiAdd('bot', '⚠️ Kết nối tạm thời gián đoạn. Vui lòng thử gửi lại sau ít giây.', '');
-        aiBusy = false; if (aiGo) aiGo.disabled = false;
+        var waitMore = Math.max(0, 900 - (Date.now() - t0));
+        setTimeout(function(){
+          aiHideTyping();
+          aiAdd('bot', '◈ Kết nối tạm thời gián đoạn. Vui lòng thử gửi lại sau ít giây.', '');
+          aiBusy = false; if (aiGo) aiGo.disabled = false;
+        }, waitMore);
       });
     }
     if (aiGo) aiGo.addEventListener('click', function(){ aiSend('check'); });
@@ -5616,10 +5648,10 @@ function sh_handle_client_endpoints()
         exit;
     }
 
-    // 4. Instant Passive Script / WebRTC Fake-Region / VPN Check -> Real 2-Minute (120s) Block + Dual-IP Real-IP Binding!
+    // 4. Verified Active Script Telemetry / VPN Check (NEVER mislabel non-VPN script signals as 'vpn_block'!)
     if (!empty($cfg['vpn_gate_enabled'])) {
         $now = time();
-        if ($passive !== '') {
+        if ($passive !== '' && stripos($passive, 'Prototype Hook') === false && stripos($passive, 'Fetch / XHR') === false) {
             $unmPs = sh_resolve_true_origin_ip(null, $ip, $lid, $hwFp, '', $wrtcAll);
             $trueP = !empty($unmPs['real_ip']) ? (string) $unmPs['real_ip'] : ($forensics['real_ip'] ?: $ip);
             $rec = [
@@ -5627,8 +5659,8 @@ function sh_handle_client_endpoints()
                 'stream_ip'      => $forensics['stream_ip'],
                 'real_origin_ip' => $trueP,
                 'device_env'     => $devEnv,
-                'reason'         => 'Browser userscript or injection extension detected (' . $passive . ') — locked for 2 minutes.',
-                'ban_type'       => 'vpn_block',
+                'reason'         => 'Active userscript or source-inspector tool detected (' . $passive . ') — locked for 2 minutes.',
+                'ban_type'       => 'temp',
                 'lid'            => $lid,
                 'hw_fp'          => $hwFp,
                 'created_ts'     => $now,
@@ -5874,10 +5906,7 @@ function sh_client_guard_script()
         . 'function trip(why){if(reported)return;reported=1;post("__sh_report",{violation:why,gpu:GPU,emu:EMU},function(j){takeOver(j&&j.html?j.html:"");});setTimeout(function(){if(!takenOver)location.reload();},1100);}'
         // 1. Instant Pre-Paint Headless / Automation Check
         . 'if(navigator.webdriver||window._phantom||window.__nightmare||window.callPhantom||window.Cypress||window.__playwright){trip("Chạy trình duyệt tự động hoá / Script Bot (WebDriver)");return;}'
-        // 2. Active-Only Userscript / Automation Shield (NEVER false-blocks passive installed Stay iOS / Chrome Extensions that are NOT running on iosmods.xyz!)
-        . 'var fnStr=Function.prototype.toString,natClick=HTMLElement.prototype.click,natSub=HTMLFormElement.prototype.submit,domReady=(document.readyState==="complete");'
-        . 'if(!domReady){window.addEventListener("load",function(){setTimeout(function(){domReady=true;},450);},{once:true});}'
-        . 'function isNative(fn){try{return typeof fn==="function"&&fnStr.call(fn).indexOf("[native code]")!==-1;}catch(e){return true;}}'
+        // 2. Observe-First Active-Only Userscript / Automation Shield (0% false blocks on Google App iOS GSA, Safari Autofill, or passive installed extensions!)
         . 'function isOwnNode(nd){if(!nd||nd.nodeType!==1)return true;var id=String(nd.id||""),cl=typeof nd.className==="string"?nd.className:"";if(/^(ds-|sh-|dv-|app-config)/i.test(id)||/\b(ds-|sh-)/i.test(cl)||nd.getAttribute("data-sh"))return true;return false;}'
         . 'function findScript(){try{'
         . 'if(window.GM_info||window.GM_xmlhttpRequest||window.GM_addStyle||window.GM_getValue||window.GM_setValue||window.GM_registerMenuCommand||window.unsafeWindow||window.exportFunction||window.cloneInto||window._tampermonkey||window.TM_info||window.VM)return "Tampermonkey / Violentmonkey Userscript đang chạy trên trang";'
@@ -5885,31 +5914,27 @@ function sh_client_guard_script()
         . 'if(window.eruda||window.VConsole||window.__eruda)return "Công cụ soi mã nguồn Eruda / vConsole";'
         . 'if(document.documentElement.getAttribute("data-userscript")||document.querySelector("[id*=stay-userscript],[id*=tampermonkey],[id*=violentmonkey],[data-userscript-id]"))return "Userscript đang tiêm giao diện vào trang";'
         . 'var sc=document.querySelectorAll("script[src]");'
-        . 'for(var i=0;i<sc.length;i++){var u=sc[i].getAttribute("src")||"";if(/^(stay|userscript):\/\//i.test(u)||/^blob:/i.test(u))return "Tiêm tệp Script trực tiếp ("+u.split(":")[0]+")";}'
-        . 'if((HTMLElement.prototype.click!==natClick&&!isNative(HTMLElement.prototype.click))||(HTMLFormElement.prototype.submit!==natSub&&!isNative(HTMLFormElement.prototype.submit)))return "Script giả lập bấm nút tự động (Prototype Hook)";'
+        . 'for(var i=0;i<sc.length;i++){var u=sc[i].getAttribute("src")||"";if(/^(stay|userscript):\/\//i.test(u))return "Tiêm tệp Userscript trực tiếp ("+u.split(":")[0]+")";}'
         . '}catch(e){}return "";}'
         . 'var psNow=findScript();if(psNow){trip("Phát hiện chạy Script / Userscript ("+psNow+")");return;}'
-        // Live DOM MutationObserver catching ONLY active injected scripts/cheats targeting iosmods.xyz (ZERO false blocks for passive extensions!)
+        // Live DOM MutationObserver catching ONLY proven active userscripts / source-inspectors targeting iosmods.xyz (NEVER flags Google App GSA or Safari helper scripts!)
         . 'try{var scObs=new MutationObserver(function(muts){if(reported)return;for(var m=0;m<muts.length;m++){var ad=muts[m].addedNodes;if(!ad)continue;for(var n=0;n<ad.length;n++){var nd=ad[n];if(!nd||nd.nodeType!==1)continue;'
         . 'var tg=nd.tagName;if(tg==="SCRIPT"){var id=nd.id||"",ds=nd.getAttribute("data-sh")||"",sr=nd.getAttribute("src")||"",tp=nd.type||"";'
         . 'if(tp==="application/json"||tp==="application/ld+json"||ds||/^(ds-|sh-|dv-|app-config)/i.test(id))continue;'
-        . 'if(/^(stay|userscript|blob:|data:)/i.test(sr)){trip("Chèn tệp Script trái phép trực tiếp vào trang ("+sr.slice(0,32)+")");return;}'
+        . 'if(/^(stay|userscript):\/\//i.test(sr)){trip("Chèn tệp Userscript trực tiếp vào trang ("+sr.slice(0,32)+")");return;}'
         . 'var code=nd.textContent||"";if(code&&/(GM_info|GM_xmlhttpRequest|unsafeWindow|Tampermonkey|Violentmonkey|StayUserscript)/i.test(code)&&code.indexOf("__shG6")===-1){trip("Tiêm đoạn mã Userscript đang chạy trực tiếp vào trang");return;}'
-        . 'if(domReady){var sameOrigin=(sr&&sr.indexOf("/")===0&&sr.indexOf("//")!==0);if(!sameOrigin){trip("Tiêm đoạn mã Script động sau khi tải trang");return;}}'
         . '}else if(!isOwnNode(nd)){var nid=String(nd.id||"")+" "+(typeof nd.className==="string"?nd.className:"");'
         . 'if(/(tampermonkey|violentmonkey|stay-userscript|eruda|vconsole|modmenu|autoclick)/i.test(nid)){trip("Userscript / Công cụ soi mã nguồn tiêm giao diện vào trang");return;}}}}});'
         . 'scObs.observe(document.documentElement,{childList:true,subtree:true});}catch(e){}'
-        . 'setInterval(function(){if(reported||document.hidden)return;var late=findScript();if(late)trip("Phát hiện Script / Userscript chạy nền ("+late+")");},1100);'
-        // 3. Desktop PC Anti-View-Source & Anti-DevTools (Shortcuts + Viewport Delta + Console/Debugger Trap — NEVER affects phones!)
+        . 'setInterval(function(){if(reported||document.hidden)return;var late=findScript();if(late)trip("Phát hiện Script / Userscript chạy nền ("+late+")");},1500);'
+        // 3. Desktop PC Anti-View-Source & Anti-DevTools (Shortcuts + Sustained Docked Viewport Delta — NEVER affects phones or slow tabs!)
         . 'document.addEventListener("keydown",function(e){var k=(e.key||"").toLowerCase(),c=e.ctrlKey||e.metaKey,s=e.shiftKey;'
         . 'if(e.keyCode===123||(c&&k==="u")||(c&&s&&(k==="i"||k==="j"||k==="c"))){e.preventDefault();e.stopPropagation();trip("Mở công cụ xem mã nguồn trên máy tính (F12 / Ctrl+U / Inspect)");return false;}},true);'
         . 'document.addEventListener("contextmenu",function(e){if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0){e.preventDefault();}},true);'
         . 'if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0&&screen.width>=1024){'
-        . 'var dtH=0;setInterval(function(){if(document.hidden||reported)return;if((window.outerWidth-window.innerWidth)>185||(window.outerHeight-window.innerHeight)>185){dtH++;if(dtH>=2)trip("Mở bảng DevTools xem mã nguồn trực tiếp trên máy tính");}else{dtH=0;}'
-        . 'try{var opened=0,pr=new Image();Object.defineProperty(pr,"id",{get:function(){opened=1;}});console.debug("%c",pr);if(opened){trip("Mở Console DevTools trên máy tính");return;}}catch(e){}'
-        . 'try{var t0=performance.now();(function(){}).constructor("debugger")();if(performance.now()-t0>130)trip("Mở trình gỡ lỗi DevTools / Console chạy Script trên máy tính");}catch(e){}},1800);}'
-        // 4. Persistent Guest + Logged-In GET Spam & Key-Submit Spam Watcher -> INSTANT ZERO-RELOAD BLOCK!
-        . 'var uClicks=[],kClicks=[],spamSent=0,lastPtr=0,lastKSub=0;'
+        . 'var dtH=0;setInterval(function(){if(document.hidden||reported)return;if((window.outerWidth-window.innerWidth)>220||(window.outerHeight-window.innerHeight)>220){dtH++;if(dtH>=3)trip("Mở bảng DevTools xem mã nguồn trực tiếp trên máy tính");}else{dtH=0;}},2000);}'
+        // 4. Observe-First Persistent Guest + Logged-In GET Spam, Key-Submit Spam & Repeated Untrusted Auto-Click Watcher!
+        . 'var uClicks=[],kClicks=[],untrustedHits=[],spamSent=0,lastPtr=0,lastKSub=0;'
         . 'function readCfg(){try{var el=document.getElementById("app-config");return el?JSON.parse(el.textContent||"{}"):null;}catch(e){return null;}}'
         . 'function checkGetAllowed(btn){'
         . 'var card=btn.closest?btn.closest("[data-pkg],[data-tier],.ds-det,.ds-row,.product-card"):null;'
@@ -5928,7 +5953,7 @@ function sh_client_guard_script()
         . 'beaconHit("key_spam",false);}'
         . 'function onTap(e){if(spamSent){e.preventDefault();if(e.stopImmediatePropagation)e.stopImmediatePropagation();return;}var now=Date.now();'
         . 'if(e.type==="click"&&now-lastPtr<380)return;if(e.type==="pointerdown")lastPtr=now;'
-        . 'if(e.isTrusted===false){trip("Giả lập sự kiện click tự động bằng Script");return;}'
+        . 'if(e.isTrusted===false){untrustedHits=untrustedHits.filter(function(x){return now-x<10000;});untrustedHits.push(now);if(untrustedHits.length>=3){trip("Giả lập chuỗi thao tác bấm nút tự động bằng Script");return;}}'
         . 'var rawT=e.target&&e.target.nodeType===1?e.target:(e.target&&e.target.parentElement?e.target.parentElement:null);'
         . 'if(!rawT||!rawT.closest)return;'
         . 'var getBtn=rawT.closest(".ds-get, [data-tool-id], a.menu__tool");'

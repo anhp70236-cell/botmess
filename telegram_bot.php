@@ -4941,7 +4941,7 @@ function pub_ai_call_llm(array $messages)
             $providers[] = [
                 'url'     => $customUrl !== '' ? $customUrl : 'https://api.openai.com/v1/chat/completions',
                 'headers' => ['Content-Type: application/json', 'Accept: application/json', 'Authorization: Bearer ' . $customKey],
-                'body'    => ['model' => $customMdl !== '' ? $customMdl : 'gpt-4o-mini', 'temperature' => 0.75, 'max_tokens' => 500, 'messages' => $messages],
+                'body'    => ['model' => $customMdl !== '' ? $customMdl : 'gpt-4o-mini', 'temperature' => 0.45, 'max_tokens' => 500, 'messages' => $messages],
                 'timeout' => 10,
             ];
         }
@@ -4956,7 +4956,7 @@ function pub_ai_call_llm(array $messages)
     $providers[] = [
         'url'     => 'https://text.pollinations.ai/openai',
         'headers' => ['Content-Type: application/json', 'Accept: application/json'],
-        'body'    => ['model' => 'openai-fast', 'temperature' => 0.75, 'max_tokens' => 420, 'messages' => $messages],
+        'body'    => ['model' => 'openai-fast', 'temperature' => 0.45, 'max_tokens' => 420, 'messages' => $messages],
         'timeout' => 10,
     ];
 
@@ -5452,26 +5452,26 @@ function bot_public_appeal_handler(array $m)
                 if (!empty($liveNow['is_admin_perm'])) {
                     pub_send_reply(
                         $chatId,
-                        'Chào <b>' . $nameSafe . '</b>! 👋 Mình là trợ lý quản lý &amp; giám sát 24/7 của <b>iosmods.xyz</b>.' . "\n\n"
-                        . '⛔ Hiện kết nối/tài khoản của bạn đang chịu <b>lệnh CẤM VĨNH VIỄN trực tiếp từ Quản trị viên (Admin)</b>'
+                        '❖ Chào <b>' . $nameSafe . '</b>. Tôi là hệ thống AI quản lý và giám sát bảo mật 24/7 của <b>iosmods.xyz</b>.' . "\n\n"
+                        . '⛔ Kết nối/tài khoản này hiện chịu <b>lệnh cấm vĩnh viễn trực tiếp từ Quản trị viên</b>'
                         . (!empty($liveNow['reason']) ? ' (Lý do: <i>' . tg_e($liveNow['reason']) . '</i>).' : '.') . "\n\n"
-                        . '💬 Vì đây là lệnh cấm của Admin nên mình không thể tự gỡ. Bạn hãy <b>nhắn rõ lời giải trình (hoặc gửi ảnh chụp màn hình) ngay tại đây</b>, mình sẽ chuyển thẳng tới Admin và báo lại liền khi Admin phản hồi nhé! ✨'
+                        . 'Vui lòng trình bày rõ nội dung giải trình (hoặc đính kèm ảnh chụp màn hình) tại đây để tôi chuyển hồ sơ lên Quản trị viên xem xét và phản hồi lại.'
                     );
                     return;
                 }
                 pub_send_reply(
                     $chatId,
-                    'Chào <b>' . $nameSafe . '</b>! 👋 Mình vừa nhận được tín hiệu bạn mở từ màn hình khoá của <b>iosmods.xyz</b> 🛡️' . "\n\n"
+                    '❖ Chào <b>' . $nameSafe . '</b>. Hệ thống vừa tiếp nhận kết nối từ màn hình bảo mật của <b>iosmods.xyz</b>.' . "\n\n"
                     . ($cNow !== ''
-                        ? ('Mã phiên hiện tại của bạn là <code>' . tg_e($cNow) . '</code> — bạn chỉ cần gửi mã đó, <b>gửi ảnh chụp màn hình khoá</b>, hoặc kể tình huống lúc nãy để mình kiểm tra và hỗ trợ mở khoá ngay nhé! ✨')
-                        : 'Bạn dán <b>Mã xác minh (IMX-...)</b>, <b>gửi ảnh chụp màn hình khoá</b>, hoặc kể mình nghe chuyện gì vừa xảy ra để mình kiểm tra ngay nha! 🔍✨')
+                        ? ('◈ Mã phiên hiện tại: <code>' . tg_e($cNow) . '</code> — vui lòng gửi mã xác minh kèm <b>lý do cụ thể</b> (hoặc ảnh chụp màn hình) để hệ thống thẩm định mở khoá.')
+                        : '◈ Vui lòng gửi <b>Mã xác minh (IMX-...)</b> kèm <b>lý do cụ thể</b> (hoặc ảnh chụp màn hình khoá) để hệ thống kiểm tra và xử lý.')
                 );
                 return;
             }
             pub_send_reply(
                 $chatId,
-                'Chào <b>' . $nameSafe . '</b>! 👋✨ Mình là trợ lý AI chuyên trách quản lý, giám sát &amp; hỗ trợ toàn bộ website <b>iosmods.xyz</b> 24/7 🛡️' . "\n\n"
-                . 'Bạn cần kiểm tra tài khoản, nhận Key Free/VIP, tra cứu &amp; mở khoá mã <code>IMX-...</code> (có thể gửi cả <b>ảnh chụp màn hình</b> 📸), hay gửi yêu cầu hỗ trợ trực tiếp tới Quản trị viên thì cứ nhắn thẳng tại đây nhé! 💬'
+                '❖ Chào <b>' . $nameSafe . '</b>. Tôi là hệ thống AI điều hành và giám sát bảo mật 24/7 của <b>iosmods.xyz</b>.' . "\n\n"
+                . 'Bạn có thể tra cứu tài khoản, hướng dẫn Key Free/VIP, thẩm định mã mở khoá <code>IMX-...</code> (kèm lý do rõ ràng hoặc ảnh chụp màn hình), hoặc gửi yêu cầu chi tiết tới Quản trị viên trực tiếp tại đây.'
             );
             return;
         }
@@ -5501,8 +5501,9 @@ function bot_public_appeal_handler(array $m)
     // 2. STRICT SCOPE GUARDRAIL: Refuse coding, scripts, prompt injections & off-website AI requests IMMEDIATELY!
     if ($text !== '' && pub_is_offscope_coding_or_prompt($text)) {
         pub_conv_set($from, ['step' => '']);
-        $refusal = 'Xin lỗi <b>' . $nameSafe . '</b> nha 😅 Mình là trợ lý chuyên trách quản lý &amp; hỗ trợ riêng cho website <b>iosmods.xyz</b> nên <b>không nhận viết code, lập trình, giải bài tập hay xử lý các prompt ngoài phạm vi website</b> đâu!' . "\n\n"
-            . '🛡️ Mình chỉ hỗ trợ mọi thứ về <b>iosmods.xyz</b>: sản phẩm/công cụ, Key Free &amp; VIP, tài khoản/IP, xử lý mã mở khoá <code>IMX-...</code> (hoặc ảnh chụp màn hình) và chuyển yêu cầu hỗ trợ tới Quản trị viên nhé! ✨';
+        $refusal = '🛡️ <b>Phạm vi hỗ trợ giới hạn tại iosmods.xyz</b>' . "\n\n"
+            . 'Tôi là hệ thống AI chuyên trách quản lý, bảo mật và hỗ trợ riêng cho website <b>iosmods.xyz</b>, không tiếp nhận yêu cầu viết mã nguồn, lập trình, giải bài tập hay câu lệnh ngoài phạm vi website.' . "\n"
+            . '◈ Vui lòng chỉ trao đổi các vấn đề liên quan tới công cụ/sản phẩm, Key Free/VIP, tài khoản, mã mở khoá <code>IMX-...</code> hoặc yêu cầu gửi Quản trị viên.';
         pub_send_reply($chatId, $refusal);
         return;
     }
