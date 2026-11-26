@@ -2365,6 +2365,26 @@ function sh_serve_ai_avatar_asset()
     exit;
 }
 
+/** Strictly limits normal Unicode emojis in AI text to at most $max icons (keeps output sharp & professional). */
+function sh_limit_emojis($text, $max = 2)
+{
+    $s = (string) $text;
+    if ($s === '') {
+        return '';
+    }
+    $count = 0;
+    $re    = '~(?:[\x{2600}-\x{27BF}\x{1F300}-\x{1FAFF}][\x{FE0E}\x{FE0F}]?(?:\x{200D}[\x{2600}-\x{27BF}\x{1F300}-\x{1FAFF}][\x{FE0E}\x{FE0F}]?)*)~u';
+    $out   = @preg_replace_callback($re, function ($m) use (&$count, $max) {
+        $count++;
+        return $count <= $max ? $m[0] : '';
+    }, $s);
+    if (!is_string($out)) {
+        return $s;
+    }
+    $out = preg_replace('/[ \t]{2,}/', ' ', $out);
+    return trim((string) $out);
+}
+
 function sh_real_ip_vault_path($kind, $val)
 {
     $h = md5('rip12|' . $kind . '|' . strtolower(trim((string) $val)));
@@ -3666,7 +3686,7 @@ function sh_handle_web_ai_chat_endpoint()
     ]));
     if ($msg !== '' && preg_match('/\b(ignore previous|system prompt|jailbreak|pretend you are|dong vai|viet code|code python|viet python|viet js|viet php|viet html|lap trinh|javascript|write code|lam bai tap|viet van|viet tho|giai phuong trinh)\b/', $asciiLow)
         && !preg_match('/\b(bi chan|bi khoa|imx|iosmods|mo khoa|vpn)\b/', $asciiLow)) {
-        echo json_encode(['ok' => true, 'reply' => 'Xin lỗi bạn nhé 😊 Mình là trợ lý AI chuyên quản lý & hỗ trợ mở khoá riêng cho website iosmods.xyz nên không nhận viết code hay xử lý yêu cầu ngoài lề đâu ạ! 🛡️ Bạn cần kiểm tra lệnh khoá hay gửi ảnh màn hình bị chặn thì nhắn mình xử lý liền nha ✨'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => true, 'reply' => '🛡️ Tôi là trợ lý bảo mật chuyên trách của iosmods.xyz, không hỗ trợ viết code hay yêu cầu ngoài phạm vi website. Nếu bạn cần kiểm tra lệnh khoá, hãy dán mã IMX-... hoặc gửi ảnh chụp màn hình để tôi xử lý.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -3702,11 +3722,11 @@ function sh_handle_web_ai_chat_endpoint()
     // Preview mode quick response
     if ($isPreview) {
         if ($phase === 'finalize') {
-            $uHtml = sh_render_unlocked_gate(['is_preview' => true, 'by' => 'web-ai', 'note' => 'Trợ lý AI trên web đã xác minh và mở khoá cho bạn!'], $ip, '', true);
-            echo json_encode(['ok' => true, 'action' => 'unlocked', 'reply' => '✅ Kiểm tra hoàn tất! Mình đã mở khoá truy cập iosmods.xyz cho bạn rồi nhé 🎉 Đang chuyển sang màn hình xác nhận Got it ngay đây ✨', 'unlock_html' => $uHtml], JSON_UNESCAPED_UNICODE);
+            $uHtml = sh_render_unlocked_gate(['is_preview' => true, 'by' => 'web-ai', 'note' => 'Trợ lý AI trên web đã xác minh và mở khoá.'], $ip, '', true);
+            echo json_encode(['ok' => true, 'action' => 'unlocked', 'reply' => '✅ Xác minh hoàn tất. Kết nối tới iosmods.xyz đã được mở khoá, hệ thống đang chuyển sang màn hình xác nhận Got it.', 'unlock_html' => $uHtml], JSON_UNESCAPED_UNICODE);
             exit;
         }
-        echo json_encode(['ok' => true, 'action' => 'processing_7s', 'reply' => '⏳ Mình đã tiếp nhận yêu cầu' . ($ocrText !== '' ? ' & đọc ảnh chụp màn hình' : '') . ' của bạn rồi nhé! 🔍 Đang quét kiểm tra hồ sơ bảo mật trên máy chủ iosmods.xyz khoảng 7 giây, bạn chờ mình xíu nha ✨'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => true, 'action' => 'processing_7s', 'reply' => '⏳ Đã tiếp nhận yêu cầu' . ($ocrText !== '' ? ' và dữ liệu từ ảnh chụp màn hình' : '') . '. Hệ thống đang kiểm tra hồ sơ bảo mật trên máy chủ iosmods.xyz trong khoảng 7 giây, vui lòng đợi.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -3715,7 +3735,7 @@ function sh_handle_web_ai_chat_endpoint()
     if (!is_array($ban) || ($expTs > 0 && $expTs <= $now)) {
         $uAck = sh_read_unlock_ack($ip, $lid, $hwFp) ?: ['ack_needed' => 1, 'by' => 'web-ai', 'note' => 'Kết nối đã được kiểm tra sạch'];
         $uHtml = sh_render_unlocked_gate($uAck, $forensics['real_ip'] ?: $ip, '', true);
-        echo json_encode(['ok' => true, 'action' => 'unlocked', 'reply' => '✅ Kết nối của bạn hiện đã hết hạn chế và hoàn toàn sạch rồi nè! 🎉 Đang mở màn hình Got it để bạn vào lại iosmods.xyz ngay đây ✨', 'unlock_html' => $uHtml], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => true, 'action' => 'unlocked', 'reply' => '✅ Kết nối của bạn hiện không còn lệnh hạn chế nào. Hệ thống đang mở màn hình xác nhận Got it để bạn tiếp tục truy cập iosmods.xyz.', 'unlock_html' => $uHtml], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -3771,7 +3791,7 @@ function sh_handle_web_ai_chat_endpoint()
         echo json_encode([
             'ok'          => true,
             'action'      => 'unlocked',
-            'reply'       => '✅ Mình đã kiểm tra xong và mở khoá hoàn toàn cho bạn rồi nhé! 🎉 Đang tự động mở màn hình xác nhận Got it — bạn nhớ tắt VPN & thao tác bình thường để không bị chặn lại nha 🛡️✨',
+            'reply'       => '✅ Đã xác minh xong và mở khoá hoàn toàn cho kết nối của bạn. Hệ thống đang chuyển sang màn hình Got it — vui lòng tắt VPN và thao tác đúng quy định để tránh bị khoá lại.',
             'unlock_html' => $uHtml,
         ], JSON_UNESCAPED_UNICODE);
         exit;
@@ -3779,11 +3799,11 @@ function sh_handle_web_ai_chat_endpoint()
 
     // PHASE 1: Eligible easy/minor lock -> enter deliberate 7-second processing!
     if ($phase === 'check' && $canEasyUnlock) {
-        $ocrNote = ($savedImg !== '' && $typedImx !== '') ? (' (đã tự đọc được mã ' . $typedImx . ' từ ảnh chụp màn hình 📷)') : ($savedImg !== '' ? ' (đã nhận ảnh chụp màn hình của bạn 📷)' : '');
+        $ocrNote = ($savedImg !== '' && $typedImx !== '') ? (' (đã trích xuất mã ' . $typedImx . ' từ ảnh)') : ($savedImg !== '' ? ' (đã tiếp nhận ảnh chụp màn hình)' : '');
         echo json_encode([
             'ok'     => true,
             'action' => 'processing_7s',
-            'reply'  => '⏳ Đã tiếp nhận yêu cầu' . $ocrNote . '! Mình đang đối chiếu hồ sơ bảo mật & kiểm tra phiên trên máy chủ iosmods.xyz, bạn chờ khoảng 7 giây nhé... 🔍✨',
+            'reply'  => '⏳ Đã tiếp nhận yêu cầu' . $ocrNote . '. Hệ thống đang đối chiếu hồ sơ bảo mật trên máy chủ iosmods.xyz trong khoảng 7 giây, vui lòng đợi.',
         ], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -3830,16 +3850,16 @@ function sh_handle_web_ai_chat_endpoint()
     $admLink   = sh_contact_url();
     $admHandle = (preg_match('~t\.me/([A-Za-z0-9_]+)~', $admLink, $hm)) ? ('@' . $hm[1]) : $admLink;
 
-    $sys = "Bạn là TRỢ LÝ AI QUẢN LÝ & BẢO MẬT TRỰC TIẾP TRÊN WEBSITE iosmods.xyz (không có lệnh /).\n"
+    $sys = "Bạn là TRỢ LÝ AI QUẢN LÝ & BẢO MẬT CAO CẤP trực tiếp trên website iosmods.xyz (không có lệnh /).\n"
         . "TÌNH TRẠNG THỰC TẾ TỪ MÁY CHỦ CHO KHÁCH NÀY:\n"
         . "- IP: $realIp | Mã phiên: $banCode | Loại khoá: $banType | Lý do chính xác: \"$reasonOrig\"\n"
         . "- Thời gian còn lại: " . ($expTs > 0 ? "$leftMin phút ($leftSec giây)" : "Khoá bảo vệ vĩnh viễn / Cấm trực tiếp") . " | Số lần lách khoá: $evasions\n"
         . ($savedImg !== '' ? "- Khách vừa gửi 1 ảnh chụp màn hình. Nội dung OCR đọc được: \"" . substr($ocrText, 0, 240) . "\"\n" : '')
         . ($forwardedAdm ? "- HỆ THỐNG ĐÃ CHUYỂN HỒ SƠ + ẢNH/LỜI NHẮN NÀY SANG TELEGRAM CHO ADMIN XEM XÉT RỒI!\n" : '')
         . "NGUYÊN TẮC BẮT BUỘC:\n"
-        . "1. Bạn LÀ trợ lý quản lý toàn bộ website iosmods.xyz — luôn khẳng định tự tin nếu khách hỏi bạn có quản lý iosmods.xyz không! Chỉ từ chối viết code/lập trình/prompt ngoài lề.\n"
-        . "2. Trường hợp này VƯỢT QUÁ GIỚI HẠN TỰ MỞ (lệnh cấm Admin, vi phạm nghiêm trọng, hoặc đã vượt lượt mở nhanh). TUYỆT ĐỐI KHÔNG tự nhận là đã mở khoá! Hãy từ chối khéo léo, nêu đúng lý do kỹ thuật ở trên và hướng dẫn liên hệ trực tiếp Admin ($admHandle) — hoặc nếu đã chuyển cho Admin thì báo rõ chờ Admin duyệt (khi Admin mở web sẽ tự hiện Got it ngay không cần load lại).\n"
-        . "3. Trả lời bằng tiếng Việt (hoặc tiếng Anh nếu khách nhắn tiếng Anh), ngắn gọn 2-3 câu, thông minh, tự nhiên, có kèm 1-2 icon bình thường (😊 🛡️ 🔎 💬 ⏳) cho sinh động.";
+        . "1. Khẳng định rõ ràng bạn quản lý và giám sát toàn bộ bảo mật website iosmods.xyz. Chỉ từ chối viết code hoặc yêu cầu ngoài phạm vi website.\n"
+        . "2. Trường hợp này VƯỢT QUÁ GIỚI HẠN TỰ MỞ (lệnh cấm Admin, vi phạm nghiêm trọng, hoặc vượt lượt mở nhanh). TUYỆT ĐỐI KHÔNG tự nhận là đã mở khoá. Hãy giải thích ngắn gọn, nghiêm túc, nêu đúng lý do kỹ thuật ở trên và hướng dẫn liên hệ Admin ($admHandle) — hoặc báo rõ đã chuyển hồ sơ cho Admin (khi Admin mở, màn hình sẽ tự động chuyển sang Got it không cần tải lại).\n"
+        . "3. PHONG CÁCH: Cực kỳ nghiêm túc, điềm tĩnh, sắc bén, thông minh cao cấp, súc tích 2-3 câu. TUYỆT ĐỐI không dùng ngôn ngữ nhí nhảnh (không dùng 'nè', 'nha', 'xíu nha'). TỐI ĐA 1 hoặc 2 icon bình thường cho toàn bộ câu trả lời (không dùng nhiều hơn 2 icon).";
 
     $llmMsgs = [['role' => 'system', 'content' => $sys]];
     foreach ($hist as $it) {
@@ -3847,15 +3867,16 @@ function sh_handle_web_ai_chat_endpoint()
             $llmMsgs[] = ['role' => (string) $it['role'], 'content' => (string) $it['content']];
         }
     }
-    $userTurn = $msg !== '' ? $msg : ($savedImg !== '' ? '[Khách gửi ảnh chụp màn hình] ' . $ocrText : 'Kiểm tra giúp mình');
+    $userTurn = $msg !== '' ? $msg : ($savedImg !== '' ? '[Khách gửi ảnh chụp màn hình] ' . $ocrText : 'Kiểm tra giúp tôi');
     $llmMsgs[] = ['role' => 'user', 'content' => $userTurn];
 
     $aiReply = sh_shared_llm_call($llmMsgs);
     if ($aiReply === '') {
         $aiReply = $isAdminPerm
-            ? ('⛔ Phiên <code>' . $banCode . '</code> đang chịu lệnh cấm trực tiếp từ Quản trị viên (' . $reasonOrig . ') nên vượt quá giới hạn tự mở của mình rồi ạ 🛡️ ' . ($forwardedAdm ? 'Mình đã chuyển hồ sơ & ảnh của bạn sang Admin xem xét ngay rồi nhé 💬' : 'Bạn vui lòng liên hệ trực tiếp Admin ' . $admHandle . ' để được hỗ trợ nha 💬'))
-            : ('🛡️ Kết nối của bạn hiện bị hạn chế do: ' . $reasonOrig . ($expTs > 0 ? (' (còn ' . $leftMin . ' phút)') : '') . '. Trường hợp này vượt quá quyền tự mở của mình — ' . ($forwardedAdm ? 'mình đã gửi hồ sơ cho Admin xem xét rồi nhé, khi Admin mở web sẽ tự động hiện Got it ngay! ✨' : 'bạn hãy liên hệ trực tiếp Admin ' . $admHandle . ' để được kiểm tra mở khoá nhé 💬'));
+            ? ('⛔ Phiên ' . $banCode . ' đang chịu lệnh cấm trực tiếp từ Quản trị viên (' . $reasonOrig . ') nên nằm ngoài phạm vi tự động mở khoá. ' . ($forwardedAdm ? 'Hồ sơ và ảnh của bạn đã được chuyển thẳng tới Admin để xem xét.' : 'Vui lòng liên hệ trực tiếp Admin ' . $admHandle . ' để được giải quyết.'))
+            : ('🛡️ Kết nối hiện bị hạn chế do: ' . $reasonOrig . ($expTs > 0 ? (' (còn ' . $leftMin . ' phút)') : '') . '. Trường hợp này vượt thẩm quyền tự mở — ' . ($forwardedAdm ? 'hồ sơ đã được chuyển tới Admin; ngay khi Admin duyệt, màn hình sẽ tự chuyển sang Got it.' : 'vui lòng liên hệ trực tiếp Admin ' . $admHandle . ' để kiểm tra.'));
     }
+    $aiReply = sh_limit_emojis($aiReply, 2);
 
     $hist[] = ['role' => 'user', 'content' => substr($userTurn, 0, 300)];
     $hist[] = ['role' => 'assistant', 'content' => substr($aiReply, 0, 450)];
@@ -4037,9 +4058,9 @@ button{padding:0;font:inherit;color:inherit;background:none;border:0;cursor:poin
 .brand__mark{position:relative;display:block;height:var(--logo-h);margin-left:-6px;-webkit-transform:scale(var(--brand-logo-scale,1.4));transform:scale(var(--brand-logo-scale,1.4));-webkit-transform-origin:0 50%;transform-origin:0 50%;pointer-events:none}
 .ds-logo{position:relative;display:inline-block;height:var(--logo-h);line-height:0;overflow:hidden;-webkit-transform:translateZ(0) skewX(var(--logo-skew,10deg));transform:translateZ(0) skewX(var(--logo-skew,10deg));-webkit-transform-origin:50% 50%;transform-origin:50% 50%}
 .brand__logo{display:block;width:auto;height:var(--logo-h);min-height:var(--logo-h);max-height:var(--logo-h);max-width:260px;object-fit:contain;border:0;outline:0;color:transparent}
-.ds-sw{position:absolute;top:0;left:0;display:var(--shine-disp,block);width:100%;height:100%;opacity:.52;pointer-events:none;transform-origin:50% 50%;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.52) 28%,#000 50%,rgba(0,0,0,.52) 72%,rgba(0,0,0,0) 92%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.52) 28%,#000 50%,rgba(0,0,0,.52) 72%,rgba(0,0,0,0) 92%);will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-sw35 var(--shine-dur,1.9s) linear infinite running;animation:ds-sw35 var(--shine-dur,1.9s) linear infinite running;-webkit-animation-play-state:running!important;animation-play-state:running!important}
-.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;pointer-events:none;border:0;outline:0;color:transparent;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:1;transform-origin:50% 50%;will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-swi35 var(--shine-dur,1.9s) linear infinite running;animation:ds-swi35 var(--shine-dur,1.9s) linear infinite running;-webkit-animation-play-state:running!important;animation-play-state:running!important}
-.ds-sw2,.ds-sw2 .ds-swi{-webkit-animation-delay:var(--shine-half,-.95s);animation-delay:var(--shine-half,-.95s)}
+.ds-sw{position:absolute;top:0;left:0;display:var(--shine-disp,block);width:100%;height:100%;opacity:.62;pointer-events:none;transform-origin:50% 50%;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 0%,rgba(0,0,0,0) 26%,rgba(0,0,0,.55) 41%,#000 50%,rgba(0,0,0,.55) 59%,rgba(0,0,0,0) 74%,rgba(0,0,0,0) 100%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 0%,rgba(0,0,0,0) 26%,rgba(0,0,0,.55) 41%,#000 50%,rgba(0,0,0,.55) 59%,rgba(0,0,0,0) 74%,rgba(0,0,0,0) 100%);will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-sw35 var(--shine-dur,1.45s) linear infinite running;animation:ds-sw35 var(--shine-dur,1.45s) linear infinite running;-webkit-animation-play-state:running!important;animation-play-state:running!important}
+.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;pointer-events:none;border:0;outline:0;color:transparent;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:.92;transform-origin:50% 50%;will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-swi35 var(--shine-dur,1.45s) linear infinite running;animation:ds-swi35 var(--shine-dur,1.45s) linear infinite running;-webkit-animation-play-state:running!important;animation-play-state:running!important}
+.ds-sw2,.ds-sw2 .ds-swi{-webkit-animation-delay:var(--shine-half,-.725s);animation-delay:var(--shine-half,-.725s)}
 @-webkit-keyframes ds-sw35{from{-webkit-transform:translate3d(-78%,0,0);transform:translate3d(-78%,0,0)}to{-webkit-transform:translate3d(78%,0,0);transform:translate3d(78%,0,0)}}
 @keyframes ds-sw35{from{transform:translate3d(-78%,0,0)}to{transform:translate3d(78%,0,0)}}
 @-webkit-keyframes ds-swi35{from{-webkit-transform:translate3d(78%,0,0);transform:translate3d(78%,0,0)}to{-webkit-transform:translate3d(-78%,0,0);transform:translate3d(-78%,0,0)}}
@@ -4148,12 +4169,13 @@ body{padding-top:var(--hd);padding-left:var(--ds-sbw);padding-bottom:24px}
 .svg-lock-grp{animation:sh-lock-body 3.2s cubic-bezier(.22,1,.36,1) infinite;transform-box:fill-box;transform-origin:50% 62%}
 .svg-shackle{animation:sh-shackle-open 3.2s cubic-bezier(.22,1,.36,1) infinite;transform-box:fill-box;transform-origin:10% 100%}
 .svg-keyhole{animation:sh-keyhole-glow 3.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
-/* Floating Rounded Lock-Screen AI Assistant + Compact Non-Zooming Square Chat Box */
-.sh-ai-fab{position:fixed;right:15px;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 14px);z-index:1150;width:52px;height:52px;border-radius:50%;padding:2px;background:linear-gradient(135deg,#3b9eff,#30d158);box-shadow:0 8px 22px rgba(0,0,0,.42);cursor:pointer;transition:transform .2s ease,box-shadow .2s ease;display:flex;align-items:center;justify-content:center}
+/* Floating Rounded Lock-Screen AI Assistant (Obsidian-Black Distinct Border) + Compact Non-Zooming Square Chat Box */
+.sh-ai-fab{position:fixed;right:15px;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 14px);z-index:2147483000;width:54px;height:54px;border-radius:50%;padding:3px;background:#1a1c22;border:2px solid #2f323d;box-shadow:0 0 0 1px rgba(255,255,255,.11),0 8px 24px rgba(0,0,0,.78);cursor:pointer;pointer-events:auto;touch-action:manipulation;-webkit-appearance:none;appearance:none;transition:transform .18s ease,box-shadow .18s ease;display:flex;align-items:center;justify-content:center}
+:root[data-theme="light"] .sh-ai-fab{background:#16181d;border:2px solid #2b2e37;box-shadow:0 6px 20px rgba(0,0,0,.28)}
 .sh-ai-fab:active{transform:scale(.93)}
-.sh-ai-fab img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;background:#0a0a0b}
-.sh-ai-dot{position:absolute;right:2px;bottom:2px;width:12px;height:12px;border-radius:50%;background:#30d158;border:2px solid var(--ds-bg)}
-.sh-ai-box{position:fixed;right:14px;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 74px);z-index:1160;width:min(318px,calc(100vw - 24px));height:352px;background:var(--ds-card);border:1px solid var(--ds-line2);border-radius:20px;box-shadow:0 18px 42px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden;transform-origin:bottom right;animation:sh-ai-pop .18s cubic-bezier(.22,1,.36,1)}
+.sh-ai-fab img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;background:#101115;pointer-events:none}
+.sh-ai-dot{position:absolute;right:2px;bottom:2px;width:11px;height:11px;border-radius:50%;background:#30d158;border:2px solid #1a1c22;pointer-events:none}
+.sh-ai-box{position:fixed;right:14px;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 76px);z-index:2147483001;width:min(318px,calc(100vw - 24px));height:352px;background:var(--ds-card);border:1.5px solid #2f323d;border-radius:20px;box-shadow:0 18px 42px rgba(0,0,0,.62);display:flex;flex-direction:column;overflow:hidden;transform-origin:bottom right;animation:sh-ai-pop .18s cubic-bezier(.22,1,.36,1)}
 @keyframes sh-ai-pop{from{opacity:0;transform:scale(.92) translateY(8px)}to{opacity:1;transform:none}}
 .sh-ai-hd{display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--ds-field);border-bottom:1px solid var(--ds-line);flex:0 0 auto}
 .sh-ai-hd img{width:30px;height:30px;border-radius:50%;object-fit:cover;flex:0 0 auto;border:1px solid var(--ds-line2)}
@@ -4338,7 +4360,7 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '', $returnH
 
       <div class="sec-note"><strong>Security Notice:</strong> Normal browsing is restored once confirmed. Please keep VPN, proxy, and browser automation scripts turned off while using iosmods.xyz.</div>
 
-      <form method="post" action="/asadnsrdecsb/home?__sh_ack_unlock=1" id="sh-ack-form">
+      <form method="post" action="/asadnsrdecsb/home?__sh_ack_unlock=1" target="_top" id="sh-ack-form">
         <input type="hidden" name="lid" value="<?= $e($lid) ?>">
         <input type="hidden" name="ack_tok" value="<?= $e($ackTok) ?>">
         <input type="hidden" name="preview" value="<?= $isPreview ? '1' : '' ?>">
@@ -4352,19 +4374,43 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '', $returnH
 <script>
 (function(){
   var IS_PV = <?= $isPreview ? 'true' : 'false' ?>;
+  function shSafePath(){
+    try {
+      var tp = (window.top && window.top.location && window.top.location.protocol !== 'about:') ? window.top.location.pathname : location.pathname;
+      if (!tp || tp === 'srcdoc' || tp.charAt(0) !== '/' || tp.indexOf('sh_test_view') !== -1) return '/asadnsrdecsb/home';
+      return tp;
+    } catch(e) { return '/asadnsrdecsb/home'; }
+  }
+  function syncShine(){
+    try {
+      var sws = document.querySelectorAll('.ds-logo .ds-sw');
+      var cs = getComputedStyle(document.documentElement).getPropertyValue('--shine-dur') || '1.45s';
+      var dur = Math.max(800, Math.round(parseFloat(cs) * 1000)) || 1450;
+      var half = Math.round(dur / 2);
+      var nowT = (typeof performance !== 'undefined' && performance.now) ? (performance.now() % dur) : 0;
+      for (var s = 0; s < sws.length; s++) {
+        var el = sws[s], im = el.querySelector('.ds-swi');
+        var tgt = el.classList.contains('ds-sw2') ? ((nowT + half) % dur) : nowT;
+        if (el.getAnimations) { var a1 = el.getAnimations(); for (var x = 0; x < a1.length; x++) { try { a1[x].currentTime = tgt; } catch(e){} } }
+        if (im && im.getAnimations) { var a2 = im.getAnimations(); for (var y = 0; y < a2.length; y++) { try { a2[y].currentTime = tgt; } catch(e){} } }
+      }
+    } catch(e){}
+  }
+  window.addEventListener('load', syncShine, {once:true});
+  window.addEventListener('pageshow', syncShine);
   var fm = document.getElementById('sh-ack-form'), bt = document.getElementById('sh-got-it-btn');
   if (fm && bt && window.fetch) {
     fm.addEventListener('submit', function(ev){
       ev.preventDefault();
       bt.disabled = true;
       var d = new URLSearchParams(new FormData(fm));
-      fetch((location.pathname || '/') + '?__sh_ack_unlock=1', {
+      var dst = IS_PV ? '/' : shSafePath();
+      fetch('/asadnsrdecsb/home?__sh_ack_unlock=1', {
         method: 'POST',
         credentials: 'same-origin',
         headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
         body: d.toString()
       }).then(function(){
-        var dst = <?= $isPreview ? "'/'" : '(location.pathname && location.pathname.indexOf("sh_test_view") === -1 ? location.pathname : "/")' ?>;
         try { (window.top || window).location.replace(dst); } catch(e) { window.location.replace(dst); }
       }).catch(function(){ fm.submit(); });
     });
@@ -4733,7 +4779,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       f.set('username', usr);
       f.set('message', msg);
       f.set('preview', IS_PV ? '1' : '');
-      fetch((location.pathname || '/') + '?__sh_appeal=1', {
+      fetch(shSafePath() + '?__sh_appeal=1', {
         method: 'POST',
         credentials: 'same-origin',
         headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
@@ -4756,6 +4802,31 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     });
   }
 
+  function shSafePath(){
+    try {
+      var tp = (window.top && window.top.location && window.top.location.protocol !== 'about:') ? window.top.location.pathname : location.pathname;
+      if (!tp || tp === 'srcdoc' || tp.charAt(0) !== '/') return '/asadnsrdecsb/home';
+      return tp;
+    } catch(e) { return '/asadnsrdecsb/home'; }
+  }
+  function syncLockShine(){
+    try {
+      var sws = document.querySelectorAll('.ds-logo .ds-sw');
+      var cs = getComputedStyle(document.documentElement).getPropertyValue('--shine-dur') || '1.45s';
+      var dur = Math.max(800, Math.round(parseFloat(cs) * 1000)) || 1450;
+      var half = Math.round(dur / 2);
+      var nowT = (typeof performance !== 'undefined' && performance.now) ? (performance.now() % dur) : 0;
+      for (var s = 0; s < sws.length; s++) {
+        var el = sws[s], im = el.querySelector('.ds-swi');
+        var tgt = el.classList.contains('ds-sw2') ? ((nowT + half) % dur) : nowT;
+        if (el.getAnimations) { var a1 = el.getAnimations(); for (var x = 0; x < a1.length; x++) { try { a1[x].currentTime = tgt; } catch(e){} } }
+        if (im && im.getAnimations) { var a2 = im.getAnimations(); for (var y = 0; y < a2.length; y++) { try { a2[y].currentTime = tgt; } catch(e){} } }
+      }
+    } catch(e){}
+  }
+  window.addEventListener('load', syncLockShine, {once:true});
+  window.addEventListener('pageshow', syncLockShine);
+
   function showUnlockAndReload(unlockHtml){
     if (unlockHtml && unlockHtml.indexOf('<html') !== -1) {
       try {
@@ -4777,108 +4848,118 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     }
     if (tt) tt.textContent = 'Automatically Unlocked';
     if (cs) cs.innerHTML = 'Security restriction lifted. Opening confirmation...';
-    if (!IS_PV) setTimeout(function(){ window.location.reload(); }, 900);
+    if (!IS_PV) setTimeout(function(){ try { (window.top || window).location.replace(shSafePath()); } catch(e) { window.location.reload(); } }, 900);
   }
   if (!IS_PV && window.fetch) {
     var wBusy = false, wDone = false;
     setInterval(function(){
       if (document.hidden || wBusy || wDone) return;
       wBusy = true;
-      fetch((location.pathname || '/') + '?__sh_watch=1', {credentials:'same-origin', cache:'no-store', headers:{'X-Requested-With':'XMLHttpRequest'}})
+      fetch(shSafePath() + '?__sh_watch=1', {credentials:'same-origin', cache:'no-store', headers:{'X-Requested-With':'XMLHttpRequest'}})
         .then(function(r){ return r.json(); })
         .then(function(j){
           if (j && j.state === 'unlocked') { wDone = true; showUnlockAndReload(j.html || ''); }
-          else if (j && j.state === 'ok') { wDone = true; try { (window.top || window).location.reload(); } catch(e) { window.location.reload(); } }
+          else if (j && j.state === 'ok') { wDone = true; try { (window.top || window).location.replace(shSafePath()); } catch(e) { window.location.reload(); } }
         }).catch(function(){}).finally(function(){ wBusy = false; });
     }, 2200);
   }
 
-  /* Floating Lock-Screen AI Assistant (Compact Non-Zooming Square Chat + Image Upload + 7s Review) */
-  var aiFab = document.getElementById('sh-ai-fab'), aiBox = document.getElementById('sh-ai-box'), aiX = document.getElementById('sh-ai-x');
-  var aiLog = document.getElementById('sh-ai-log'), aiIn = document.getElementById('sh-ai-in'), aiGo = document.getElementById('sh-ai-go');
-  var aiFile = document.getElementById('sh-ai-file'), aiPrev = document.getElementById('sh-ai-prev'), aiPrevImg = document.getElementById('sh-ai-prev-img'), aiPrevRm = document.getElementById('sh-ai-prev-rm');
-  var aiPendingImg = '', aiBusy = false;
-  function aiAdd(who, text, imgUrl){
-    if (!aiLog) return;
-    var d = document.createElement('div');
-    d.className = 'sh-ai-m ' + (who === 'usr' ? 'sh-ai-m--usr' : 'sh-ai-m--bot');
-    if (imgUrl) { var im = document.createElement('img'); im.src = imgUrl; d.appendChild(im); }
-    var sp = document.createElement('span');
-    sp.textContent = text;
-    d.appendChild(sp);
-    aiLog.appendChild(d);
-    aiLog.scrollTop = aiLog.scrollHeight;
-  }
-  function aiClearImg(){ aiPendingImg = ''; if (aiPrev) aiPrev.hidden = true; if (aiFile) aiFile.value = ''; }
-  if (aiFab && aiBox) {
-    aiFab.addEventListener('click', function(){
+  /* Floating Lock-Screen AI Assistant — Bound AFTER DOM nodes exist (100% clickable on iOS/Android/PC & iframe!) */
+  var aiBound = false;
+  function bindAiWidget(){
+    if (aiBound) return;
+    var aiFab = document.getElementById('sh-ai-fab'), aiBox = document.getElementById('sh-ai-box'), aiX = document.getElementById('sh-ai-x');
+    var aiLog = document.getElementById('sh-ai-log'), aiIn = document.getElementById('sh-ai-in'), aiGo = document.getElementById('sh-ai-go');
+    var aiFile = document.getElementById('sh-ai-file'), aiPrev = document.getElementById('sh-ai-prev'), aiPrevImg = document.getElementById('sh-ai-prev-img'), aiPrevRm = document.getElementById('sh-ai-prev-rm');
+    if (!aiFab || !aiBox) return;
+    aiBound = true;
+    var aiPendingImg = '', aiBusy = false;
+    function aiAdd(who, text, imgUrl){
+      if (!aiLog) return;
+      var d = document.createElement('div');
+      d.className = 'sh-ai-m ' + (who === 'usr' ? 'sh-ai-m--usr' : 'sh-ai-m--bot');
+      if (imgUrl) { var im = document.createElement('img'); im.src = imgUrl; d.appendChild(im); }
+      var sp = document.createElement('span');
+      sp.textContent = text;
+      d.appendChild(sp);
+      aiLog.appendChild(d);
+      aiLog.scrollTop = aiLog.scrollHeight;
+    }
+    function aiClearImg(){ aiPendingImg = ''; if (aiPrev) aiPrev.hidden = true; if (aiFile) aiFile.value = ''; }
+    function toggleAiBox(ev){
+      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
       aiBox.hidden = !aiBox.hidden;
       if (!aiBox.hidden && aiLog) aiLog.scrollTop = aiLog.scrollHeight;
-    });
-  }
-  if (aiX && aiBox) aiX.addEventListener('click', function(){ aiBox.hidden = true; });
-  if (aiPrevRm) aiPrevRm.addEventListener('click', aiClearImg);
-  if (aiFile) {
-    aiFile.addEventListener('change', function(){
-      var f = aiFile.files && aiFile.files[0];
-      if (!f) return;
-      var rd = new FileReader();
-      rd.onload = function(){
-        var img = new Image();
-        img.onload = function(){
-          try {
-            var maxW = 920, w = img.width, h = img.height;
-            if (w > maxW || h > maxW) { var sc = Math.min(maxW / w, maxW / h); w = Math.round(w * sc); h = Math.round(h * sc); }
-            var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-            cv.getContext('2d').drawImage(img, 0, 0, w, h);
-            aiPendingImg = cv.toDataURL('image/jpeg', 0.8);
-          } catch(e) { aiPendingImg = String(rd.result || ''); }
-          if (aiPrevImg) aiPrevImg.src = aiPendingImg;
-          if (aiPrev) aiPrev.hidden = false;
-        };
-        img.src = String(rd.result || '');
-      };
-      rd.readAsDataURL(f);
-    });
-  }
-  function aiSend(phase, origMsg, origImg){
-    if (aiBusy && phase === 'check') return;
-    var txt = phase === 'check' ? String(aiIn ? aiIn.value : '').trim() : (origMsg || '');
-    var imData = phase === 'check' ? aiPendingImg : (origImg || '');
-    if (phase === 'check' && !txt && !imData) return;
-    aiBusy = true;
-    if (aiGo) aiGo.disabled = true;
-    if (phase === 'check') {
-      aiAdd('usr', txt || '📷 Đã gửi ảnh chụp màn hình', imData);
-      if (aiIn) aiIn.value = '';
-      aiClearImg();
     }
-    var fd = new URLSearchParams();
-    fd.set('lid', LID); fd.set('sig', SIG); fd.set('case_code', CODE);
-    fd.set('msg', txt); fd.set('phase', phase);
-    if (imData) fd.set('img_b64', imData);
-    if (IS_PV) fd.set('preview', '1');
-    fetch((location.pathname || '/') + '?__sh_ai_chat=1', {
-      method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
-      body:fd.toString()
-    }).then(function(r){ return r.json(); }).then(function(j){
-      if (j && j.reply) aiAdd('bot', j.reply, '');
-      if (j && j.action === 'processing_7s') {
-        setTimeout(function(){ aiSend('finalize', txt, ''); }, 7000);
-        return;
+    window.__shToggleAi = toggleAiBox;
+    aiFab.addEventListener('click', toggleAiBox);
+    if (aiX) aiX.addEventListener('click', function(ev){ ev.preventDefault(); aiBox.hidden = true; });
+    if (aiPrevRm) aiPrevRm.addEventListener('click', aiClearImg);
+    if (aiFile) {
+      aiFile.addEventListener('change', function(){
+        var f = aiFile.files && aiFile.files[0];
+        if (!f) return;
+        var rd = new FileReader();
+        rd.onload = function(){
+          var img = new Image();
+          img.onload = function(){
+            try {
+              var maxW = 920, w = img.width, h = img.height;
+              if (w > maxW || h > maxW) { var sc = Math.min(maxW / w, maxW / h); w = Math.round(w * sc); h = Math.round(h * sc); }
+              var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+              cv.getContext('2d').drawImage(img, 0, 0, w, h);
+              aiPendingImg = cv.toDataURL('image/jpeg', 0.8);
+            } catch(e) { aiPendingImg = String(rd.result || ''); }
+            if (aiPrevImg) aiPrevImg.src = aiPendingImg;
+            if (aiPrev) aiPrev.hidden = false;
+          };
+          img.src = String(rd.result || '');
+        };
+        rd.readAsDataURL(f);
+      });
+    }
+    function aiSend(phase, origMsg, origImg){
+      if (aiBusy && phase === 'check') return;
+      var txt = phase === 'check' ? String(aiIn ? aiIn.value : '').trim() : (origMsg || '');
+      var imData = phase === 'check' ? aiPendingImg : (origImg || '');
+      if (phase === 'check' && !txt && !imData) return;
+      aiBusy = true;
+      if (aiGo) aiGo.disabled = true;
+      if (phase === 'check') {
+        aiAdd('usr', txt || '📷 Đã gửi ảnh chụp màn hình', imData);
+        if (aiIn) aiIn.value = '';
+        aiClearImg();
       }
-      if (j && j.action === 'unlocked') {
-        setTimeout(function(){ showUnlockAndReload(j.unlock_html || ''); }, 1100);
-      }
-      aiBusy = false; if (aiGo) aiGo.disabled = false;
-    }).catch(function(){
-      aiAdd('bot', 'Mạng hơi chập chờn rồi 😅 Bạn thử nhắn lại giúp mình nhé!', '');
-      aiBusy = false; if (aiGo) aiGo.disabled = false;
-    });
+      var fd = new URLSearchParams();
+      fd.set('lid', LID); fd.set('sig', SIG); fd.set('case_code', CASE_CODE);
+      fd.set('msg', txt); fd.set('phase', phase);
+      if (imData) fd.set('img_b64', imData);
+      if (IS_PV) fd.set('preview', '1');
+      fetch(shSafePath() + '?__sh_ai_chat=1', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'},
+        body:fd.toString()
+      }).then(function(r){ return r.json(); }).then(function(j){
+        if (j && j.reply) aiAdd('bot', j.reply, '');
+        if (j && j.action === 'processing_7s') {
+          setTimeout(function(){ aiSend('finalize', txt, ''); }, 7000);
+          return;
+        }
+        if (j && j.action === 'unlocked') {
+          setTimeout(function(){ showUnlockAndReload(j.unlock_html || ''); }, 1100);
+        }
+        aiBusy = false; if (aiGo) aiGo.disabled = false;
+      }).catch(function(){
+        aiAdd('bot', '⚠️ Kết nối tạm thời gián đoạn. Vui lòng thử gửi lại sau ít giây.', '');
+        aiBusy = false; if (aiGo) aiGo.disabled = false;
+      });
+    }
+    if (aiGo) aiGo.addEventListener('click', function(){ aiSend('check'); });
+    if (aiIn) aiIn.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); aiSend('check'); } });
   }
-  if (aiGo) aiGo.addEventListener('click', function(){ aiSend('check'); });
-  if (aiIn) aiIn.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); aiSend('check'); } });
+  window.__shBindAi = bindAiWidget;
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindAiWidget, {once:true});
+  else setTimeout(bindAiWidget, 0);
 
   var el = document.getElementById('sh-cd');
   if (!el) return;
@@ -4909,12 +4990,12 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     <img src="<?= $e(sh_ai_avatar_url()) ?>" onerror="this.onerror=null;this.src='<?= $e(sh_ai_avatar_source_url()) ?>'" alt="AI">
     <div class="sh-ai-hd__t">
       <div class="sh-ai-hd__n">Trợ lý AI · iosmods.xyz</div>
-      <div class="sh-ai-hd__s">● Đang trực tuyến 24/7</div>
+      <div class="sh-ai-hd__s">● Trực tuyến 24/7</div>
     </div>
     <button type="button" class="sh-ai-x" id="sh-ai-x" aria-label="Close">×</button>
   </div>
   <div class="sh-ai-log" id="sh-ai-log">
-    <div class="sh-ai-m sh-ai-m--bot">Chào bạn! 👋 Mình là trợ lý AI bảo mật của iosmods.xyz 🛡️ Bạn có thể nhắn lý do, dán mã IMX-... hoặc gửi ảnh chụp màn hình 📷 để mình kiểm tra và hỗ trợ mở khoá ngay nhé ✨</div>
+    <div class="sh-ai-m sh-ai-m--bot">🛡️ Chào bạn. Tôi là trợ lý AI bảo mật của iosmods.xyz. Bạn có thể mô tả sự cố, dán mã IMX-... hoặc gửi ảnh chụp màn hình để tôi kiểm tra và hỗ trợ.</div>
   </div>
   <div class="sh-ai-prev" id="sh-ai-prev" hidden>
     <img id="sh-ai-prev-img" src="" alt="">
@@ -4926,10 +5007,11 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       <input type="file" id="sh-ai-file" accept="image/*" hidden>
       <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
     </label>
-    <div class="sh-ai-in-wrap"><input class="sh-ai-in" id="sh-ai-in" type="text" placeholder="Nhắn tin hoặc dán mã IMX-..." autocomplete="off"></div>
+    <div class="sh-ai-in-wrap"><input class="sh-ai-in" id="sh-ai-in" type="text" placeholder="Nhập nội dung hoặc dán mã IMX-..." autocomplete="off"></div>
     <button type="button" class="sh-ai-go" id="sh-ai-go">Gửi</button>
   </div>
 </aside>
+<script>if(window.__shBindAi)window.__shBindAi();</script>
 </body>
 </html>
 <?php
@@ -5686,7 +5768,6 @@ function sh_logo_sync_head_tag()
         . 'window.addEventListener("load",function(){sync();setTimeout(lockPhase,120);});'
         . 'window.addEventListener("pageshow",function(){sync();setTimeout(lockPhase,80);});'
         . 'document.addEventListener("visibilitychange",function(){if(!document.hidden){sync();setTimeout(lockPhase,150);}});'
-        . 'setInterval(function(){if(!document.hidden)lockPhase();},3500);'
         // Silky 60fps Canvas Snowfall (NEVER freezes during or after iOS/Android touch scrolling!)
         . 'function startSnow(){if(!SNOW||window.__shSnow60||!document.body)return;'
         . 'if(window.matchMedia&&window.matchMedia("(prefers-reduced-motion:reduce)").matches)return;'
@@ -5772,14 +5853,14 @@ function sh_client_guard_script()
         . 'fetch(u,{method:"POST",credentials:"same-origin",keepalive:true,headers:{"Content-Type":"application/x-www-form-urlencoded","X-Requested-With":"XMLHttpRequest"},body:f.toString()})'
         . '.then(function(r){return r.json();}).then(function(j){if(j&&(j.action==="render_block"||j.action==="reload_block")){spamSent=1;takeOver(j.html||"");}}).catch(function(){'
         . 'if(navigator.sendBeacon){try{navigator.sendBeacon(u,new Blob([f.toString()],{type:"application/x-www-form-urlencoded"}));}catch(x){}}});}catch(e){}}'
-        . 'function trip(why){if(reported)return;reported=1;document.documentElement.style.visibility="hidden";post("__sh_report",{violation:why,gpu:GPU,emu:EMU},function(j){takeOver(j&&j.html?j.html:"");});setTimeout(function(){if(!takenOver)location.reload();},900);}'
+        . 'function trip(why){if(reported)return;reported=1;post("__sh_report",{violation:why,gpu:GPU,emu:EMU},function(j){takeOver(j&&j.html?j.html:"");});setTimeout(function(){if(!takenOver)location.reload();},1100);}'
         // 1. Instant Pre-Paint Headless / Automation Check
         . 'if(navigator.webdriver||window._phantom||window.__nightmare||window.callPhantom||window.Cypress||window.__playwright){trip("Chạy trình duyệt tự động hoá / Script Bot (WebDriver)");return;}'
-        // 2. Deep Multi-Layer Stay iOS / Tampermonkey / Violentmonkey / Chrome Userscript, DOM/Shadow Injection & Prototype Tamper Shield
-        . 'var fnStr=Function.prototype.toString,natFetch=window.fetch,natXhr=window.XMLHttpRequest&&XMLHttpRequest.prototype.open,natClick=HTMLElement.prototype.click,natSub=HTMLFormElement.prototype.submit,domReady=(document.readyState!=="loading");'
-        . 'if(!domReady)document.addEventListener("DOMContentLoaded",function(){setTimeout(function(){domReady=true;},220);},{once:true});'
+        // 2. Deep Multi-Layer Stay iOS / Tampermonkey / Violentmonkey / Chrome Userscript, DOM/Shadow Injection & Prototype Tamper Shield (ZERO self-ban on iosmods.xyz own scripts!)
+        . 'var fnStr=Function.prototype.toString,natClick=HTMLElement.prototype.click,natSub=HTMLFormElement.prototype.submit,domReady=(document.readyState==="complete");'
+        . 'if(!domReady){window.addEventListener("load",function(){setTimeout(function(){domReady=true;},350);},{once:true});}'
         . 'function isNative(fn){try{return typeof fn==="function"&&fnStr.call(fn).indexOf("[native code]")!==-1;}catch(e){return true;}}'
-        . 'function isOwnNode(nd){if(!nd||nd.nodeType!==1)return true;var id=String(nd.id||""),cl=typeof nd.className==="string"?nd.className:"";if(/^(ds-|sh-|app-config)/i.test(id)||/\b(ds-|sh-)/i.test(cl)||nd.getAttribute("data-sh"))return true;return false;}'
+        . 'function isOwnNode(nd){if(!nd||nd.nodeType!==1)return true;var id=String(nd.id||""),cl=typeof nd.className==="string"?nd.className:"";if(/^(ds-|sh-|dv-|app-config)/i.test(id)||/\b(ds-|sh-)/i.test(cl)||nd.getAttribute("data-sh"))return true;return false;}'
         . 'function findScript(){try{'
         . 'if(window.GM_info||window.GM||window.GM_xmlhttpRequest||window.GM_addStyle||window.GM_getValue||window.GM_setValue||window.GM_registerMenuCommand||window.unsafeWindow||window.exportFunction||window.cloneInto||window._tampermonkey||window.TM_info||window.VM)return "Tampermonkey / Violentmonkey Userscript";'
         . 'if(window.__stay__||window.stay||window._stay||window.STAY||window.__STAY_USERSCRIPT__||window.StayUserscript||(window.browser&&window.browser.runtime)||(window.chrome&&window.chrome.runtime&&window.chrome.runtime.id))return "Stay iOS / Chrome Extension Userscript";'
@@ -5788,19 +5869,18 @@ function sh_client_guard_script()
         . 'var sc=document.querySelectorAll("script[src],link[href],iframe[src]");'
         . 'for(var i=0;i<sc.length;i++){var u=sc[i].getAttribute("src")||sc[i].getAttribute("href")||"";if(/^(chrome-extension|moz-extension|safari-web-extension|stay|userscript):\/\//i.test(u)||/^blob:/i.test(u))return "Tiêm mã tiện ích mở rộng ("+u.split(":")[0]+")";}'
         . 'if(window.performance&&performance.getEntriesByType){var res=performance.getEntriesByType("resource")||[];for(var r=0;r<res.length;r++){var rn=String(res[r].name||"");if(/^(chrome-extension|moz-extension|safari-web-extension|stay):\/\//i.test(rn))return "Extension Userscript (Stay / Chrome) hoạt động ngầm";}}'
-        . 'if((window.fetch&&window.fetch!==natFetch&&!isNative(window.fetch))||(window.XMLHttpRequest&&XMLHttpRequest.prototype.open!==natXhr&&!isNative(XMLHttpRequest.prototype.open)))return "Script can thiệp chặn bắt Fetch / XHR";'
         . 'if((HTMLElement.prototype.click!==natClick&&!isNative(HTMLElement.prototype.click))||(HTMLFormElement.prototype.submit!==natSub&&!isNative(HTMLFormElement.prototype.submit)))return "Script giả lập bấm nút tự động (Prototype Hook)";'
         . 'if(domReady){var hc=document.documentElement.children;for(var h=0;h<hc.length;h++){var el=hc[h];if(el.tagName!=="HEAD"&&el.tagName!=="BODY"&&!isOwnNode(el))return "Userscript tiêm phần tử lạ ngoài Body (Stay iOS / Extension)";}'
         . 'if(document.body){var bc=document.body.children;for(var b=0;b<bc.length;b++){var bel=bc[b];if(!isOwnNode(bel)&&bel.shadowRoot)return "Userscript tiêm Shadow-DOM nổi trên trang (Stay iOS / Extension)";}}}'
         . '}catch(e){}return "";}'
         . 'var psNow=findScript();if(psNow){trip("Phát hiện chạy Script / Userscript ("+psNow+")");return;}'
-        // Live DOM MutationObserver catching @run-at document-start / document-end / document-idle injected scripts & overlays from Stay iOS, Chrome Extensions & PC Console!
+        // Live DOM MutationObserver catching @run-at document-end / document-idle injected scripts & overlays from Stay iOS, Chrome Extensions & PC Console (NEVER flags iosmods.xyz initial HTML!)
         . 'try{var scObs=new MutationObserver(function(muts){if(reported)return;for(var m=0;m<muts.length;m++){var ad=muts[m].addedNodes;if(!ad)continue;for(var n=0;n<ad.length;n++){var nd=ad[n];if(!nd||nd.nodeType!==1)continue;'
         . 'var tg=nd.tagName;if(tg==="SCRIPT"){var id=nd.id||"",ds=nd.getAttribute("data-sh")||"",sr=nd.getAttribute("src")||"",tp=nd.type||"";'
-        . 'if(tp==="application/json"||ds||/^(ds-|sh-|app-config)/i.test(id))continue;'
+        . 'if(tp==="application/json"||tp==="application/ld+json"||ds||/^(ds-|sh-|dv-|app-config)/i.test(id))continue;'
         . 'if(/^(chrome-extension|moz-extension|safari-web-extension|stay|blob:|data:)/i.test(sr)){trip("Chèn tệp Script trái phép từ Extension ("+sr.slice(0,32)+")");return;}'
+        . 'var code=nd.textContent||"";if(code&&/(GM_info|GM_xmlhttpRequest|unsafeWindow|Tampermonkey|Violentmonkey|__stay__|StayUserscript)/i.test(code)&&code.indexOf("__shG6")===-1){trip("Tiêm đoạn mã Userscript (Stay iOS / Tampermonkey) vào trang");return;}'
         . 'if(domReady){var sameOrigin=(sr&&sr.indexOf("/")===0&&sr.indexOf("//")!==0);if(!sameOrigin){trip("Tiêm đoạn mã Script động sau khi tải trang (Stay iOS / Tampermonkey / Console)");return;}}'
-        . 'var code=nd.textContent||"";if(code&&/(GM_info|GM_xmlhttpRequest|unsafeWindow|Tampermonkey|Violentmonkey|__stay__|StayUserscript|autoClick|bypass|key_free|use_tool)/i.test(code)&&code.indexOf("__shG6")===-1){trip("Tiêm đoạn mã Userscript / Bypass trực tiếp vào trang");return;}'
         . '}else if(!isOwnNode(nd)){var nid=String(nd.id||"")+" "+(typeof nd.className==="string"?nd.className:"");'
         . 'if(/(tampermonkey|violentmonkey|stay-userscript|stay_|eruda|vconsole|userscript|modmenu|autoclick)/i.test(nid)){trip("Tiện ích Userscript / Stay iOS / Soi mã nguồn chèn giao diện vào trang");return;}'
         . 'if(domReady&&(nd.parentNode===document.documentElement||nd.shadowRoot)){trip("Userscript tiêm giao diện lạ (Stay iOS / Chrome Extension)");return;}}}}});'
@@ -6413,166 +6493,168 @@ function sh_early_guard()
         }
     }
 
-    // 4. Supreme 12-Vector Eternal Anti-DDoS Engine v10 (0% False Positives for Verified Humans & Admins!)
-    $h        = md5($ip);
-    $rateFile = sh_dir() . '/rates/' . substr($h, 0, 2) . '/' . $h . '.json';
-    $isPost   = strtoupper((string) (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET')) === 'POST';
-    $isHuman  = sh_has_human_cookie($ip);
-    $surge    = sh_is_surge_active();
-    $nowMs    = (int) round(microtime(true) * 1000);
-    $uaRaw    = (string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '');
-    $isBotUa  = sh_is_flood_tool_ua() || ($uaRaw === '' || strlen($uaRaw) < 12 || (bool) preg_match('~(python|aiohttp|httpx|curl/|wget/|go-http-client|fasthttp|wrk|siege|vegeta|ab/|apachebench|scrapy|libwww|java/|okhttp|undici|axios/|node-fetch|got/|zgrab|masscan|nuclei|sqlmap|nikto|nmap|headlesschrome|phantomjs|stress|hulk|slowloris|goldeneye|cc-attack|cfbypass|cloudscraper|rust-reqwest|hyper/|pycurl)~i', $uaRaw));
-    $proto    = strtoupper((string) (isset($_SERVER['SERVER_PROTOCOL']) ? $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1'));
-    $noBrHdr  = empty($_SERVER['HTTP_ACCEPT']) && empty($_SERVER['HTTP_ACCEPT_LANGUAGE']) && empty($_SERVER['HTTP_SEC_FETCH_MODE']);
-    $xffRaw   = isset($_SERVER['HTTP_X_FORWARDED_FOR']) ? (string) $_SERVER['HTTP_X_FORWARDED_FOR'] : '';
-    $remoteRaw = isset($_SERVER['REMOTE_ADDR']) ? sh_norm_ip($_SERVER['REMOTE_ADDR']) : '';
-    $spoofedProxyHdr = ($remoteRaw !== '' && !sh_is_trusted_proxy($remoteRaw) && (!empty($_SERVER['HTTP_CF_CONNECTING_IP']) || !empty($_SERVER['HTTP_TRUE_CLIENT_IP'])));
-    $forgedXf = ($xffRaw !== '' && substr_count($xffRaw, ',') >= 4) || $spoofedProxyHdr;
-    $noOriginPost = $isPost && empty($_SERVER['HTTP_ORIGIN']) && empty($_SERVER['HTTP_REFERER']);
-    $anomPts  = ($isBotUa ? 3 : 0) + ($proto === 'HTTP/1.0' ? 2 : 0) + ($noBrHdr ? 2 : 0) + ($forgedXf ? 3 : 0) + ($noOriginPost ? 2 : 0);
+    // 4. Supreme 12-Vector Eternal Anti-DDoS Engine v11 (0% False Positives for Crawlers, Normal Browsers & Admins!)
+    $verdict = null;
+    if (!sh_is_benign_crawler_ua() && !sh_is_known_crawler_ip($ip)) {
+        $h        = md5($ip);
+        $rateFile = sh_dir() . '/rates/' . substr($h, 0, 2) . '/' . $h . '.json';
+        $isPost   = strtoupper((string) (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET')) === 'POST';
+        $isHuman  = sh_has_human_cookie($ip);
+        $surge    = sh_is_surge_active();
+        $nowMs    = (int) round(microtime(true) * 1000);
+        $uaRaw    = (string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '');
+        $isBotUa  = sh_is_flood_tool_ua() || ($uaRaw === '' || strlen($uaRaw) < 12 || (bool) preg_match('~(python|aiohttp|httpx|curl/|wget/|go-http-client|fasthttp|wrk|siege|vegeta|ab/|apachebench|scrapy|libwww|java/|okhttp|undici|axios/|node-fetch|got/|zgrab|masscan|nuclei|sqlmap|nikto|nmap|headlesschrome|phantomjs|stress|hulk|slowloris|goldeneye|cc-attack|cfbypass|cloudscraper|rust-reqwest|hyper/|pycurl)~i', $uaRaw));
+        $proto    = strtoupper((string) (isset($_SERVER['SERVER_PROTOCOL']) ? $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1'));
+        $noBrHdr  = empty($_SERVER['HTTP_ACCEPT']) && empty($_SERVER['HTTP_ACCEPT_LANGUAGE']) && empty($_SERVER['HTTP_SEC_FETCH_MODE']);
+        $xffRaw   = isset($_SERVER['HTTP_X_FORWARDED_FOR']) ? (string) $_SERVER['HTTP_X_FORWARDED_FOR'] : '';
+        $remoteRaw = isset($_SERVER['REMOTE_ADDR']) ? sh_norm_ip($_SERVER['REMOTE_ADDR']) : '';
+        $spoofedProxyHdr = ($remoteRaw !== '' && !sh_is_trusted_proxy($remoteRaw) && (!empty($_SERVER['HTTP_CF_CONNECTING_IP']) || !empty($_SERVER['HTTP_TRUE_CLIENT_IP'])));
+        $forgedXf = ($xffRaw !== '' && substr_count($xffRaw, ',') >= 4) || $spoofedProxyHdr;
+        $noOriginPost = $isPost && empty($_SERVER['HTTP_ORIGIN']) && empty($_SERVER['HTTP_REFERER']);
+        $anomPts  = ($isBotUa ? 3 : 0) + ($proto === 'HTTP/1.0' ? 2 : 0) + ($noBrHdr ? 2 : 0) + ($forgedXf ? 3 : 0) + ($noOriginPost ? 2 : 0);
 
-    // Track coordinated /24 (IPv4) or /48 (IPv6) botnet subnet swarm ONLY for unverified (!isHuman) traffic
-    $subnetSwarm = false;
-    if (!$isHuman) {
-        $subKey = $ip;
-        if (strpos($ip, ':') !== false) {
-            $parts6 = explode(':', $ip);
-            $subKey = implode(':', array_slice($parts6, 0, 3)) . '::/48';
-        } elseif (preg_match('/^(\d+\.\d+\.\d+)\.\d+$/', $ip, $m4)) {
-            $subKey = $m4[1] . '.0/24';
+        // Track coordinated /24 (IPv4) or /48 (IPv6) botnet subnet swarm ONLY for unverified (!isHuman) traffic
+        $subnetSwarm = false;
+        if (!$isHuman) {
+            $subKey = $ip;
+            if (strpos($ip, ':') !== false) {
+                $parts6 = explode(':', $ip);
+                $subKey = implode(':', array_slice($parts6, 0, 3)) . '::/48';
+            } elseif (preg_match('/^(\d+\.\d+\.\d+)\.\d+$/', $ip, $m4)) {
+                $subKey = $m4[1] . '.0/24';
+            }
+            $shHash = md5('sub9|' . $subKey);
+            $shFile = sh_dir() . '/subnet_guard/' . substr($shHash, 0, 2) . '/' . $shHash . '.json';
+            sh_json_update($shFile, function ($sd) use ($now, $ip, &$subnetSwarm) {
+                $ips  = isset($sd['ips']) && is_array($sd['ips']) ? $sd['ips'] : [];
+                $hits = isset($sd['h']) && is_array($sd['h']) ? $sd['h'] : [];
+                $cut  = $now - 10;
+                foreach ($ips as $k => $ts) {
+                    if ((int) $ts < $cut) unset($ips[$k]);
+                }
+                $keepH = [];
+                foreach ($hits as $ht) {
+                    if ((int) $ht >= $cut) $keepH[] = (int) $ht;
+                }
+                $ips[$ip] = $now;
+                $keepH[]  = $now;
+                if (count($ips) >= 5 && count($keepH) >= 48) {
+                    $subnetSwarm = true;
+                }
+                return ['ips' => $ips, 'h' => array_slice($keepH, -140)];
+            });
         }
-        $shHash = md5('sub9|' . $subKey);
-        $shFile = sh_dir() . '/subnet_guard/' . substr($shHash, 0, 2) . '/' . $shHash . '.json';
-        sh_json_update($shFile, function ($sd) use ($now, $ip, &$subnetSwarm) {
-            $ips  = isset($sd['ips']) && is_array($sd['ips']) ? $sd['ips'] : [];
-            $hits = isset($sd['h']) && is_array($sd['h']) ? $sd['h'] : [];
-            $cut  = $now - 10;
-            foreach ($ips as $k => $ts) {
-                if ((int) $ts < $cut) unset($ips[$k]);
+
+        $qStr    = isset($_SERVER['QUERY_STRING']) ? (string) $_SERVER['QUERY_STRING'] : '';
+        $qHash   = ($qStr !== '' && !isset($_GET['use_tool']) && !isset($_GET['status'])) ? substr(md5($qStr), 0, 8) : '';
+        $pathNow = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '/'), '?'));
+        $pHash   = substr(md5($pathNow), 0, 8);
+
+        sh_json_update($rateFile, function ($st) use ($now, $nowMs, $isPost, $isBotUa, $isHuman, $surge, $anomPts, $subnetSwarm, $noOriginPost, $spoofedProxyHdr, $qHash, $pHash, &$verdict) {
+            $msList = isset($st['ms']) && is_array($st['ms']) ? $st['ms'] : [];
+            $posts  = isset($st['p']) && is_array($st['p']) ? $st['p'] : [];
+            $qsMap  = isset($st['q']) && is_array($st['q']) ? $st['q'] : [];
+            $ptMap  = isset($st['pt']) && is_array($st['pt']) ? $st['pt'] : [];
+
+            $keepMs = [];
+            $c500ms = 0;
+            $c1s    = 0;
+            $c3s    = 0;
+            $c5s    = 0;
+            foreach ($msList as $m) {
+                $m = (int) $m;
+                $age = $nowMs - $m;
+                if ($age <= 15000) {
+                    $keepMs[] = $m;
+                    if ($age <= 5000) $c5s++;
+                    if ($age <= 3000) $c3s++;
+                    if ($age <= 1000) $c1s++;
+                    if ($age <= 500)  $c500ms++;
+                }
             }
-            $keepH = [];
-            foreach ($hits as $ht) {
-                if ((int) $ht >= $cut) $keepH[] = (int) $ht;
+            $keepMs[] = $nowMs;
+            $c500ms++;
+            $c1s++;
+            $c3s++;
+            $c5s++;
+            $c15s = count($keepMs);
+
+            $p10 = [];
+            foreach ($posts as $t) {
+                if ((int) $t >= $now - 10) {
+                    $p10[] = (int) $t;
+                }
             }
-            $ips[$ip] = $now;
-            $keepH[]  = $now;
-            if (count($ips) >= 4 && count($keepH) >= 32) {
-                $subnetSwarm = true;
+            if ($isPost) {
+                $p10[] = $now;
             }
-            return ['ips' => $ips, 'h' => array_slice($keepH, -120)];
+            $cp10 = count($p10);
+
+            foreach ($qsMap as $qk => $qt) {
+                if ((int) $qt < $now - 10) unset($qsMap[$qk]);
+            }
+            if ($qHash !== '') {
+                $qsMap[$qHash] = $now;
+            }
+            $uniqQs10 = count($qsMap);
+
+            foreach ($ptMap as $pk => $pt) {
+                if ((int) $pt < $now - 10) unset($ptMap[$pk]);
+            }
+            $ptMap[$pHash] = $now;
+            $uniqPt10 = count($ptMap);
+
+            // Robotic constant-interval cadence check (stdDev < 22ms across >= 20 unverified hits — zero false positives on normal JS polls!)
+            $roboticCadence = false;
+            if (!$isHuman && $c15s >= 20) {
+                $tail  = array_slice($keepMs, -16);
+                $diffs = [];
+                for ($i = 1; $i < count($tail); $i++) {
+                    $diffs[] = max(0, $tail[$i] - $tail[$i - 1]);
+                }
+                $mean = array_sum($diffs) / count($diffs);
+                if ($mean >= 15 && $mean <= 900) {
+                    $var = 0.0;
+                    foreach ($diffs as $df) {
+                        $var += ($df - $mean) * ($df - $mean);
+                    }
+                    $std = sqrt($var / count($diffs));
+                    if ($std < 22.0) {
+                        $roboticCadence = true;
+                    }
+                }
+            }
+
+            $limNoHuman5  = ($surge || $subnetSwarm) ? 28 : ($anomPts >= 3 ? 34 : 56);
+            $limNoHuman15 = ($surge || $subnetSwarm) ? 55 : ($anomPts >= 3 ? 68 : 110);
+
+            if ($spoofedProxyHdr && $c5s >= 6) {
+                $verdict = ['kind' => 'Spoofed Proxy Header Flood', 'rps' => $c5s, 'w15' => $c15s, 'notify' => true];
+            } elseif ($isBotUa && ($c500ms >= 8 || $c1s >= 10 || $c3s >= 18 || $c5s >= 24 || $c15s >= 38)) {
+                $verdict = ['kind' => 'L7 Tool / Botnet DDoS', 'rps' => $c5s, 'w15' => $c15s, 'notify' => ($c15s >= 24)];
+            } elseif (!$isHuman && ($c500ms >= 18 || $c1s >= 26 || $c3s >= 42 || $c5s >= $limNoHuman5 || $c15s >= $limNoHuman15)) {
+                $verdict = ['kind' => ($subnetSwarm ? 'Botnet Subnet Swarm Flood' : 'L7/L4 HTTP Stream Flood'), 'rps' => $c5s, 'w15' => $c15s, 'notify' => ($c15s >= 28 || $subnetSwarm)];
+            } elseif (!$isHuman && $uniqQs10 >= 18) {
+                $verdict = ['kind' => 'L7 Cache-Bypass Random Query Flood', 'rps' => $uniqQs10, 'w15' => $c15s, 'notify' => ($c15s >= 28)];
+            } elseif (!$isHuman && $uniqPt10 >= 16) {
+                $verdict = ['kind' => 'L7 Multi-Path Scanner / Crawl Flood', 'rps' => $uniqPt10, 'w15' => $c15s, 'notify' => false];
+            } elseif ($roboticCadence) {
+                $verdict = ['kind' => 'Automated Constant-Rate Script Flood', 'rps' => $c5s, 'w15' => $c15s, 'notify' => true];
+            } elseif (($noOriginPost && $cp10 >= 12) || $cp10 >= 28) {
+                $verdict = ['kind' => 'L7 POST Payload Flood', 'rps' => $cp10, 'w15' => $c15s, 'notify' => true];
+            } elseif ($isHuman && ($c1s >= 40 || $c5s >= 95)) {
+                $verdict = ['kind' => 'High-Rate Macro / Cookie-Replay Flood', 'rps' => $c5s, 'w15' => $c15s, 'notify' => true];
+            }
+
+            return [
+                'ms' => array_slice($keepMs, -160),
+                'p'  => array_slice($p10, -50),
+                'q'  => count($qsMap) > 40 ? array_slice($qsMap, -40, null, true) : $qsMap,
+                'pt' => count($ptMap) > 30 ? array_slice($ptMap, -30, null, true) : $ptMap,
+                'u'  => $now,
+            ];
         });
     }
-
-    $qStr    = isset($_SERVER['QUERY_STRING']) ? (string) $_SERVER['QUERY_STRING'] : '';
-    $qHash   = ($qStr !== '' && !isset($_GET['use_tool']) && !isset($_GET['status'])) ? substr(md5($qStr), 0, 8) : '';
-    $pathNow = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '/'), '?'));
-    $pHash   = substr(md5($pathNow), 0, 8);
-
-    $verdict = null;
-    sh_json_update($rateFile, function ($st) use ($now, $nowMs, $isPost, $isBotUa, $isHuman, $surge, $anomPts, $subnetSwarm, $noOriginPost, $spoofedProxyHdr, $qHash, $pHash, &$verdict) {
-        $msList = isset($st['ms']) && is_array($st['ms']) ? $st['ms'] : [];
-        $posts  = isset($st['p']) && is_array($st['p']) ? $st['p'] : [];
-        $qsMap  = isset($st['q']) && is_array($st['q']) ? $st['q'] : [];
-        $ptMap  = isset($st['pt']) && is_array($st['pt']) ? $st['pt'] : [];
-
-        $keepMs = [];
-        $c500ms = 0;
-        $c1s    = 0;
-        $c3s    = 0;
-        $c5s    = 0;
-        foreach ($msList as $m) {
-            $m = (int) $m;
-            $age = $nowMs - $m;
-            if ($age <= 15000) {
-                $keepMs[] = $m;
-                if ($age <= 5000) $c5s++;
-                if ($age <= 3000) $c3s++;
-                if ($age <= 1000) $c1s++;
-                if ($age <= 500)  $c500ms++;
-            }
-        }
-        $keepMs[] = $nowMs;
-        $c500ms++;
-        $c1s++;
-        $c3s++;
-        $c5s++;
-        $c15s = count($keepMs);
-
-        $p10 = [];
-        foreach ($posts as $t) {
-            if ((int) $t >= $now - 10) {
-                $p10[] = (int) $t;
-            }
-        }
-        if ($isPost) {
-            $p10[] = $now;
-        }
-        $cp10 = count($p10);
-
-        foreach ($qsMap as $qk => $qt) {
-            if ((int) $qt < $now - 10) unset($qsMap[$qk]);
-        }
-        if ($qHash !== '') {
-            $qsMap[$qHash] = $now;
-        }
-        $uniqQs10 = count($qsMap);
-
-        foreach ($ptMap as $pk => $pt) {
-            if ((int) $pt < $now - 10) unset($ptMap[$pk]);
-        }
-        $ptMap[$pHash] = $now;
-        $uniqPt10 = count($ptMap);
-
-        // Robotic constant-interval cadence check (stdDev < 38ms across >= 10 unverified hits)
-        $roboticCadence = false;
-        if (!$isHuman && $c15s >= 10) {
-            $tail  = array_slice($keepMs, -10);
-            $diffs = [];
-            for ($i = 1; $i < count($tail); $i++) {
-                $diffs[] = max(0, $tail[$i] - $tail[$i - 1]);
-            }
-            $mean = array_sum($diffs) / count($diffs);
-            if ($mean >= 15 && $mean <= 1400) {
-                $var = 0.0;
-                foreach ($diffs as $df) {
-                    $var += ($df - $mean) * ($df - $mean);
-                }
-                $std = sqrt($var / count($diffs));
-                if ($std < 38.0) {
-                    $roboticCadence = true;
-                }
-            }
-        }
-
-        $limNoHuman5  = ($surge || $subnetSwarm) ? 15 : ($anomPts >= 2 ? 19 : 34);
-        $limNoHuman15 = ($surge || $subnetSwarm) ? 32 : ($anomPts >= 2 ? 40 : 70);
-
-        if ($spoofedProxyHdr && $c5s >= 4) {
-            $verdict = ['kind' => 'Spoofed Proxy Header Flood', 'rps' => $c5s, 'w15' => $c15s];
-        } elseif ($isBotUa && ($c500ms >= 4 || $c1s >= 5 || $c3s >= 9 || $c5s >= 12 || $c15s >= 20)) {
-            $verdict = ['kind' => 'L7 Tool / Botnet DDoS', 'rps' => $c5s, 'w15' => $c15s];
-        } elseif (!$isHuman && ($c500ms >= 8 || $c1s >= 11 || $c3s >= 19 || $c5s >= $limNoHuman5 || $c15s >= $limNoHuman15)) {
-            $verdict = ['kind' => ($subnetSwarm ? 'Botnet Subnet Swarm Flood' : 'L7/L4 HTTP Stream Flood'), 'rps' => $c5s, 'w15' => $c15s];
-        } elseif (!$isHuman && $uniqQs10 >= 11) {
-            $verdict = ['kind' => 'L7 Cache-Bypass Random Query Flood', 'rps' => $uniqQs10, 'w15' => $c15s];
-        } elseif (!$isHuman && $uniqPt10 >= 10) {
-            $verdict = ['kind' => 'L7 Multi-Path Scanner / Crawl Flood', 'rps' => $uniqPt10, 'w15' => $c15s];
-        } elseif ($roboticCadence) {
-            $verdict = ['kind' => 'Automated Constant-Rate Script Flood', 'rps' => $c5s, 'w15' => $c15s];
-        } elseif (($noOriginPost && $cp10 >= 7) || $cp10 >= 20) {
-            $verdict = ['kind' => 'L7 POST Payload Flood', 'rps' => $cp10, 'w15' => $c15s];
-        } elseif ($isHuman && ($c1s >= 35 || $c5s >= 85)) {
-            $verdict = ['kind' => 'High-Rate Macro / Cookie-Replay Flood', 'rps' => $c5s, 'w15' => $c15s];
-        }
-
-        return [
-            'ms' => array_slice($keepMs, -140),
-            'p'  => array_slice($p10, -50),
-            'q'  => count($qsMap) > 40 ? array_slice($qsMap, -40, null, true) : $qsMap,
-            'pt' => count($ptMap) > 30 ? array_slice($ptMap, -30, null, true) : $ptMap,
-            'u'  => $now,
-        ];
-    });
 
     if ($verdict !== null) {
         // Lock DDoS attackers (BOTH Flood Server / Stream IP AND unmasked Real Origin IP!) strictly until Bot or Admin unlocks!
@@ -6611,7 +6693,7 @@ function sh_early_guard()
         }
         sh_surge_record_attack($ip, $verdict['kind']);
         $sentDdos = true;
-        if (sh_alert_dedup_claim('ddos', $realAtk, 600)) {
+        if (!empty($verdict['notify']) && sh_alert_dedup_claim('ddos', $realAtk, 900)) {
             $sentDdos = sh_push_live_tg_alert('ddos_block', [
                 'ip'        => $realAtk,
                 'stream_ip' => $atkSrv !== $realAtk ? $atkSrv : ($ip !== $realAtk ? $ip : ''),
