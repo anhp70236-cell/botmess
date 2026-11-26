@@ -21,7 +21,7 @@ $updated    = 'October 21, 2026';
 $tgUser     = 'iosnea';
 $tgUrl      = 'https://t.me/' . $tgUser;
 $docLogoUrl = function_exists('sh_logo_url') ? sh_logo_url() : '/index.php?brand_logo=1';
-$docLogoM   = function_exists('sh_brand_logo_metrics') ? sh_brand_logo_metrics() : ['height' => 42, 'scale' => 1.4, 'skew' => 10.0, 'shine_on' => true, 'shine_sec' => 1.35];
+$docLogoM   = function_exists('sh_brand_logo_metrics') ? sh_brand_logo_metrics() : ['height' => 42, 'scale' => 1.4, 'skew' => 10.0, 'shine_on' => true, 'shine_sec' => 1.9];
 $docLogoH   = (int) $docLogoM['height'];
 $docLogoS   = rtrim(rtrim(number_format((float) $docLogoM['scale'], 2, '.', ''), '0'), '.') ?: '1.4';
 $docLogoSk  = rtrim(rtrim(number_format((float) $docLogoM['skew'], 2, '.', ''), '0'), '.') ?: '10';
@@ -268,13 +268,11 @@ $renderParas = function ($paras) use ($fmt) {
 
     .ds-logo { position: relative; display: inline-block; flex: 0 1 auto; min-width: 0; height: var(--logo-h); line-height: 0; overflow: hidden; contain: paint; -webkit-transform: translateZ(0) skewX(<?= $docLogoSk ?>deg); transform: translateZ(0) skewX(<?= $docLogoSk ?>deg); transform-origin: 50% 50%; }
     .brand__logo { display: block; width: auto; height: var(--logo-h); min-height: var(--logo-h); max-height: var(--logo-h); max-width: 260px; margin: 0; padding: 0; object-fit: contain; }
-    .ds-sw { position: absolute; top: 0; left: 0; display: <?= $docShineOn ? 'block' : 'none' ?>; width: 100%; height: 100%; opacity: .48; pointer-events: none; transform-origin: 50% 50%; -webkit-mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .52) 28%, #000 50%, rgba(0, 0, 0, .52) 72%, rgba(0, 0, 0, 0) 92%); mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .52) 28%, #000 50%, rgba(0, 0, 0, .52) 72%, rgba(0, 0, 0, 0) 92%); will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; -webkit-transition: opacity .6s ease; transition: opacity .6s ease; -webkit-animation: ds-sw35 <?= $docShineDu ?>s linear infinite; animation: ds-sw35 <?= $docShineDu ?>s linear infinite; -webkit-animation-delay: var(--ds-ph, 0s); animation-delay: var(--ds-ph, 0s); }
-    .ds-swi { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; max-width: none; object-fit: contain; -webkit-filter: brightness(0) invert(1); filter: brightness(0) invert(1); opacity: 1; transform-origin: 50% 50%; will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; -webkit-animation: ds-swi35 <?= $docShineDu ?>s linear infinite; animation: ds-swi35 <?= $docShineDu ?>s linear infinite; -webkit-animation-delay: var(--ds-ph, 0s); animation-delay: var(--ds-ph, 0s); }
-    .ds-sw2, .ds-sw2 .ds-swi { -webkit-animation-delay: var(--ds-ph2, -<?= $docShineHf ?>s); animation-delay: var(--ds-ph2, -<?= $docShineHf ?>s); }
+    .ds-sw { position: absolute; top: 0; left: 0; display: <?= $docShineOn ? 'block' : 'none' ?>; width: 100%; height: 100%; opacity: .52; pointer-events: none; transform-origin: 50% 50%; -webkit-mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .52) 28%, #000 50%, rgba(0, 0, 0, .52) 72%, rgba(0, 0, 0, 0) 92%); mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0) 8%, rgba(0, 0, 0, .52) 28%, #000 50%, rgba(0, 0, 0, .52) 72%, rgba(0, 0, 0, 0) 92%); will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; -webkit-animation: ds-sw35 <?= $docShineDu ?>s linear infinite running; animation: ds-sw35 <?= $docShineDu ?>s linear infinite running; -webkit-animation-duration: <?= $docShineDu ?>s !important; animation-duration: <?= $docShineDu ?>s !important; -webkit-animation-play-state: running !important; animation-play-state: running !important; }
+    .ds-swi { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; max-width: none; object-fit: contain; -webkit-filter: brightness(0) invert(1); filter: brightness(0) invert(1); opacity: 1; transform-origin: 50% 50%; will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; -webkit-animation: ds-swi35 <?= $docShineDu ?>s linear infinite running; animation: ds-swi35 <?= $docShineDu ?>s linear infinite running; -webkit-animation-duration: <?= $docShineDu ?>s !important; animation-duration: <?= $docShineDu ?>s !important; -webkit-animation-play-state: running !important; animation-play-state: running !important; }
+    .ds-sw2, .ds-sw2 .ds-swi { -webkit-animation-delay: -<?= $docShineHf ?>s; animation-delay: -<?= $docShineHf ?>s; }
     @keyframes ds-sw35 { from { -webkit-transform: translate3d(-78%, 0, 0); transform: translate3d(-78%, 0, 0); } to { -webkit-transform: translate3d(78%, 0, 0); transform: translate3d(78%, 0, 0); } }
     @keyframes ds-swi35 { from { -webkit-transform: translate3d(78%, 0, 0); transform: translate3d(78%, 0, 0); } to { -webkit-transform: translate3d(-78%, 0, 0); transform: translate3d(-78%, 0, 0); } }
-    html.ds-lg-off .ds-logo .ds-sw { opacity: 0; -webkit-transition-duration: .3s; transition-duration: .3s; }
-    html.ds-lg-off .ds-logo .ds-sw, html.ds-lg-off .ds-logo .ds-swi { -webkit-animation-play-state: paused; animation-play-state: paused; }
     @media (prefers-reduced-motion: reduce) { .ds-sw { display: none; } }
 
     .acc { position: relative; }
@@ -656,65 +654,24 @@ $renderParas = function ($paras) use ($fmt) {
 })();
 </script>
 <script>
-/* v29: lap loa logo giong theme - nhip khoa theo dong ho, chua tai xong thi an, thoat web thi an + tam dung, quay lai (hoac iOS dong bang lau) thi khoi dong lai MOT lan */
 (function () {
-    try {
-        var root = document.documentElement, last = 0, tmA = 0, tmB = 0, hid = false, beat = Date.now(), t0 = Date.now(), ready = false;
-        function phase() {
-            var P = <?= (int) round($docShineS * 1000) ?>, H = <?= (int) round($docShineS * 500) ?>, p = Date.now() % P;
-            root.style.setProperty('--ds-ph', (-p / 1000) + 's');
-            root.style.setProperty('--ds-ph2', (-((p + H) % P) / 1000) + 's');
-        }
-        function off() { root.classList.add('ds-lg-off'); }
-        function on() { root.classList.remove('ds-lg-off'); }
-        function restart() {
-            phase();
-            var list = document.querySelectorAll('.ds-logo .ds-sw, .ds-logo .ds-swi');
-            Array.prototype.forEach.call(list, function (el) {
-                el.style.setProperty('animation', 'none', 'important');
-                el.style.setProperty('-webkit-animation', 'none', 'important');
-            });
-            void root.offsetWidth;
-            Array.prototype.forEach.call(list, function (el) {
-                el.style.removeProperty('animation');
-                el.style.removeProperty('-webkit-animation');
-            });
-        }
-        function comeback() {
-            var n = Date.now();
-            if (n - last < 1200) return;
-            last = n;
-            clearTimeout(tmA); clearTimeout(tmB);
-            off();
-            tmA = setTimeout(function () { restart(); tmB = setTimeout(on, 140); }, 260);
-        }
-        function logoReady() {
-            var l = document.querySelectorAll('.ds-logo img');
-            if (!l.length) return false;
-            for (var i = 0; i < l.length; i++) { if (!l[i].complete) return false; }
-            return true;
-        }
-        function step() {
-            if (ready) return;
-            if (document.visibilityState === 'hidden') { setTimeout(step, 300); return; }
-            if (logoReady() || Date.now() - t0 > 1800) { ready = true; phase(); on(); return; }
-            setTimeout(step, 40);
-        }
-        phase();
-        off();
-        step();
-        document.addEventListener('visibilitychange', function () {
-            if (document.visibilityState === 'hidden') { hid = true; off(); }
-            else if (hid) { hid = false; comeback(); }
-        });
-        window.addEventListener('pagehide', function () { hid = true; off(); });
-        window.addEventListener('pageshow', function (e) { if (e.persisted || hid) { hid = false; comeback(); } });
-        setInterval(function () {
-            var n = Date.now();
-            if (n - beat > 9000 && document.visibilityState === 'visible') { comeback(); }
-            beat = n;
-        }, 3000);
-    } catch (e) {}
+    var root = document.documentElement;
+    function wake() {
+        try {
+            root.classList.remove('ds-lg-off', 'ds-hid', 'dsx-re');
+            var ls = document.querySelectorAll('.ds-logo .ds-sw, .ds-logo .ds-swi');
+            for (var i = 0; i < ls.length; i++) {
+                ls[i].style.removeProperty('animation');
+                ls[i].style.removeProperty('-webkit-animation');
+            }
+        } catch (e) {}
+    }
+    wake();
+    window.addEventListener('load', wake);
+    window.addEventListener('pageshow', wake);
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) { wake(); setTimeout(wake, 200); } });
+    setInterval(function () { if (!document.hidden) wake(); }, 2500);
 })();
 </script>
 <script>
@@ -756,12 +713,6 @@ $renderParas = function ($paras) use ($fmt) {
     };
 })();
 </script>
-<script id="ds-shine-keep">(function(){var d=document.documentElement,t;function on(){d.classList.remove('ds-lg-off');}
-window.addEventListener('load',function(){setTimeout(on,300);});
-window.addEventListener('pageshow',function(){setTimeout(on,300);});
-document.addEventListener('visibilitychange',function(){if(!document.hidden)setTimeout(on,300);});
-window.addEventListener('scroll',function(){clearTimeout(t);t=setTimeout(on,600);},{passive:true});
-setTimeout(on,3500);})();</script>
-<style id="ds-shine-soft"><?php if (!$docShineOn): ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important}<?php else: ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:not(.ds-lg-off) .ds-logo .ds-sw{opacity:.72!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi{-webkit-animation-duration:<?= $docShineDu ?>s!important;animation-duration:<?= $docShineDu ?>s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-<?= $docShineHf ?>s!important;animation-delay:-<?= $docShineHf ?>s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{-webkit-animation-duration:<?= $docShineDu ?>s!important;animation-duration:<?= $docShineDu ?>s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important;-webkit-animation-delay:0s!important;animation-delay:0s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2 .dsx-si{-webkit-animation-delay:-<?= $docShineHf ?>s!important;animation-delay:-<?= $docShineHf ?>s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{opacity:.72!important}<?php endif; ?></style>
+<style id="ds-shine-soft"><?php if (!$docShineOn): ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important;animation:none!important}<?php else: ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important;animation:none!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root.ds-lg-off .ds-logo .ds-sw{display:block!important;visibility:visible!important;opacity:.52!important;-webkit-transition:none!important;transition:none!important;-webkit-animation:ds-sw35 <?= $docShineDu ?>s linear infinite running!important;animation:ds-sw35 <?= $docShineDu ?>s linear infinite running!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root.ds-lg-off .ds-logo .ds-swi{opacity:1!important;-webkit-animation:ds-swi35 <?= $docShineDu ?>s linear infinite running!important;animation:ds-swi35 <?= $docShineDu ?>s linear infinite running!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-<?= $docShineHf ?>s!important;animation-delay:-<?= $docShineHf ?>s!important}<?php endif; ?></style>
 </body>
 </html>

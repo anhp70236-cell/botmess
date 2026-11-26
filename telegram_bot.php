@@ -1426,7 +1426,7 @@ function bot_vi_cfg_groups()
                 'ds_logo_h'         => ['📏 Chiều cao gốc của Logo (chuẩn: 42 px)', 'text', 'Nhập số từ 28 đến 64 (mặc định 42)'],
                 'ds_logo_skew'      => ['📐 Góc nghiêng bù thẳng Logo (chuẩn: 10)', 'text', 'Nhập từ -30 đến 30 (mặc định 10 để chữ đứng thẳng đẹp)'],
                 'ds_shine'          => ['✨ Bật hiệu ứng lấp loá trên Logo', 'tri', 'Bật hoặc tắt dải sáng lướt qua Logo'],
-                'ds_shine_seconds'  => ['⏱ Tốc độ lấp loá Logo (chuẩn đẹp: 1.35 giây)', 'text', 'Số nhỏ chạy nhanh, số lớn chạy chậm (1.35 = sáng đẹp vừa nhanh, 2.2 = chậm dịu)'],
+                'ds_shine_seconds'  => ['⏱ Tốc độ lấp loá Logo (chuẩn vừa: 1.9 giây)', 'text', 'Số nhỏ chạy nhanh, số lớn chạy chậm (1.9 = lấp loá vừa chuẩn đẹp)'],
                 'favicon_url'       => ['🔖 Logo nhỏ trên Tab trình duyệt (Favicon)', 'img_fav', 'Gửi ảnh vuông trực tiếp hoặc dán link ảnh icon cho tab trình duyệt'],
                 'favicon_bg'        => ['🎨 Màu nền Icon Tab trình duyệt', 'text', 'Mã màu dạng #14161c hoặc gõ none nếu muốn nền trong suốt'],
                 'ds_avatar_url'     => ['👤 Ảnh đại diện mặc định trên Header', 'img_av', 'Gửi ảnh trực tiếp hoặc dán link ảnh đại diện góc phải màn hình'],
@@ -1644,7 +1644,7 @@ function screen_appearance($note = '')
     $scaleCur = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'brand_logo_scale'", '', [], '1.4')) ?: '1.4';
     $hCur     = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_logo_h'", '', [], '42')) ?: '42';
     $shineOn  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine'", '', [], '1')) !== '0';
-    $shineSec = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '1.35')) ?: '1.35';
+    $shineSec = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '1.9')) ?: '1.9';
     $favCur   = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'favicon_url'", '', [], ''));
     $avCur    = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_avatar_url'", '', [], ''));
     $heroRaw  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_hero_images'", '', [], ''));
@@ -1674,7 +1674,7 @@ function screen_appearance($note = '')
         ],
         [
             btn($shineOn ? '✨ Lấp loá: ' . $shineSec . 's' : '⚪ Lấp loá: TẮT', 'ui|cycle_shine'),
-            btn('♻️ Đặt chuẩn (1.4x · 1.35s)', 'ui|std_logo'),
+            btn('♻️ Đặt chuẩn (1.4x · 1.9s)', 'ui|std_logo'),
         ],
         [
             btn('🔖 Đổi Icon Tab (Favicon)', 'ui|ask_fav'),
@@ -1759,17 +1759,17 @@ function bot_ui_action($act, $arg = '')
     }
     if ($act === 'cycle_shine') {
         $shineOn = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine'", '', [], '1')) !== '0';
-        $curSec  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '1.35')) ?: '1.35';
+        $curSec  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '1.9')) ?: '1.9';
         if (!$shineOn) {
             bot_set_config('ds_shine', '1');
-            bot_set_config('ds_shine_seconds', '1.35');
-            $msg = 'Đã bật lấp loá chuẩn đẹp (1.35 giây)';
-        } elseif ($curSec === '1.35') {
-            bot_set_config('ds_shine_seconds', '1.05');
-            $msg = 'Đã chuyển sang lấp loá nhanh nổi bật (1.05 giây)';
-        } elseif ($curSec === '1.05') {
-            bot_set_config('ds_shine_seconds', '2.0');
-            $msg = 'Đã chuyển sang lấp loá chậm dịu (2.0 giây)';
+            bot_set_config('ds_shine_seconds', '1.9');
+            $msg = 'Đã bật lấp loá vừa chuẩn đẹp (1.9 giây)';
+        } elseif ($curSec === '1.9') {
+            bot_set_config('ds_shine_seconds', '2.5');
+            $msg = 'Đã chuyển sang lấp loá chậm dịu (2.5 giây)';
+        } elseif ($curSec === '2.5') {
+            bot_set_config('ds_shine_seconds', '1.5');
+            $msg = 'Đã chuyển sang lấp loá hơi nhanh (1.5 giây)';
         } else {
             bot_set_config('ds_shine', '0');
             $msg = 'Đã tắt hẳn hiệu ứng lấp loá trên Logo';
@@ -1784,11 +1784,11 @@ function bot_ui_action($act, $arg = '')
         bot_set_config('brand_logo_height', '42');
         bot_set_config('ds_logo_skew', '10');
         bot_set_config('ds_shine', '1');
-        bot_set_config('ds_shine_seconds', '1.35');
+        bot_set_config('ds_shine_seconds', '1.9');
         bot_purge_logo_caches();
-        bot_log('tg_logo_std', 'Đặt chuẩn Logo 1.4x · cao 42px · nghiêng 10° · lấp loá đẹp 1.35s');
+        bot_log('tg_logo_std', 'Đặt chuẩn Logo 1.4x · cao 42px · nghiêng 10° · lấp loá vừa 1.9s');
         toast('✅ Đã đặt chuẩn Logo toàn web');
-        return screen_appearance('✅ Đã đồng bộ chuẩn 100%: <b>Tỷ lệ 1.4x · Cao 42px · Nghiêng 10° · Lấp loá 1.35s</b> trên toàn bộ trang!');
+        return screen_appearance('✅ Đã đồng bộ chuẩn 100%: <b>Tỷ lệ 1.4x · Cao 42px · Nghiêng 10° · Lấp loá vừa 1.9s</b> trên toàn bộ trang!');
     }
     return screen_appearance();
 }

@@ -264,7 +264,7 @@ $dspHd         = dsp_num($config, 'ds_hd', 40, 80, null);
 $dspLogoH      = dsp_num($config, 'ds_logo_h', 24, 70, dsp_num($config, 'brand_logo_height', 28, 64, 42.0));
 $dspBrandScale = dsp_num($config, 'brand_logo_scale', 1.0, 3.0, 1.4);
 $dspSkew       = dsp_num($config, 'ds_logo_skew', -30, 30, 10.0);
-$dspSecs       = dsp_num($config, 'ds_shine_seconds', 0.8, 20, 1.35);
+$dspSecs       = dsp_num($config, 'ds_shine_seconds', 0.8, 20, 1.9);
 $dspShineOn    = trim((string) ($config['ds_shine'] ?? '')) !== '0';
 
 $faviconVer = FAVICON_VERSION . '-' . substr(md5(cfg($config, 'favicon_url', DEFAULT_FAVICON) . '|' . cfg($config, 'favicon_bg', FAVICON_BG)), 0, 6);
@@ -503,7 +503,6 @@ html:root:root:root:root:root:root:root.ds-lg-off .ds-logo .ds-sw,html:root:root
 html:root:root:root:root:root:root:root.ds-hid .ds-chips2__track{-webkit-animation-play-state:paused!important;animation-play-state:paused!important}
 html:root:root:root:root:root:root:root.ds-hid body #ds-acc::after,html:root:root:root:root:root:root:root.ds-hid body #ds-me-av::after{-webkit-animation-play-state:paused!important;animation-play-state:paused!important}
 </style>
-<script id="ds-spinner-v2-head">(function(){try{var d=document.documentElement;if(document.readyState==='complete')return;d.classList.add('ds-lg-off');var g=function(){d.classList.remove('ds-lg-off')};window.addEventListener('load',function(){setTimeout(g,250)});setTimeout(g,2500);}catch(e){}})();</script>
 <!-- dsx-v7 -->
 <style id="dsx-css">
 /* dsx-v7: tu chua hoan toan (khong dung lop cu), lap loa y het theme, vong xoay don gian, gach tren dong Made with */
@@ -614,7 +613,7 @@ html[data-theme="light"] .dsx-txt { color: var(--ds-h, #111827); }
                 var list = document.querySelectorAll('img.brand__logo, #brand-logo, .ds-brandblock img, .ds-logo > img');
                 Array.prototype.forEach.call(list, function (img) {
                     if (img.classList.contains('dsx-si') || img.classList.contains('ds-swi')) return;
-                    if (img.closest && img.closest('.dsx-lg')) return;
+                    if (img.closest && (img.closest('.dsx-lg') || img.closest('.ds-logo'))) return;
                     var p = img.parentNode;
                     if (!p) return;
                     var w = document.createElement('span');
@@ -673,26 +672,13 @@ html[data-theme="light"] .dsx-txt { color: var(--ds-h, #111827); }
         document.addEventListener('DOMContentLoaded', boot);
         window.addEventListener('load', function () { boot(); setTimeout(boot, 300); });
 
-        /* lap loa luon chay lai khi quay lai web / mo lai tab / back-forward / iOS dong bang trang */
-        var lastRe = 0;
+        /* lap loa luon chay on dinh, khong reset nhay nhip khi quay lai web / mo lai tab */
         function restart() {
-            var n = Date.now();
-            if (n - lastRe < 400) return;
-            lastRe = n;
-            phase();
-            d.classList.add('dsx-re');
-            void d.offsetWidth;
-            d.classList.remove('dsx-re');
+            d.classList.remove('ds-lg-off', 'ds-hid', 'dsx-re');
         }
         document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') restart(); });
         window.addEventListener('pageshow', restart);
         window.addEventListener('focus', restart);
-        var beat = Date.now();
-        setInterval(function () {
-            var n = Date.now();
-            if (n - beat > 5000 && document.visibilityState === 'visible') restart();
-            beat = n;
-        }, 2000);
 
         /* 3) bam Login / Register: man hinh cho + chu + dau cham nhay */
         function showWait() {
@@ -727,6 +713,7 @@ html[data-theme="light"] .dsx-txt { color: var(--ds-h, #111827); }
     } catch (e) {}
 })();
 </script>
+<style id="ds-shine-head"><?php if (!$dspShineOn): ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important;animation:none!important}<?php else: ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important;animation:none!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root.ds-lg-off .ds-logo .ds-sw{display:block!important;visibility:visible!important;opacity:.52!important;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.52) 28%,#000 50%,rgba(0,0,0,.52) 72%,rgba(0,0,0,0) 92%)!important;mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.52) 28%,#000 50%,rgba(0,0,0,.52) 72%,rgba(0,0,0,0) 92%)!important;-webkit-transition:none!important;transition:none!important;-webkit-animation:ds-sw35 <?= dsp_fmt($dspSecs) ?>s linear infinite running!important;animation:ds-sw35 <?= dsp_fmt($dspSecs) ?>s linear infinite running!important;-webkit-animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root.ds-lg-off .ds-logo .ds-swi{opacity:1!important;-webkit-animation:ds-swi35 <?= dsp_fmt($dspSecs) ?>s linear infinite running!important;animation:ds-swi35 <?= dsp_fmt($dspSecs) ?>s linear infinite running!important;-webkit-animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-<?= dsp_fmt($dspSecs / 2) ?>s!important;animation-delay:-<?= dsp_fmt($dspSecs / 2) ?>s!important}<?php endif; ?></style>
 </head>
 <body>
 
@@ -1017,83 +1004,27 @@ html[data-theme="light"] .dsx-txt { color: var(--ds-h, #111827); }
 </script>
 <!--DS-SPINNER-BODY-BEGIN-->
 <script id="ds-logo-kick">
-/* spinner-v2-logo: giu lap loa logo on dinh.
-   - Chi khoi dong lai MOT lan khi quay lai web (hoac sau khi trang bi dong bang lau), co lam mo dan, khong khoi dong lai khi focus / cham / go chu.
-   - Chua tai xong thi shine an; thoat web thi an + tam dung (do ton GPU). */
 (function () {
-    try {
-        if (window.__dsLg2) return;
-        window.__dsLg2 = 1;
-        var root = document.documentElement, last = 0, tmA = 0, tmB = 0, hid = false, beat = Date.now();
-        function ensure() {
-            try {
-                document.querySelectorAll('.brand__logo, .ds-brandblock img:not(.ds-swi)').forEach(function (img) {
-                    var p = img.parentNode;
-                    if (!p) return;
-                    if (!p.classList || !p.classList.contains('ds-logo')) {
-                        var w = document.createElement('span'), sw = document.createElement('i'), c = document.createElement('img');
-                        w.className = 'ds-logo'; sw.className = 'ds-sw'; sw.setAttribute('aria-hidden', 'true');
-                        c.className = 'ds-swi'; c.alt = ''; c.setAttribute('aria-hidden', 'true'); c.src = img.currentSrc || img.src;
-                        p.insertBefore(w, img); w.appendChild(img); sw.appendChild(c); w.appendChild(sw); p = w;
-                    }
-                    var a = p.querySelector('.ds-sw');
-                    if (a && !p.querySelector('.ds-sw2')) { var b = a.cloneNode(true); b.className = 'ds-sw ds-sw2'; p.appendChild(b); }
-                    var src = img.currentSrc || img.src;
-                    p.querySelectorAll('.ds-swi').forEach(function (si) { if (src && si.src !== src) si.src = src; });
-                });
-            } catch (e) {}
-        }
-        function off() { root.classList.add('ds-lg-off'); }
-        function on() { root.classList.remove('ds-lg-off'); }
-        function restart() {
-            ensure();
-            var list = document.querySelectorAll('.ds-logo .ds-sw, .ds-logo .ds-swi');
-            Array.prototype.forEach.call(list, function (el) {
-                el.style.setProperty('animation', 'none', 'important');
-                el.style.setProperty('-webkit-animation', 'none', 'important');
-            });
-            void root.offsetWidth;
-            Array.prototype.forEach.call(list, function (el) {
-                el.style.removeProperty('animation');
-                el.style.removeProperty('-webkit-animation');
-            });
-        }
-        function comeback() {
-            var n = Date.now();
-            if (n - last < 1200) return;
-            last = n;
-            clearTimeout(tmA); clearTimeout(tmB);
-            off();
-            tmA = setTimeout(function () { restart(); tmB = setTimeout(on, 140); }, 260);
-        }
-        ensure();
-        if (document.readyState !== 'complete') {
-            off();
-            window.addEventListener('load', function () { ensure(); setTimeout(on, 250); });
-            setTimeout(on, 2500);
-        }
-        document.addEventListener('visibilitychange', function () {
-            if (document.visibilityState === 'hidden') { hid = true; off(); root.classList.add('ds-hid'); }
-            else { root.classList.remove('ds-hid'); if (hid) { hid = false; comeback(); } }
-        });
-        window.addEventListener('pagehide', function () { hid = true; off(); });
-        window.addEventListener('pageshow', function (e) { ensure(); if (e.persisted || hid) { hid = false; comeback(); } });
-        /* trang bi iOS dong bang lau ma khong ban su kien: khoang cach giua 2 lan dem > 9 giay => coi nhu vua quay lai */
-        setInterval(function () {
-            var n = Date.now();
-            if (n - beat > 9000 && document.visibilityState === 'visible') { comeback(); }
-            beat = n;
-        }, 3000);
-    } catch (e) {}
+    var root = document.documentElement;
+    function wake() {
+        try {
+            root.classList.remove('ds-lg-off', 'ds-hid', 'dsx-re');
+            var ls = document.querySelectorAll('.ds-logo .ds-sw, .ds-logo .ds-swi');
+            for (var i = 0; i < ls.length; i++) {
+                ls[i].style.removeProperty('animation');
+                ls[i].style.removeProperty('-webkit-animation');
+            }
+        } catch (e) {}
+    }
+    wake();
+    window.addEventListener('load', wake);
+    window.addEventListener('pageshow', wake);
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) { wake(); setTimeout(wake, 200); } });
+    setInterval(function () { if (!document.hidden) wake(); }, 2500);
 })();
 </script>
 <!--DS-SPINNER-BODY-END-->
-<script id="ds-shine-keep">(function(){var d=document.documentElement,t;function on(){d.classList.remove('ds-lg-off');}
-window.addEventListener('load',function(){setTimeout(on,300);});
-window.addEventListener('pageshow',function(){setTimeout(on,300);});
-document.addEventListener('visibilitychange',function(){if(!document.hidden)setTimeout(on,300);});
-window.addEventListener('scroll',function(){clearTimeout(t);t=setTimeout(on,600);},{passive:true});
-setTimeout(on,3500);})();</script>
-<style id="ds-shine-soft"><?php if (!$dspShineOn): ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important}<?php else: ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:not(.ds-lg-off) .ds-logo .ds-sw{opacity:.72!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi{-webkit-animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-<?= dsp_fmt($dspSecs / 2) ?>s!important;animation-delay:-<?= dsp_fmt($dspSecs / 2) ?>s!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{-webkit-animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;animation-duration:<?= dsp_fmt($dspSecs) ?>s!important;-webkit-animation-timing-function:linear!important;animation-timing-function:linear!important;-webkit-animation-iteration-count:infinite!important;animation-iteration-count:infinite!important;-webkit-animation-delay:var(--dsx-ph,0s)!important;animation-delay:var(--dsx-ph,0s)!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s2 .dsx-si{-webkit-animation-delay:var(--dsx-ph2,-<?= dsp_fmt($dspSecs / 2) ?>s)!important;animation-delay:var(--dsx-ph2,-<?= dsp_fmt($dspSecs / 2) ?>s)!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-si{opacity:.72!important}<?php endif; ?></style>
+<style id="ds-shine-soft"><?php if (!$dspShineOn): ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important;animation:none!important}<?php else: ?>html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .dsx-s{display:none!important;animation:none!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root.ds-lg-off .ds-logo .ds-sw{display:block!important;visibility:visible!important;opacity:.52!important;-webkit-transition:none!important;transition:none!important;-webkit-animation:ds-sw35 <?= dsp_fmt($dspSecs) ?>s linear infinite running!important;animation:ds-sw35 <?= dsp_fmt($dspSecs) ?>s linear infinite running!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-swi,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root.ds-lg-off .ds-logo .ds-swi{opacity:1!important;-webkit-animation:ds-swi35 <?= dsp_fmt($dspSecs) ?>s linear infinite running!important;animation:ds-swi35 <?= dsp_fmt($dspSecs) ?>s linear infinite running!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2,html:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root:root .ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-<?= dsp_fmt($dspSecs / 2) ?>s!important;animation-delay:-<?= dsp_fmt($dspSecs / 2) ?>s!important}<?php endif; ?></style>
 </body>
 </html>

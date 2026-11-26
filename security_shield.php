@@ -1918,7 +1918,7 @@ function sh_brand_logo_metrics()
     $scale    = 1.4;
     $skew     = 10.0;
     $shineOn  = true;
-    $shineSec = 1.35;
+    $shineSec = 1.9;
     $c        = isset($GLOBALS['conn']) && ($GLOBALS['conn'] instanceof mysqli) ? $GLOBALS['conn'] : null;
     if ($c === null) {
         try {
@@ -2387,10 +2387,9 @@ button{padding:0;font:inherit;color:inherit;background:none;border:0;cursor:poin
 .brand__mark{position:relative;display:block;height:var(--logo-h);margin-left:-6px;-webkit-transform:scale(var(--brand-logo-scale,1.4));transform:scale(var(--brand-logo-scale,1.4));-webkit-transform-origin:0 50%;transform-origin:0 50%;pointer-events:none}
 .ds-logo{position:relative;display:inline-block;height:var(--logo-h);line-height:0;overflow:hidden;contain:paint;-webkit-transform:translateZ(0) skewX(var(--logo-skew,10deg));transform:translateZ(0) skewX(var(--logo-skew,10deg));-webkit-transform-origin:50% 50%;transform-origin:50% 50%}
 .brand__logo{display:block;width:auto;height:var(--logo-h);min-height:var(--logo-h);max-height:var(--logo-h);max-width:260px;object-fit:contain}
-.ds-sw{position:absolute;top:0;left:0;display:var(--shine-disp,block);width:100%;height:100%;opacity:.72;pointer-events:none;transform-origin:50% 50%;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 4%,rgba(0,0,0,.66) 26%,#000 50%,rgba(0,0,0,.66) 74%,rgba(0,0,0,0) 96%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 4%,rgba(0,0,0,.66) 26%,#000 50%,rgba(0,0,0,.66) 74%,rgba(0,0,0,0) 96%);will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-sw35 var(--shine-dur,1.35s) linear infinite;animation:ds-sw35 var(--shine-dur,1.35s) linear infinite;-webkit-animation-delay:var(--dsx-ph,0s);animation-delay:var(--dsx-ph,0s)}
-.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;pointer-events:none;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:1;transform-origin:50% 50%;will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-swi35 var(--shine-dur,1.35s) linear infinite;animation:ds-swi35 var(--shine-dur,1.35s) linear infinite;-webkit-animation-delay:var(--dsx-ph,0s);animation-delay:var(--dsx-ph,0s)}
-.ds-sw2,.ds-sw2 .ds-swi{-webkit-animation-delay:var(--dsx-ph2,var(--shine-half,-.675s));animation-delay:var(--dsx-ph2,var(--shine-half,-.675s))}
-html.dsx-re .ds-sw,html.dsx-re .ds-swi{-webkit-animation:none!important;animation:none!important}
+.ds-sw{position:absolute;top:0;left:0;display:var(--shine-disp,block);width:100%;height:100%;opacity:.52;pointer-events:none;transform-origin:50% 50%;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.52) 28%,#000 50%,rgba(0,0,0,.52) 72%,rgba(0,0,0,0) 92%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.52) 28%,#000 50%,rgba(0,0,0,.52) 72%,rgba(0,0,0,0) 92%);will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-sw35 var(--shine-dur,1.9s) linear infinite running;animation:ds-sw35 var(--shine-dur,1.9s) linear infinite running;-webkit-animation-play-state:running!important;animation-play-state:running!important}
+.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;pointer-events:none;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:1;transform-origin:50% 50%;will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-swi35 var(--shine-dur,1.9s) linear infinite running;animation:ds-swi35 var(--shine-dur,1.9s) linear infinite running;-webkit-animation-play-state:running!important;animation-play-state:running!important}
+.ds-sw2,.ds-sw2 .ds-swi{-webkit-animation-delay:var(--shine-half,-.95s);animation-delay:var(--shine-half,-.95s)}
 @keyframes ds-sw35{from{transform:translate3d(-78%,0,0)}to{transform:translate3d(78%,0,0)}}
 @keyframes ds-swi35{from{transform:translate3d(78%,0,0)}to{transform:translate3d(-78%,0,0)}}
 .ds-hd{display:flex;align-items:center;gap:6px;flex:0 0 auto;position:relative;z-index:2}
@@ -2398,47 +2397,62 @@ html.dsx-re .ds-sw,html.dsx-re .ds-swi{-webkit-animation:none!important;animatio
 #ds-lang-btn{cursor:default}
 .ds-hbtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .sh-wrap{flex:1 0 auto;display:flex;flex-direction:column;width:100%}
-.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:14px 14px 8px}
-.panel{width:100%;max-width:376px;overflow:hidden;background:var(--ds-card);border:1px solid var(--ds-line);border-radius:20px;padding:18px 15px 15px;text-align:center}
-.anim-icon{width:44px;height:44px;margin:0 auto 7px;display:flex;align-items:center;justify-content:center;color:var(--ds-h)}
-.anim-icon svg{width:42px;height:42px;overflow:visible}
-.panel-title{margin:0 0 5px;font-size:18px;font-weight:800;letter-spacing:-.02em;line-height:1.22;color:var(--ds-h)}
-.cause{margin:0 0 11px;font-size:12.5px;line-height:1.45;color:var(--ds-p);overflow-wrap:anywhere}
+.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:18px 15px 12px}
+.panel{width:100%;max-width:404px;overflow:hidden;background:var(--ds-card);border:1px solid var(--ds-line);border-radius:22px;padding:22px 18px 18px;text-align:center}
+.anim-icon{width:48px;height:48px;margin:0 auto 9px;display:flex;align-items:center;justify-content:center;color:var(--ds-h)}
+.anim-icon svg{width:44px;height:44px;overflow:visible}
+.panel-title{margin:0 0 6px;font-size:19.5px;font-weight:800;letter-spacing:-.02em;line-height:1.22;color:var(--ds-h)}
+.cause{margin:0 0 13px;font-size:13px;line-height:1.48;color:var(--ds-p);overflow-wrap:anywhere}
 .cause strong{color:var(--ds-h);font-weight:650}
-.meta{text-align:left;margin-bottom:11px;border-top:1px solid var(--ds-line)}
-.meta-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;font-size:12.5px;border-bottom:1px solid var(--ds-line)}
+.meta{text-align:left;margin-bottom:12px;border-top:1px solid var(--ds-line)}
+.meta-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--ds-line)}
 .meta-row span:first-child{color:var(--ds-p);flex:none}
 .meta-row span:last-child{color:var(--ds-h);font-weight:600;text-align:right;min-width:0;overflow-wrap:anywhere}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;letter-spacing:.01em;font-variant-numeric:tabular-nums}
-.code-box{padding:8px 0;border-bottom:1px solid var(--ds-line)}
+.code-box{padding:9px 0;border-bottom:1px solid var(--ds-line)}
 .code-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:12.5px;color:var(--ds-p)}
-.copy-pill{flex:0 0 auto;height:24px;padding:0 9px;border-radius:8px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11px;font-weight:650;white-space:nowrap}
+.copy-pill{flex:0 0 auto;height:25px;padding:0 10px;border-radius:8px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11.5px;font-weight:650;white-space:nowrap}
 .copy-pill:active{opacity:.72}
-.code-val{display:block;width:100%;max-width:100%;padding:7px 9px;border-radius:10px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11px;font-weight:600;text-align:center;line-height:1.35;overflow-wrap:anywhere;word-break:break-all;user-select:all}
-.cta-btn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:40px;padding:0 13px;border-radius:12px;background:var(--cta-bg);color:var(--cta-fg);text-decoration:none;font-size:13px;font-weight:700;border:0;cursor:pointer;transition:opacity .15s}
+.code-val{display:block;width:100%;max-width:100%;padding:8px 10px;border-radius:10px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11.5px;font-weight:600;text-align:center;line-height:1.35;overflow-wrap:anywhere;word-break:break-all;user-select:all}
+.sec-note{margin:0 0 13px;padding:10px 12px;border-radius:13px;background:var(--ds-field);border:1px solid var(--ds-line);font-size:12px;line-height:1.45;color:var(--ds-p);text-align:left}
+.sec-note strong{color:var(--ds-h);font-weight:650}
+.cta-btn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:42px;padding:0 14px;border-radius:13px;background:var(--cta-bg);color:var(--cta-fg);text-decoration:none;font-size:13.5px;font-weight:700;border:0;cursor:pointer;transition:opacity .15s}
 .cta-btn:active{opacity:.86}
 .cta-btn:disabled,.cta-btn.is-sent{background:var(--ds-field);color:var(--ds-p);border:1px solid var(--ds-line2);cursor:default;opacity:1}
-.cta-btn--sub{margin-top:7px;height:38px;background:var(--ds-field);color:var(--ds-h);border:1px solid var(--ds-line2);font-size:12.5px;font-weight:650}
+.cta-btn--sub{margin-top:8px;height:40px;background:var(--ds-field);color:var(--ds-h);border:1px solid var(--ds-line2);font-size:13px;font-weight:650}
 .cta-btn--sub svg{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 /* Exact iosmods.xyz Key-Input Box Style (16px real input font => ZERO iOS zoom, ZERO modal popup zoom!) */
-.ky-card{margin:10px 0 3px;padding:12px 12px 11px;background:var(--ds-bg);border:1px solid var(--ds-line2);border-radius:16px;text-align:left}
+.ky-card{margin:10px 0 3px;padding:13px 13px 12px;background:var(--ds-bg);border:1px solid var(--ds-line2);border-radius:16px;text-align:left}
 .ky-title{margin:0 0 8px;font-size:11.5px;font-weight:750;letter-spacing:.03em;text-transform:uppercase;color:var(--ds-link)}
 .ky-field{display:block;width:114.2857%;max-width:none;height:44px;margin:0 0 -1px;padding:0 14px;font-size:16px!important;color:var(--ds-h);background:var(--ds-field);border:1px solid var(--ds-line2);border-radius:13px;outline:0;-webkit-appearance:none;appearance:none;-webkit-transform:scale(.875);transform:scale(.875);-webkit-transform-origin:left top;transform-origin:left top;transition:border-color .15s}
 .ky-field::placeholder{color:var(--ds-p);opacity:.78;font-weight:400;letter-spacing:normal}
 .ky-field:focus{border-color:var(--blue)}
-.ky-err{margin:4px 0 6px;font-size:12px;line-height:1.35;color:#ff6961}
+.ky-err{margin:4px 0 6px;font-size:12px;line-height:1.38;color:#ff6961;opacity:1;transition:opacity .22s ease}
+.ky-err.is-fading{opacity:0}
 .ky-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px}
 .ky-link{font-size:12.5px;font-weight:600;color:var(--ds-link);background:none;border:0;padding:4px 2px}
 .ky-btn{height:35px;padding:0 18px;border-radius:11px;background:var(--blue);color:#ffffff;font-size:12.5px;font-weight:700;border:0}
 .ky-btn:disabled{opacity:.55;cursor:default}
-.ios-inline{margin:10px 0 3px;padding:13px 12px;border-radius:16px;background:var(--ds-bg);border:1px solid var(--ds-line2);display:flex;align-items:center;gap:11px;text-align:left}
+.ios-inline{margin:10px 0 3px;padding:13px 12px;border-radius:16px;background:var(--ds-bg);border:1px solid var(--ds-line2);display:flex;align-items:center;gap:11px;text-align:left;opacity:1;transition:opacity .26s ease}
+.ios-inline.is-fading{opacity:0}
 .ios-ok-svg{flex:0 0 34px;width:34px;height:34px;color:var(--ds-h);overflow:visible}
 .ios-ok-ring{stroke:currentColor;stroke-width:2.5;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;animation:sh-draw .38s cubic-bezier(.22,.61,.36,1) .03s forwards}
 .ios-ok-tick{stroke:currentColor;stroke-width:3.1;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;animation:sh-draw .28s cubic-bezier(.22,.61,.36,1) .28s forwards}
 .ios-inline__b{flex:1 1 0;min-width:0}
 .ios-inline__t{font-size:13px;font-weight:750;color:var(--ds-h);line-height:1.25}
 .ios-inline__p{margin-top:2px;font-size:12px;color:var(--ds-p);line-height:1.35}
-.site-footer{width:100%;max-width:420px;margin:10px auto 0;padding:12px 16px 6px;border-top:1px solid var(--ds-line);text-align:center;font-size:11.5px;font-weight:600;text-transform:none;line-height:1.35;color:var(--ds-p)}
+.site-about{flex:0 0 auto;width:100%;margin:18px 0 0;padding:22px 16px 0;border-top:1px solid var(--ds-line)}
+.ds-docs{max-width:404px;margin:0 auto 20px;text-align:left}
+.ds-docs__blk{display:block;margin:0 0 18px}
+.ds-docs__h{display:flex;align-items:center;gap:8px;margin:0 0 7px;font-size:13.5px;font-weight:700;line-height:1.25;letter-spacing:.03em;text-transform:uppercase;color:var(--ds-h)}
+.ds-docs__h svg{flex:0 0 auto;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ds-docs__h--brand{margin-bottom:6px;font-size:16.5px;letter-spacing:-.01em;text-transform:none}
+.ds-docs__p{font-size:13px;font-weight:400;line-height:1.45;color:var(--ds-mute)}
+.ds-docs>.ds-docs__h{margin:0 0 5px}
+.ds-doclink{display:block;padding:5px 0;font-size:13px;font-weight:400;line-height:1.3;text-decoration:none;color:var(--ds-mute)}
+.ds-doclink:active{opacity:.6}
+.ds-doclink:last-child{padding-bottom:0}
+.site-footer{width:100%;max-width:404px;margin:0 auto;padding:12px 16px 6px;border-top:1px solid var(--ds-line);text-align:center;font-size:11.5px;font-weight:600;text-transform:none;line-height:1.35;color:var(--ds-p)}
 .site-footer a{color:var(--blue);text-decoration:none;font-weight:600}
 .site-footer__heart{display:inline-block;width:12px;height:12px;vertical-align:-2px;color:#ff3b30;animation:sh-beat .6s infinite}
 .site-footer__year{display:block;margin-top:2px;font-weight:400;color:var(--ds-p)}
@@ -2482,9 +2496,6 @@ CSS;
 function sh_header_html($e)
 {
     $logo = sh_logo_url();
-    $m    = sh_brand_logo_metrics();
-    $pMs  = max(800, (int) round(((float) $m['shine_sec']) * 1000));
-    $hMs  = (int) round($pMs / 2);
     return '<header class="site-header">'
         . '<a class="brand brand--logo" href="/" data-sh-lock="1" aria-label="iosmods">'
         . '<span class="brand__mark">'
@@ -2502,13 +2513,10 @@ function sh_header_html($e)
         . '</header>'
         . '<script>(function(){'
         . 'var r=document.documentElement;'
-        . 'function phase(){try{var P=' . $pMs . ',q=Date.now()%P;r.style.setProperty("--dsx-ph",(-q/1000)+"s");r.style.setProperty("--dsx-ph2",(-((q+' . $hMs . ')%P)/1000)+"s");}catch(e){}}'
-        . 'phase();'
-        . 'var lastRe=0,beat=Date.now();'
-        . 'function restart(){var n=Date.now();if(n-lastRe<500)return;lastRe=n;phase();r.classList.add("dsx-re");void r.offsetWidth;r.classList.remove("dsx-re");}'
-        . 'document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")restart();});'
-        . 'window.addEventListener("pageshow",restart);window.addEventListener("focus",restart);'
-        . 'setInterval(function(){var n=Date.now();if(n-beat>3000&&document.visibilityState==="visible")restart();beat=n;},1200);'
+        . 'function wake(){try{r.classList.remove("ds-lg-off","ds-hid","dsx-re");var ls=document.querySelectorAll(".ds-logo .ds-sw, .ds-logo .ds-swi");for(var i=0;i<ls.length;i++){ls[i].style.removeProperty("animation");ls[i].style.removeProperty("-webkit-animation");}}catch(e){}}'
+        . 'wake();window.addEventListener("load",wake);window.addEventListener("pageshow",wake);window.addEventListener("focus",wake);'
+        . 'document.addEventListener("visibilitychange",function(){if(!document.hidden){wake();setTimeout(wake,220);}});'
+        . 'setInterval(function(){if(!document.hidden)wake();},2500);'
         . 'var tb=document.getElementById("ds-theme-btn");'
         . 'var M=\'<svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>\','
         . 'S=\'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4"/></svg>\';'
@@ -2519,7 +2527,22 @@ function sh_header_html($e)
 
 function sh_about_and_footer_html()
 {
-    return '<footer class="site-footer">Made with '
+    return '<section class="site-about">'
+        . '<div class="ds-docs" id="ds-docs">'
+        . '<div class="ds-docs__blk">'
+        . '<h3 class="ds-docs__h ds-docs__h--brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M7 10v4M5 12h4M16 11h.01M18 13h.01"/></svg><span>IOSMODS</span></h3>'
+        . '<p class="ds-docs__p">Keys and tools for iOS in one place. Pick a package, activate a key, open a tool.</p>'
+        . '</div>'
+        . '<div class="ds-docs__blk">'
+        . '<h3 class="ds-docs__h"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M7 21h10M5 7h14M5 7l-3 7a3.5 3.5 0 0 0 6 0zM19 7l-3 7a3.5 3.5 0 0 0 6 0z"/></svg><span>Legal disclaimer</span></h3>'
+        . '<p class="ds-docs__p">Tools are provided for testing and entertainment purposes only. You are responsible for how you use them.</p>'
+        . '</div>'
+        . '<h3 class="ds-docs__h"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg><span>Documents</span></h3>'
+        . '<a class="ds-doclink" href="/egoyesfdemnt/docs?doc=privacy" data-sh-lock="1">Privacy Policy</a>'
+        . '<a class="ds-doclink" href="/egoyesfdemnt/docs?doc=terms" data-sh-lock="1">Terms of Service</a>'
+        . '</div>'
+        . '</section>'
+        . '<footer class="site-footer">Made with '
         . '<svg class="site-footer__heart" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
         . ' by <a href="/" data-sh-lock="1">iosmods</a><span class="site-footer__year">@2024</span></footer>'
         . '<nav class="ds-nav" aria-label="Main">'
@@ -2603,12 +2626,15 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
         </svg>
       </div>
       <h1 class="panel-title" id="sh-unlk-title">Automatically Unlocked</h1>
-      <p class="cause">Your IP address has been unlocked. Tap <strong>Got it</strong> below to continue to iosmods.xyz.</p>
+      <p class="cause">Your IP address and security restriction have been lifted. Tap <strong>Got it</strong> below to continue to iosmods.xyz normally.</p>
 
       <div class="meta">
         <div class="meta-row"><span>Status</span><span>Unlocked</span></div>
+        <div class="meta-row"><span>Access</span><span>Ready to Continue</span></div>
         <div class="meta-row"><span>IP Address</span><span class="mono"><?= $e($ip) ?></span></div>
       </div>
+
+      <div class="sec-note"><strong>Security Notice:</strong> Normal browsing is restored once confirmed. Please keep VPN, proxy, and browser automation scripts turned off while using iosmods.xyz.</div>
 
       <form method="post" action="/asadnsrdecsb/home?__sh_ack_unlock=1" id="sh-ack-form">
         <input type="hidden" name="lid" value="<?= $e($lid) ?>">
@@ -2741,13 +2767,15 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         </svg>
       </div>
       <h1 class="panel-title" id="sh-title"><?= $e($heading) ?></h1>
-      <p class="cause" id="sh-cause"><strong>Reason:</strong> <?= $e($reasonEn) ?></p>
+      <p class="cause" id="sh-cause"><strong>Reason:</strong> <?= $e($reasonEn) ?> <?= $isVpn ? 'Turn off your VPN or proxy and wait for the timer below to resume normal access.' : ($isTemp ? 'Please wait for the countdown below or verify your session if this happened by mistake.' : 'Access from this connection remains locked until verified by @devios_bot or an Administrator.') ?></p>
 
       <div class="meta">
 <?php if ($isTemp) { ?>
+        <div class="meta-row"><span>Status</span><span><?= $isVpn ? 'Temporary VPN Lock (2m)' : 'Temporarily Locked' ?></span></div>
         <div class="meta-row"><span>Unlock In</span><span class="mono" id="sh-cd" data-left="<?= (int) $left ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span></div>
 <?php } else { ?>
         <div class="meta-row"><span>Status</span><span>Locked (Bot / Admin Only)</span></div>
+        <div class="meta-row"><span>Resolution</span><span>Verification Required</span></div>
 <?php } ?>
         <div class="meta-row"><span>IP Address</span><span class="mono"><?= $e($ip) ?><?= $streamIp !== '' ? ' · ' . $e($streamIp) : '' ?></span></div>
         <div class="code-box">
@@ -2759,6 +2787,8 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         </div>
       </div>
 
+      <div class="sec-note"><?php if ($isVpn) { ?><strong>Security Check:</strong> Disable 1.1.1.1 WARP, VPN apps, or proxy extensions first. Your connection will unlock automatically once the 2-minute timer completes.<?php } elseif ($isTemp) { ?><strong>Security Check:</strong> Automated protection paused rapid repeated requests from this IP. Wait for the countdown above or copy your Verification Code to request early review.<?php } else { ?><strong>Security Check:</strong> Reloading or clicking navigation links stays locked while active. Copy your Verification Code above to verify via <strong>@devios_bot</strong> or submit one unlock request below.<?php } ?></div>
+
 <?php if ($sentOnce) { ?>
       <button type="button" class="cta-btn is-sent" id="sh-open-appeal" disabled>Sent to Admin · Please wait a few minutes</button>
 <?php } else { ?>
@@ -2767,7 +2797,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
 
       <div class="ky-card" id="sh-ap-box" hidden>
         <div class="ky-title">Unlock Request · 1 Time Only</div>
-        <input type="text" class="ky-field" id="sh-ap-user" maxlength="60" value="<?= $e($knownUsr) ?>" placeholder="Website account" autocomplete="username">
+        <input type="text" class="ky-field" id="sh-ap-user" maxlength="60" value="<?= $e($knownUsr) ?>" placeholder="Website account (if any)" autocomplete="username">
         <input type="text" class="ky-field" id="sh-ap-code" maxlength="40" placeholder="Enter verification code (IMX-...)" autocomplete="off" autocapitalize="characters" spellcheck="false">
         <input type="text" class="ky-field" id="sh-ap-msg" maxlength="350" placeholder="Describe why you were locked..." autocomplete="off">
         <p class="ky-err" id="sh-ap-err" hidden></p>
@@ -2850,6 +2880,35 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       iosBox   = document.getElementById('sh-ios-sent'),
       iosMsg   = document.getElementById('sh-ios-msg');
 
+  var errTimer1 = 0, errTimer2 = 0, sentTimer1 = 0, sentTimer2 = 0;
+
+  function hideErrNow() {
+    clearTimeout(errTimer1);
+    clearTimeout(errTimer2);
+    if (!errEl) return;
+    errEl.classList.remove('is-fading');
+    errEl.hidden = true;
+    errEl.textContent = '';
+  }
+
+  function showErr(txt) {
+    if (!errEl) return;
+    clearTimeout(errTimer1);
+    clearTimeout(errTimer2);
+    errEl.textContent = txt;
+    errEl.classList.remove('is-fading');
+    errEl.hidden = false;
+    errTimer1 = setTimeout(function(){
+      if (!errEl || errEl.hidden) return;
+      errEl.classList.add('is-fading');
+      errTimer2 = setTimeout(hideErrNow, 230);
+    }, 3000);
+  }
+
+  [uIn, cIn, mIn].forEach(function(inp){
+    if (inp) inp.addEventListener('input', function(){ if (errEl && !errEl.hidden) hideErrNow(); });
+  });
+
   function lockButtonAsSent() {
     if (!openBtn) return;
     openBtn.disabled = true;
@@ -2865,16 +2924,28 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
 
   function showIosCheckmark(txt) {
     if (!iosBox) return;
+    clearTimeout(sentTimer1);
+    clearTimeout(sentTimer2);
     if (iosMsg && txt) iosMsg.textContent = txt;
     var svg = iosBox.querySelector('.ios-ok-svg');
     if (svg) { var cl = svg.cloneNode(true); svg.parentNode.replaceChild(cl, svg); }
+    iosBox.classList.remove('is-fading');
     iosBox.hidden = false;
+    sentTimer1 = setTimeout(function(){
+      if (!iosBox || iosBox.hidden) return;
+      iosBox.classList.add('is-fading');
+      sentTimer2 = setTimeout(function(){
+        if (!iosBox) return;
+        iosBox.classList.remove('is-fading');
+        iosBox.hidden = true;
+      }, 270);
+    }, 5000);
   }
 
   if (openBtn && apBox) {
     openBtn.addEventListener('click', function(){
       if (openBtn.disabled) return;
-      if (errEl) errEl.hidden = true;
+      hideErrNow();
       apBox.hidden = !apBox.hidden;
       if (!apBox.hidden) {
         if (uIn && !uIn.value) uIn.focus(); else if (cIn) cIn.focus();
@@ -2882,7 +2953,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     });
   }
   if (canBtn && apBox) {
-    canBtn.addEventListener('click', function(){ apBox.hidden = true; });
+    canBtn.addEventListener('click', function(){ hideErrNow(); apBox.hidden = true; });
   }
 
   if (sendBtn) {
@@ -2892,13 +2963,13 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       var normCode = rawCode.replace(/[^A-Z0-9]/gi, '').toUpperCase();
       var msg      = (mIn ? mIn.value : '').trim();
       if (!normCode || normCode !== NORM_CASE) {
-        if (errEl) { errEl.hidden = false; errEl.textContent = 'Please copy and enter the exact Verification Code (IMX-...) shown above.'; }
+        showErr('Invalid verification code. Please copy the exact code (IMX-...) shown above.');
         if (apBox) { apBox.classList.remove('is-shake'); void apBox.offsetWidth; apBox.classList.add('is-shake'); }
         if (cIn) cIn.focus();
         return;
       }
       if (msg.length < 3) {
-        if (errEl) { errEl.hidden = false; errEl.textContent = 'Please briefly describe why you were locked.'; }
+        showErr('Please briefly describe why you were locked.');
         if (mIn) mIn.focus();
         return;
       }
@@ -2925,12 +2996,12 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         } else {
           sendBtn.disabled = false;
           sendBtn.textContent = 'Submit';
-          if (errEl) { errEl.hidden = false; errEl.textContent = (j && j.msg) ? j.msg : 'Unable to submit request right now.'; }
+          showErr((j && j.msg) ? j.msg : 'Unable to submit request right now.');
         }
       }).catch(function(){
         sendBtn.disabled = false;
         sendBtn.textContent = 'Submit';
-        if (errEl) { errEl.hidden = false; errEl.textContent = 'Network error. Please try again.'; }
+        showErr('Network error. Please try again.');
       });
     });
   }
