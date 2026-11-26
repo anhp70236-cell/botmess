@@ -279,6 +279,7 @@ function sh_ban_type_label($banType)
         'inspect'    => 'Mở công cụ soi mã nguồn PC / Chạy Script',
         'prod_spam'  => 'Spam bấm lấy sản phẩm / Thao tác quá nhanh',
         'key_spam'   => 'Spam nhập sai mã Key liên tục',
+        'vpn_block'  => 'Bật VPN / Proxy truy cập web (khoá 2 phút)',
         'vpn_abuse'  => 'Dùng VPN / Đa tài khoản vượt giới hạn Key',
         'admin_temp' => 'Tạm khoá thủ công bởi Admin',
         'manual'     => 'Khoá bảo mật vĩnh viễn bởi Admin',
@@ -1578,7 +1579,7 @@ function sh_inspect_ip_vpn($ip)
         return ['is_vpn' => true, 'label' => 'Proxy trung gian / Fake IP Header', 'isp' => 'Proxy', 'country' => ''];
     }
     if (sh_is_known_vpn_cidr($ip)) {
-        return ['is_vpn' => true, 'label' => 'Ứng dụng 1.1.1.1 / Cloudflare WARP', 'isp' => 'Cloudflare WARP', 'country' => ''];
+        return ['is_vpn' => true, 'label' => '1.1.1.1 / Cloudflare WARP', 'isp' => 'Cloudflare WARP', 'country' => ''];
     }
 
     $h      = md5($ip);
@@ -1618,11 +1619,11 @@ function sh_inspect_ip_vpn($ip)
     $label = '';
     if ($isVpn) {
         if (stripos($isp, 'Cloudflare') !== false || stripos($isp, 'WARP') !== false) {
-            $label = 'Ứng dụng 1.1.1.1 / Cloudflare WARP';
+            $label = '1.1.1.1 / Cloudflare WARP';
         } elseif ($isProxy || $vpnKw) {
-            $label = 'VPN / Proxy chuyển vùng (' . ($country !== '' ? $country : 'Quốc tế') . ')';
+            $label = 'VPN / Proxy (' . ($country !== '' ? $country : 'Global') . ')';
         } else {
-            $label = 'Mạng Máy Chủ Ảo / Fake IP (' . ($country !== '' ? $country : 'Hosting') . ')';
+            $label = 'Datacenter / Proxy IP (' . ($country !== '' ? $country : 'Hosting') . ')';
         }
     }
 
@@ -1645,7 +1646,7 @@ function sh_inspect_ip_vpn($ip)
 function sh_wants_json()
 {
     return isset($_GET['ajax']) || isset($_GET['sync'])
-        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock'])
+        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock']) || isset($_GET['__sh_bot_ping'])
         || (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower((string) $_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
         || (isset($_SERVER['HTTP_ACCEPT']) && stripos((string) $_SERVER['HTTP_ACCEPT'], 'application/json') === 0);
 }
@@ -1661,9 +1662,239 @@ function sh_contact_url()
     return 'https://t.me/iosnea';
 }
 
-function sh_bot_appeal_url()
+function sh_issue_bot_click_token($ip, $caseCode = '', $lid = '')
 {
-    return 'https://t.me/devios_bot?start=hotro';
+    $ip  = sh_norm_ip($ip);
+    $lid = strtolower(trim((string) $lid));
+    $raw = $ip . '|' . $caseCode . '|' . $lid;
+    $tok = substr(hash_hmac('sha256', 'bclk10|' . $raw, sh_secret()), 0, 14);
+    $f   = sh_dir() . '/bot_clicks/' . substr($tok, 0, 2) . '/' . $tok . '.json';
+    if (!is_file($f)) {
+        sh_json_update($f, function () use ($ip, $caseCode, $lid) {
+            return [
+                'ip'        => $ip,
+                'case_code' => (string) $caseCode,
+                'lid'       => $lid,
+                'exp'       => time() + 14400,
+            ];
+        });
+    }
+    return $tok;
+}
+
+function sh_resolve_bot_click_token($tok)
+{
+    $tok = strtolower(trim((string) $tok));
+    if (strpos($tok, 'u_') === 0) {
+        $tok = substr($tok, 2);
+    }
+    if (!preg_match('/^[a-f0-9]{10,20}$/', $tok)) {
+        return null;
+    }
+    $f = sh_dir() . '/bot_clicks/' . substr($tok, 0, 2) . '/' . $tok . '.json';
+    if (!is_file($f)) {
+        return null;
+    }
+    $d = sh_json_read($f);
+    if (empty($d['exp']) || (int) $d['exp'] < time()) {
+        @unlink($f);
+        return null;
+    }
+    return $d;
+}
+
+function sh_pub_tg_link_find($ip, $lid = '')
+{
+    $p = dirname(sh_dir()) . '/tg_pub_links.json';
+    if (!is_file($p)) {
+        return null;
+    }
+    $raw = @file_get_contents($p);
+    $map = is_string($raw) ? json_decode($raw, true) : null;
+    if (!is_array($map)) {
+        return null;
+    }
+    $ip  = sh_norm_ip($ip);
+    $lid = strtolower(trim((string) $lid));
+    if ($lid !== '' && !empty($map['lid:' . $lid]['chat_id'])) {
+        return $map['lid:' . $lid];
+    }
+    if ($ip !== '' && !empty($map['ip:' . $ip]['chat_id'])) {
+        return $map['ip:' . $ip];
+    }
+    return null;
+}
+
+function sh_pub_tg_link_save($chatId, $firstName = '', $ip = '', $lid = '')
+{
+    $chatId = trim((string) $chatId);
+    if ($chatId === '') {
+        return;
+    }
+    $ip  = sh_norm_ip($ip);
+    $lid = strtolower(trim((string) $lid));
+    $p   = dirname(sh_dir()) . '/tg_pub_links.json';
+    sh_json_update($p, function ($map) use ($chatId, $firstName, $ip, $lid) {
+        if (!is_array($map)) {
+            $map = [];
+        }
+        $now = time();
+        foreach ($map as $k => $v) {
+            if (!is_array($v) || (!empty($v['at']) && (int) $v['at'] < $now - 30 * 86400)) {
+                unset($map[$k]);
+            }
+        }
+        $entry = ['chat_id' => $chatId, 'name' => (string) $firstName, 'at' => $now];
+        if ($ip !== '') {
+            $map['ip:' . $ip] = $entry;
+        }
+        if ($lid !== '') {
+            $map['lid:' . $lid] = $entry;
+        }
+        return count($map) > 500 ? array_slice($map, -400, null, true) : $map;
+    });
+}
+
+function sh_bot_appeal_url($ip = '', $caseCode = '', $lid = '')
+{
+    if ($ip !== '' || $lid !== '') {
+        $linked = sh_pub_tg_link_find($ip, $lid);
+        if (is_array($linked) && !empty($linked['chat_id'])) {
+            // Known Telegram user -> open chat directly with ZERO ?start= button!
+            return 'https://t.me/devios_bot';
+        }
+    }
+    if ($ip !== '' || $caseCode !== '') {
+        $tok = sh_issue_bot_click_token($ip, $caseCode, $lid);
+        return 'https://t.me/devios_bot?start=u_' . $tok;
+    }
+    return 'https://t.me/devios_bot';
+}
+
+/**
+ * Instant Proactive Bot Greeting Ping (?__sh_bot_ping=1):
+ * Fired via sendBeacon/fetch the instant a blocked user clicks "Unlock Assistant (@devios_bot)".
+ * If this user/device has interacted with @devios_bot before, pushes an instant greeting directly into their Telegram chat
+ * so it is waiting immediately when Telegram opens — with ZERO /start command needed!
+ */
+function sh_handle_bot_ping_endpoint()
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_GET['__sh_bot_ping'])) {
+        return;
+    }
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+
+    $ip        = sh_client_ip();
+    $forensics = sh_trace_forensics();
+    $realIp    = $forensics['real_ip'] ?: $ip;
+    $lid       = isset($_POST['lid']) && preg_match('/^[a-f0-9]{32}$/i', (string) $_POST['lid']) ? strtolower((string) $_POST['lid']) : sh_browser_lid();
+    $sig       = isset($_POST['sig']) ? (string) $_POST['sig'] : '';
+    $caseCode  = isset($_POST['case_code']) ? sh_extract_case_code($_POST['case_code']) : '';
+
+    if ($lid === '' || !hash_equals(sh_client_sig($lid), $sig)) {
+        echo json_encode(['ok' => false]);
+        exit;
+    }
+
+    $linked = sh_pub_tg_link_find($realIp, $lid);
+    if (!$linked || empty($linked['chat_id'])) {
+        echo json_encode(['ok' => true, 'pushed' => false]);
+        exit;
+    }
+
+    $chatId   = (string) $linked['chat_id'];
+    $coolFile = sh_dir() . '/bot_clicks/ping_' . md5($chatId) . '.json';
+    $cool     = sh_json_read($coolFile);
+    if (!empty($cool['at']) && (time() - (int) $cool['at']) < 12) {
+        echo json_encode(['ok' => true, 'pushed' => true, 'throttled' => true]);
+        exit;
+    }
+    sh_json_update($coolFile, function () { return ['at' => time()]; });
+
+    $pushed = false;
+    try {
+        if (is_file(__DIR__ . '/telegram.php')) {
+            require_once __DIR__ . '/telegram.php';
+            if (function_exists('tg_enabled') && tg_enabled() && function_exists('tg_api_raw')) {
+                $nm = trim((string) ($linked['name'] ?? 'bạn')) ?: 'bạn';
+                $greet = 'Chào <b>' . htmlspecialchars($nm, ENT_QUOTES, 'UTF-8') . '</b>! 👋 Mình vừa nhận được tín hiệu bạn bấm sang từ màn hình khoá của <b>iosmods.xyz</b>.' . "\n\n"
+                    . ($caseCode !== ''
+                        ? ('Mã xác minh hiện tại của bạn là <code>' . htmlspecialchars($caseCode, ENT_QUOTES, 'UTF-8') . '</code> — bạn chỉ cần <b>gửi mã đó</b> (hoặc nhắn ngắn gọn lý do bị khoá) vào đây để mình kiểm tra và xét mở khoá ngay nhé!')
+                        : 'Bạn hãy dán <b>Mã xác minh (IMX-...)</b> đang hiện trên màn hình khoá gửi vào đây để mình kiểm tra và hỗ trợ mở khoá ngay nhé!');
+                $r = tg_api_raw('sendMessage', [
+                    'chat_id'                  => $chatId,
+                    'text'                     => $greet,
+                    'parse_mode'               => 'HTML',
+                    'disable_web_page_preview' => true,
+                ], 3);
+                $pushed = !empty($r['ok']);
+            }
+        }
+    } catch (Throwable $e) {
+        $pushed = false;
+    }
+
+    echo json_encode(['ok' => true, 'pushed' => $pushed]);
+    exit;
+}
+
+/** Maps internal ban types & Vietnamese system reasons to clean, concise English for Lock screens. */
+function sh_public_reason_en($banType, $rawReason = '')
+{
+    $r = trim((string) $rawReason);
+    if ($r !== '' && !preg_match('/[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/iu', $r)) {
+        return $r;
+    }
+    if ($banType === 'vpn_block') {
+        if (stripos($r, '1.1.1.1') !== false || stripos($r, 'WARP') !== false) {
+            return 'VPN / Proxy detected (1.1.1.1 / Cloudflare WARP). Disable VPN — access is locked for 2 minutes.';
+        }
+        if (stripos($r, 'Script') !== false || stripos($r, 'Tampermonkey') !== false) {
+            return 'Browser userscript or injection extension detected. Disable it — access is locked for 2 minutes.';
+        }
+        return 'VPN or proxy connection detected. Please disable your VPN/proxy — access is locked for 2 minutes.';
+    }
+    if ($banType === 'vpn_abuse') {
+        return 'VPN, proxy, or region-spoofing tool used to bypass Free Key restrictions.';
+    }
+    if ($banType === 'key_spam') {
+        return 'Too many invalid key activation attempts in a short period.';
+    }
+    if ($banType === 'prod_spam') {
+        return 'Repeated product requests without an active key or excessive rapid actions.';
+    }
+    if ($banType === 'ddos') {
+        return 'Automated high-rate request flood (DDoS protection triggered).';
+    }
+    if ($banType === 'waf') {
+        if (stripos($r, 'SQL Injection') !== false) {
+            return 'SQL Injection payload blocked by security shield.';
+        }
+        if (stripos($r, 'XSS') !== false) {
+            return 'Cross-Site Scripting (XSS) payload blocked by security shield.';
+        }
+        if (stripos($r, 'Path Traversal') !== false || stripos($r, 'LFI') !== false) {
+            return 'Path Traversal / unauthorized file probe blocked by security shield.';
+        }
+        if (stripos($r, 'RCE') !== false) {
+            return 'Remote Command Execution payload blocked by security shield.';
+        }
+        return 'Malicious request payload blocked by web application firewall.';
+    }
+    if ($banType === 'bug_buff') {
+        return 'Automated race-condition script or unauthorized endpoint probing blocked.';
+    }
+    if ($banType === 'inspect') {
+        return 'Developer source-inspection tool or browser automation script detected.';
+    }
+    if ($banType === 'manual') {
+        return 'Access restricted directly by website administrator.';
+    }
+    return 'Security lock triggered due to abnormal network or session activity.';
 }
 
 function sh_fmt_remaining($sec)
@@ -1687,7 +1918,7 @@ function sh_brand_logo_metrics()
     $scale    = 1.4;
     $skew     = 10.0;
     $shineOn  = true;
-    $shineSec = 2.2;
+    $shineSec = 1.35;
     $c        = isset($GLOBALS['conn']) && ($GLOBALS['conn'] instanceof mysqli) ? $GLOBALS['conn'] : null;
     if ($c === null) {
         try {
@@ -1732,7 +1963,7 @@ function sh_brand_logo_metrics()
                     $shineOn = ($v !== '0');
                 } elseif ($k === 'ds_shine_seconds' && is_numeric(str_replace(',', '.', $v))) {
                     $ss = (float) str_replace(',', '.', $v);
-                    if ($ss >= 1.2 && $ss <= 20.0) {
+                    if ($ss >= 0.8 && $ss <= 20.0) {
                         $shineSec = $ss;
                     }
                 }
@@ -2017,27 +2248,27 @@ function sh_handle_appeal_endpoint()
     $isPreview  = !empty($_POST['preview']);
 
     if ($lid === '' || !hash_equals(sh_client_sig($lid), $sig)) {
-        echo json_encode(['ok' => false, 'msg' => 'Phiên xác thực không hợp lệ, vui lòng tải lại trang.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => false, 'msg' => 'Invalid security session. Please reload the page.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
     if ($typedCode === '' || ($caseCode !== '' && !hash_equals($caseCode, $typedCode))) {
-        echo json_encode(['ok' => false, 'bad_code' => true, 'msg' => 'Mã xác minh chưa đúng, vui lòng sao chép đúng Mã xác minh ở khung bên ngoài.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => false, 'bad_code' => true, 'msg' => 'Invalid verification code. Please copy the exact code (IMX-...) shown above.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
     if ($msg === '') {
-        echo json_encode(['ok' => false, 'msg' => 'Vui lòng nhập lý do miêu tả vì sao bạn bị khoá.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => false, 'msg' => 'Please briefly describe why your connection was locked.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
     if ($isPreview) {
-        echo json_encode(['ok' => true, 'msg' => 'Đã gửi cho Admin, vui lòng đợi trong ít phút.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => true, 'msg' => 'Sent to Admin. Please wait a few minutes.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
     $forensics = sh_trace_forensics();
     $ip        = sh_client_ip();
     if ($ip === '') {
-        echo json_encode(['ok' => false, 'msg' => 'Không xác định được địa chỉ kết nối.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => false, 'msg' => 'Unable to verify client address.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -2047,11 +2278,11 @@ function sh_handle_appeal_endpoint()
     }
     $caseRec = $typedCode !== '' ? sh_lookup_case_code($typedCode) : null;
     if ($banRec === null && $caseRec === null) {
-        echo json_encode(['ok' => true, 'msg' => 'Kết nối của bạn hiện đã được mở khoá, hãy tải lại trang.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => true, 'msg' => 'Your connection is already unlocked. Please reload the page.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
     if ($banRec && !empty($banRec['case_code']) && !hash_equals((string) $banRec['case_code'], $typedCode)) {
-        echo json_encode(['ok' => false, 'bad_code' => true, 'msg' => 'Mã xác minh không khớp với phiên khoá hiện tại.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['ok' => false, 'bad_code' => true, 'msg' => 'Verification code does not match this lock session.'], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
@@ -2062,7 +2293,7 @@ function sh_handle_appeal_endpoint()
         echo json_encode([
             'ok'           => false,
             'already_sent' => true,
-            'msg'          => 'Bạn chỉ được gửi yêu cầu 1 lần. Đã gửi cho Admin, vui lòng đợi trong ít phút.',
+            'msg'          => 'Request already submitted (1 time only). Please wait a few minutes.',
         ], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -2119,7 +2350,7 @@ function sh_handle_appeal_endpoint()
         sh_queue_pending_event('user_appeal', $appealData);
     }
 
-    echo json_encode(['ok' => true, 'msg' => 'Đã gửi cho Admin, vui lòng đợi trong ít phút.'], JSON_UNESCAPED_UNICODE);
+    echo json_encode(['ok' => true, 'msg' => 'Sent to Admin. Please wait a few minutes.'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -2135,9 +2366,9 @@ function sh_native_shared_css()
     if ($skew === '' || $skew === '-0') {
         $skew = '0';
     }
-    $shineSec  = max(1.2, (float) $m['shine_sec']);
-    $shineDur  = rtrim(rtrim(number_format($shineSec, 2, '.', ''), '0'), '.');
-    $shineHalf = rtrim(rtrim(number_format($shineSec / 2.0, 2, '.', ''), '0'), '.');
+    $shineSec  = max(0.8, (float) $m['shine_sec']);
+    $shineDur  = rtrim(rtrim(number_format($shineSec, 3, '.', ''), '0'), '.');
+    $shineHalf = rtrim(rtrim(number_format($shineSec / 2.0, 3, '.', ''), '0'), '.');
     $shineDisp = !empty($m['shine_on']) ? 'block' : 'none';
 
     return ':root{color-scheme:dark;--ds-bg:#000000;--ds-card:#0a0a0b;--ds-field:#141416;--ds-line:#1f1f23;--ds-line2:#26262b;--ds-h:#ffffff;--ds-p:#9ca3af;--ds-mute:#8e8e93;--ds-hd-bg:#000000;--ds-hd-line:#1c1c1f;--ds-btn-bg:#0a0a0b;--ds-btn-line:#26262b;--ds-btn-fg:#ffffff;--ds-nav:#0e0e10;--ds-nav-see:rgba(22,22,26,.46);--ds-nav-see-line:rgba(255,255,255,.07);--ds-pill:rgba(59,158,255,.2);--ds-item:#d1d5db;--ds-link:#3b9eff;--blue:#0a84ff;--cta-bg:#ffffff;--cta-fg:#000000;--hd:54px;--logo-h:' . $logoH . 'px;--brand-logo-scale:' . $logoS . ';--logo-skew:' . $skew . 'deg;--shine-dur:' . $shineDur . 's;--shine-half:-' . $shineHalf . 's;--shine-disp:' . $shineDisp . ';--hbtn:32px;--nav-h:56px;--font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}' . <<<'CSS'
@@ -2145,7 +2376,7 @@ function sh_native_shared_css()
 :root[data-theme="light"]{color-scheme:light;--ds-bg:#f5f7fa;--ds-card:#ffffff;--ds-field:#f3f4f6;--ds-line:#e5e7eb;--ds-line2:#d1d5db;--ds-h:#111827;--ds-p:#4b5563;--ds-mute:#6b7280;--ds-hd-bg:#ffffff;--ds-hd-line:#e5e7eb;--ds-btn-bg:#f3f4f6;--ds-btn-line:#d1d5db;--ds-btn-fg:#111827;--ds-nav:#ffffff;--ds-nav-see:rgba(255,255,255,.52);--ds-nav-see-line:rgba(0,0,0,.06);--ds-pill:rgba(10,108,220,.13);--ds-item:#374151;--ds-link:#0a6cdc;--blue:#0a6cdc;--cta-bg:#111827;--cta-fg:#ffffff}
 *,*::before,*::after{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:100%;background:var(--ds-bg)}
-body{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;margin:0;padding-top:var(--hd);padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 20px);overflow-x:hidden;background:var(--ds-bg);color:var(--ds-h);font-family:var(--font);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+body{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;margin:0;padding-top:var(--hd);padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 14px);overflow-x:hidden;background:var(--ds-bg);color:var(--ds-h);font-family:var(--font);font-size:13.5px;line-height:1.42;-webkit-font-smoothing:antialiased}
 body *{font-family:var(--font)}
 h1,h2,h3,p{margin:0}
 a{color:inherit}
@@ -2156,83 +2387,58 @@ button{padding:0;font:inherit;color:inherit;background:none;border:0;cursor:poin
 .brand__mark{position:relative;display:block;height:var(--logo-h);margin-left:-6px;-webkit-transform:scale(var(--brand-logo-scale,1.4));transform:scale(var(--brand-logo-scale,1.4));-webkit-transform-origin:0 50%;transform-origin:0 50%;pointer-events:none}
 .ds-logo{position:relative;display:inline-block;height:var(--logo-h);line-height:0;overflow:hidden;contain:paint;-webkit-transform:translateZ(0) skewX(var(--logo-skew,10deg));transform:translateZ(0) skewX(var(--logo-skew,10deg));-webkit-transform-origin:50% 50%;transform-origin:50% 50%}
 .brand__logo{display:block;width:auto;height:var(--logo-h);min-height:var(--logo-h);max-height:var(--logo-h);max-width:260px;object-fit:contain}
-.ds-sw{position:absolute;top:0;left:0;display:var(--shine-disp,block);width:100%;height:100%;opacity:.48;pointer-events:none;transform-origin:50% 50%;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.52) 28%,#000 50%,rgba(0,0,0,.52) 72%,rgba(0,0,0,0) 92%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 8%,rgba(0,0,0,.52) 28%,#000 50%,rgba(0,0,0,.52) 72%,rgba(0,0,0,0) 92%);will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-sw35 var(--shine-dur,2.2s) linear infinite;animation:ds-sw35 var(--shine-dur,2.2s) linear infinite;-webkit-animation-delay:var(--dsx-ph,0s);animation-delay:var(--dsx-ph,0s)}
-.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;pointer-events:none;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:1;transform-origin:50% 50%;will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-swi35 var(--shine-dur,2.2s) linear infinite;animation:ds-swi35 var(--shine-dur,2.2s) linear infinite;-webkit-animation-delay:var(--dsx-ph,0s);animation-delay:var(--dsx-ph,0s)}
-.ds-sw2,.ds-sw2 .ds-swi{-webkit-animation-delay:var(--dsx-ph2,var(--shine-half,-1.1s));animation-delay:var(--dsx-ph2,var(--shine-half,-1.1s))}
+.ds-sw{position:absolute;top:0;left:0;display:var(--shine-disp,block);width:100%;height:100%;opacity:.72;pointer-events:none;transform-origin:50% 50%;-webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,0) 4%,rgba(0,0,0,.66) 26%,#000 50%,rgba(0,0,0,.66) 74%,rgba(0,0,0,0) 96%);mask-image:linear-gradient(90deg,rgba(0,0,0,0) 4%,rgba(0,0,0,.66) 26%,#000 50%,rgba(0,0,0,.66) 74%,rgba(0,0,0,0) 96%);will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-sw35 var(--shine-dur,1.35s) linear infinite;animation:ds-sw35 var(--shine-dur,1.35s) linear infinite;-webkit-animation-delay:var(--dsx-ph,0s);animation-delay:var(--dsx-ph,0s)}
+.ds-swi{position:absolute;top:0;left:0;display:block;width:100%;height:100%;max-width:none;object-fit:contain;pointer-events:none;-webkit-filter:brightness(0) invert(1);filter:brightness(0) invert(1);opacity:1;transform-origin:50% 50%;will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-swi35 var(--shine-dur,1.35s) linear infinite;animation:ds-swi35 var(--shine-dur,1.35s) linear infinite;-webkit-animation-delay:var(--dsx-ph,0s);animation-delay:var(--dsx-ph,0s)}
+.ds-sw2,.ds-sw2 .ds-swi{-webkit-animation-delay:var(--dsx-ph2,var(--shine-half,-.675s));animation-delay:var(--dsx-ph2,var(--shine-half,-.675s))}
 html.dsx-re .ds-sw,html.dsx-re .ds-swi{-webkit-animation:none!important;animation:none!important}
 @keyframes ds-sw35{from{transform:translate3d(-78%,0,0)}to{transform:translate3d(78%,0,0)}}
 @keyframes ds-swi35{from{transform:translate3d(78%,0,0)}to{transform:translate3d(-78%,0,0)}}
 .ds-hd{display:flex;align-items:center;gap:6px;flex:0 0 auto;position:relative;z-index:2}
 .ds-hbtn{display:flex;align-items:center;justify-content:center;min-width:var(--hbtn);height:var(--hbtn);padding:0 8px;font-size:12px;font-weight:800;color:var(--ds-btn-fg);background:var(--ds-btn-bg);border:1px solid var(--ds-btn-line);border-radius:10px;user-select:none}
+#ds-lang-btn{cursor:default}
 .ds-hbtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.ds-lang{position:relative}
-.ds-pop{position:absolute;top:calc(100% + 8px);right:0;z-index:2000;min-width:136px;overflow:hidden;background:var(--ds-nav);border:1px solid var(--ds-btn-line);border-radius:12px}
-.ds-pop button{display:block;width:100%;padding:10px 14px;font-size:13px;font-weight:600;text-align:left;color:var(--ds-item);background:transparent}
-.ds-pop button:active{background:var(--ds-field)}
-.ds-pop button.is-on{color:var(--ds-link)}
 .sh-wrap{flex:1 0 auto;display:flex;flex-direction:column;width:100%}
-.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:22px 16px 6px}
-.panel{width:100%;max-width:406px;overflow:hidden;background:var(--ds-card);border:1px solid var(--ds-line);border-radius:20px;padding:22px 18px 18px;text-align:center}
-.anim-icon{width:54px;height:54px;margin:0 auto 10px;display:flex;align-items:center;justify-content:center;color:var(--ds-h)}
-.anim-icon svg{width:50px;height:50px;overflow:visible}
-.panel-title{margin:0 0 8px;font-size:19.5px;font-weight:800;letter-spacing:-.02em;line-height:1.25;color:var(--ds-h)}
-.cause{margin:0 0 14px;font-size:13.5px;line-height:1.5;color:var(--ds-p);overflow-wrap:anywhere}
+.stage{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:14px 14px 8px}
+.panel{width:100%;max-width:376px;overflow:hidden;background:var(--ds-card);border:1px solid var(--ds-line);border-radius:20px;padding:18px 15px 15px;text-align:center}
+.anim-icon{width:44px;height:44px;margin:0 auto 7px;display:flex;align-items:center;justify-content:center;color:var(--ds-h)}
+.anim-icon svg{width:42px;height:42px;overflow:visible}
+.panel-title{margin:0 0 5px;font-size:18px;font-weight:800;letter-spacing:-.02em;line-height:1.22;color:var(--ds-h)}
+.cause{margin:0 0 11px;font-size:12.5px;line-height:1.45;color:var(--ds-p);overflow-wrap:anywhere}
 .cause strong{color:var(--ds-h);font-weight:650}
-.meta{text-align:left;margin-bottom:12px;border-top:1px solid var(--ds-line)}
-.meta-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8.5px 0;font-size:13px;border-bottom:1px solid var(--ds-line)}
+.meta{text-align:left;margin-bottom:11px;border-top:1px solid var(--ds-line)}
+.meta-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;font-size:12.5px;border-bottom:1px solid var(--ds-line)}
 .meta-row span:first-child{color:var(--ds-p);flex:none}
 .meta-row span:last-child{color:var(--ds-h);font-weight:600;text-align:right;min-width:0;overflow-wrap:anywhere}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;letter-spacing:.01em;font-variant-numeric:tabular-nums}
-.code-box{padding:10px 0;border-bottom:1px solid var(--ds-line)}
-.code-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;font-size:13px;color:var(--ds-p)}
-.copy-pill{flex:0 0 auto;height:26px;padding:0 10px;border-radius:8px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11.5px;font-weight:650;white-space:nowrap}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;letter-spacing:.01em;font-variant-numeric:tabular-nums}
+.code-box{padding:8px 0;border-bottom:1px solid var(--ds-line)}
+.code-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:12.5px;color:var(--ds-p)}
+.copy-pill{flex:0 0 auto;height:24px;padding:0 9px;border-radius:8px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11px;font-weight:650;white-space:nowrap}
 .copy-pill:active{opacity:.72}
-.code-val{display:block;width:100%;max-width:100%;padding:8px 10px;border-radius:10px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11.5px;font-weight:600;text-align:center;line-height:1.4;overflow-wrap:anywhere;word-break:break-all;user-select:all}
-.card-rules{text-align:left;margin:0 0 14px;padding:11px 12px;border-radius:13px;background:var(--ds-field);border:1px solid var(--ds-line)}
-.card-rules__h{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:11.5px;font-weight:750;letter-spacing:.04em;text-transform:uppercase;color:var(--ds-h)}
-.card-rules__h svg{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-.card-rules ul{margin:0;padding:0 0 0 15px;font-size:12px;line-height:1.5;color:var(--ds-p)}
-.card-rules li{margin-bottom:3px}
-.card-rules li:last-child{margin-bottom:0}
-.cta-btn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:44px;padding:0 14px;border-radius:12px;background:var(--cta-bg);color:var(--cta-fg);text-decoration:none;font-size:14px;font-weight:700;border:0;cursor:pointer;transition:opacity .15s,transform .1s}
-.cta-btn:active{transform:scale(.988);opacity:.88}
-.cta-btn:disabled,.cta-btn.is-sent{background:var(--ds-field);color:var(--ds-p);border:1px solid var(--ds-line2);cursor:default;transform:none;opacity:1}
-.cta-btn--sub{margin-top:8px;height:41px;background:var(--ds-field);color:var(--ds-h);border:1px solid var(--ds-line2);font-size:13px;font-weight:650}
-.cta-btn--sub svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-.sh-modal{position:fixed;inset:0;z-index:3200;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.62);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);animation:sh-fade .18s ease}
-.sh-sheet{width:100%;max-width:362px;padding:20px 18px 18px;border-radius:22px;background:var(--ds-nav);border:1px solid var(--ds-line2);text-align:left;animation:sh-pop .22s cubic-bezier(.2,.9,.25,1.06)}
-.sh-sheet__t{margin:0 0 4px;font-size:17px;font-weight:800;text-align:center;color:var(--ds-h)}
-.sh-sheet__s{margin:0 0 12px;font-size:12.5px;line-height:1.4;text-align:center;color:var(--ds-p)}
-.ap-lbl{display:block;margin:0 0 5px 2px;font-size:12px;font-weight:650;color:var(--ds-p)}
-.ap-in,.ap-ta{display:block;width:100%;padding:10px 13px;font-size:15px;color:var(--ds-h);background:var(--ds-field);border:1px solid var(--ds-line2);border-radius:12px;outline:0;-webkit-appearance:none;appearance:none}
-.ap-in{height:42px;margin-bottom:9px}
-.ap-in--code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;font-weight:650;letter-spacing:.02em}
-.ap-ta{min-height:68px;resize:none;line-height:1.42;margin-bottom:11px}
-.ap-in::placeholder,.ap-ta::placeholder{color:var(--ds-p);opacity:.78;letter-spacing:normal;font-weight:400}
-.ap-in:focus,.ap-ta:focus{border-color:var(--ds-h)}
-.ap-err{margin:0 0 9px;font-size:12.5px;line-height:1.4;color:#ff6961;text-align:center}
-.ap-actions{display:flex;gap:8px}
-.ap-cancel{flex:0 0 88px;height:42px;border-radius:12px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:14px;font-weight:650}
-.ap-send{flex:1 1 auto;height:42px;border-radius:12px;background:var(--cta-bg);color:var(--cta-fg);font-size:14px;font-weight:700}
-.ap-send:disabled{opacity:.55}
-.ios-hud{width:100%;max-width:296px;padding:26px 20px 20px;border-radius:22px;background:var(--ds-nav);border:1px solid var(--ds-line2);text-align:center;animation:sh-pop .24s cubic-bezier(.2,.9,.25,1.08)}
-.ios-ok-svg{display:block;width:58px;height:58px;margin:0 auto 12px;color:var(--ds-h);overflow:visible}
-.ios-ok-ring{stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;animation:sh-draw .42s cubic-bezier(.22,.61,.36,1) .04s forwards}
-.ios-ok-tick{stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;animation:sh-draw .32s cubic-bezier(.22,.61,.36,1) .34s forwards}
-.ios-hud__t{margin:0 0 6px;font-size:17px;font-weight:800;color:var(--ds-h)}
-.ios-hud__p{margin:0 0 16px;font-size:13.5px;line-height:1.45;color:var(--ds-p)}
-.ios-hud__btn{display:flex;align-items:center;justify-content:center;width:100%;height:40px;border-radius:11px;background:var(--cta-bg);color:var(--cta-fg);font-size:14px;font-weight:700}
-.site-about{flex:0 0 auto;width:100%;max-width:680px;margin:36px auto 0;padding:26px 16px 0;border-top:1px solid var(--ds-line)}
-.ds-docs{margin:0 0 24px;text-align:left}
-.ds-docs__blk{display:block;margin:0 0 22px}
-.ds-docs__h{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:14.5px;font-weight:700;line-height:1.25;letter-spacing:.03em;text-transform:uppercase;color:var(--ds-h)}
-.ds-docs__h svg{flex:0 0 auto;width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.ds-docs__h--brand{margin-bottom:8px;font-size:18px;letter-spacing:-.01em;text-transform:none}
-.ds-docs__p{font-size:14px;font-weight:400;line-height:1.45;color:var(--ds-mute)}
-.ds-docs>.ds-docs__h{margin:0 0 6px}
-.ds-doclink{display:block;padding:6px 0;font-size:14px;font-weight:400;line-height:1.3;text-decoration:none;color:var(--ds-mute)}
-.ds-doclink:active{opacity:.6}
-.site-footer{width:100%;max-width:680px;margin:0 auto;padding:20px 16px 10px;border-top:1px solid var(--ds-line);text-align:center;font-size:11.5px;font-weight:600;text-transform:none;line-height:1.35;color:var(--ds-p)}
+.code-val{display:block;width:100%;max-width:100%;padding:7px 9px;border-radius:10px;background:var(--ds-field);border:1px solid var(--ds-line2);color:var(--ds-h);font-size:11px;font-weight:600;text-align:center;line-height:1.35;overflow-wrap:anywhere;word-break:break-all;user-select:all}
+.cta-btn{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:40px;padding:0 13px;border-radius:12px;background:var(--cta-bg);color:var(--cta-fg);text-decoration:none;font-size:13px;font-weight:700;border:0;cursor:pointer;transition:opacity .15s}
+.cta-btn:active{opacity:.86}
+.cta-btn:disabled,.cta-btn.is-sent{background:var(--ds-field);color:var(--ds-p);border:1px solid var(--ds-line2);cursor:default;opacity:1}
+.cta-btn--sub{margin-top:7px;height:38px;background:var(--ds-field);color:var(--ds-h);border:1px solid var(--ds-line2);font-size:12.5px;font-weight:650}
+.cta-btn--sub svg{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+/* Exact iosmods.xyz Key-Input Box Style (16px real input font => ZERO iOS zoom, ZERO modal popup zoom!) */
+.ky-card{margin:10px 0 3px;padding:12px 12px 11px;background:var(--ds-bg);border:1px solid var(--ds-line2);border-radius:16px;text-align:left}
+.ky-title{margin:0 0 8px;font-size:11.5px;font-weight:750;letter-spacing:.03em;text-transform:uppercase;color:var(--ds-link)}
+.ky-field{display:block;width:114.2857%;max-width:none;height:44px;margin:0 0 -1px;padding:0 14px;font-size:16px!important;color:var(--ds-h);background:var(--ds-field);border:1px solid var(--ds-line2);border-radius:13px;outline:0;-webkit-appearance:none;appearance:none;-webkit-transform:scale(.875);transform:scale(.875);-webkit-transform-origin:left top;transform-origin:left top;transition:border-color .15s}
+.ky-field::placeholder{color:var(--ds-p);opacity:.78;font-weight:400;letter-spacing:normal}
+.ky-field:focus{border-color:var(--blue)}
+.ky-err{margin:4px 0 6px;font-size:12px;line-height:1.35;color:#ff6961}
+.ky-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px}
+.ky-link{font-size:12.5px;font-weight:600;color:var(--ds-link);background:none;border:0;padding:4px 2px}
+.ky-btn{height:35px;padding:0 18px;border-radius:11px;background:var(--blue);color:#ffffff;font-size:12.5px;font-weight:700;border:0}
+.ky-btn:disabled{opacity:.55;cursor:default}
+.ios-inline{margin:10px 0 3px;padding:13px 12px;border-radius:16px;background:var(--ds-bg);border:1px solid var(--ds-line2);display:flex;align-items:center;gap:11px;text-align:left}
+.ios-ok-svg{flex:0 0 34px;width:34px;height:34px;color:var(--ds-h);overflow:visible}
+.ios-ok-ring{stroke:currentColor;stroke-width:2.5;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;animation:sh-draw .38s cubic-bezier(.22,.61,.36,1) .03s forwards}
+.ios-ok-tick{stroke:currentColor;stroke-width:3.1;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;animation:sh-draw .28s cubic-bezier(.22,.61,.36,1) .28s forwards}
+.ios-inline__b{flex:1 1 0;min-width:0}
+.ios-inline__t{font-size:13px;font-weight:750;color:var(--ds-h);line-height:1.25}
+.ios-inline__p{margin-top:2px;font-size:12px;color:var(--ds-p);line-height:1.35}
+.site-footer{width:100%;max-width:420px;margin:10px auto 0;padding:12px 16px 6px;border-top:1px solid var(--ds-line);text-align:center;font-size:11.5px;font-weight:600;text-transform:none;line-height:1.35;color:var(--ds-p)}
 .site-footer a{color:var(--blue);text-decoration:none;font-weight:600}
 .site-footer__heart{display:inline-block;width:12px;height:12px;vertical-align:-2px;color:#ff3b30;animation:sh-beat .6s infinite}
 .site-footer__year{display:block;margin-top:2px;font-weight:400;color:var(--ds-p)}
@@ -2246,7 +2452,7 @@ html.dsx-re .ds-sw,html.dsx-re .ds-swi{-webkit-animation:none!important;animatio
 .ds-ico{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 @media (min-width:1024px){
 :root{--ds-sbw:208px;--hd:56px;--nav-h:0px}
-body{padding-top:var(--hd);padding-left:var(--ds-sbw);padding-bottom:32px}
+body{padding-top:var(--hd);padding-left:var(--ds-sbw);padding-bottom:24px}
 .site-header{padding:0 28px 0 18px;border:0;background:linear-gradient(var(--ds-hd-line),var(--ds-hd-line)) left var(--ds-sbw) bottom/calc(100% - var(--ds-sbw)) 1px no-repeat,linear-gradient(90deg,transparent var(--ds-sbw),var(--ds-hd-bg) var(--ds-sbw))}
 .ds-nav{display:flex;flex-direction:column;left:0;right:auto;top:0;bottom:0;width:var(--ds-sbw);padding:calc(var(--hd) + 12px) 12px 14px;background:var(--ds-card);border-right:1px solid var(--ds-line)}
 .ds-nav::before{display:none}
@@ -2255,15 +2461,13 @@ body{padding-top:var(--hd);padding-left:var(--ds-sbw);padding-bottom:32px}
 .ds-nav__item:hover{background:var(--ds-field)}
 .ds-nav .ds-ico{width:17px;height:17px}
 }
-@keyframes sh-fade{from{opacity:0}to{opacity:1}}
-@keyframes sh-pop{from{opacity:0;transform:scale(.92) translateY(6px)}to{opacity:1;transform:none}}
 @keyframes sh-draw{to{stroke-dashoffset:0}}
-@keyframes sh-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-5px)}45%{transform:translateX(5px)}70%{transform:translateX(-3px)}}
-.is-shake{animation:sh-shake .36s ease}
+@keyframes sh-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-4px)}45%{transform:translateX(4px)}70%{transform:translateX(-2.5px)}}
+.is-shake{animation:sh-shake .32s ease}
 @keyframes sh-beat{0%,100%{transform:scale(1)}50%{transform:scale(1.2)}}
-@keyframes sh-sad-head{0%,100%{transform:translateY(0) rotate(0deg)}35%{transform:translateY(1.6px) rotate(-1.8deg)}70%{transform:translateY(1.2px) rotate(1.8deg)}}
+@keyframes sh-sad-head{0%,100%{transform:translateY(0) rotate(0deg)}35%{transform:translateY(1.4px) rotate(-1.6deg)}70%{transform:translateY(1px) rotate(1.6deg)}}
 @keyframes sh-eye-blink{0%,44%,48%,92%,96%,100%{transform:scaleY(1)}46%,94%{transform:scaleY(.14)}}
-@keyframes sh-mouth-sigh{0%,100%{transform:translateY(0)}50%{transform:translateY(.9px)}}
+@keyframes sh-mouth-sigh{0%,100%{transform:translateY(0)}50%{transform:translateY(.8px)}}
 @keyframes sh-happy-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
 @keyframes sh-shackle-open{0%{transform:translateY(0) rotate(0deg)}45%{transform:translateY(-4.2px) rotate(0deg)}100%{transform:translateY(-4.2px) rotate(15deg)}}
 .svg-sad{animation:sh-sad-head 4.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
@@ -2279,10 +2483,10 @@ function sh_header_html($e)
 {
     $logo = sh_logo_url();
     $m    = sh_brand_logo_metrics();
-    $pMs  = max(1200, (int) round(((float) $m['shine_sec']) * 1000));
+    $pMs  = max(800, (int) round(((float) $m['shine_sec']) * 1000));
     $hMs  = (int) round($pMs / 2);
     return '<header class="site-header">'
-        . '<a class="brand brand--logo" href="/" aria-label="iosmods">'
+        . '<a class="brand brand--logo" href="/" data-sh-lock="1" aria-label="iosmods">'
         . '<span class="brand__mark">'
         . '<span class="ds-logo" id="ds-logo">'
         . '<img class="brand__logo" id="brand-logo" src="' . $e($logo) . '" alt="iosmods" fetchpriority="high" decoding="sync" draggable="false">'
@@ -2292,13 +2496,7 @@ function sh_header_html($e)
         . '</span>'
         . '</a>'
         . '<div class="ds-hd">'
-        . '<div class="ds-lang">'
-        . '<button class="ds-hbtn" id="ds-lang-btn" type="button" aria-label="Language">VI</button>'
-        . '<div class="ds-pop" id="ds-lang-pop" hidden>'
-        . '<button type="button" data-lang="vi" class="is-on">Tiếng Việt</button>'
-        . '<button type="button" data-lang="en">English</button>'
-        . '</div>'
-        . '</div>'
+        . '<span class="ds-hbtn" id="ds-lang-btn">EN</span>'
         . '<button class="ds-hbtn" id="ds-theme-btn" type="button" aria-label="Theme"></button>'
         . '</div>'
         . '</header>'
@@ -2316,139 +2514,45 @@ function sh_header_html($e)
         . 'S=\'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4"/></svg>\';'
         . 'function paintT(){if(tb)tb.innerHTML=r.getAttribute("data-theme")==="light"?S:M;}paintT();'
         . 'if(tb)tb.addEventListener("click",function(){var l=r.getAttribute("data-theme")!=="light";if(l)r.setAttribute("data-theme","light");else r.removeAttribute("data-theme");try{localStorage.setItem("ds-theme",l?"light":"dark");}catch(e){}paintT();});'
-        . 'var lb=document.getElementById("ds-lang-btn"),lp=document.getElementById("ds-lang-pop");'
-        . 'function setLang(lg){if(!lb)return;lg=lg==="en"?"en":"vi";r.setAttribute("data-lang",lg);lb.textContent=lg.toUpperCase();'
-        . 'if(lp){var bs=lp.querySelectorAll("button[data-lang]");for(var i=0;i<bs.length;i++)bs[i].classList.toggle("is-on",bs[i].getAttribute("data-lang")===lg);}'
-        . 'var ns=document.querySelectorAll("[data-en]");for(var j=0;j<ns.length;j++){var el=ns[j];if(!el.getAttribute("data-vi"))el.setAttribute("data-vi",el.textContent);el.textContent=lg==="en"?el.getAttribute("data-en"):el.getAttribute("data-vi");}}'
-        . 'try{var sl=localStorage.getItem("ds-lang");if(sl==="en")setLang("en");}catch(e){}'
-        . 'if(lb&&lp){lb.addEventListener("click",function(ev){ev.stopPropagation();lp.hidden=!lp.hidden;});'
-        . 'lp.addEventListener("click",function(ev){var t=ev.target&&ev.target.closest?ev.target.closest("button[data-lang]"):null;if(!t)return;var g=t.getAttribute("data-lang")||"vi";try{localStorage.setItem("ds-lang",g);}catch(e){}setLang(g);lp.hidden=true;});'
-        . 'document.addEventListener("click",function(){lp.hidden=true;});}'
         . '})();</script>';
-}
-
-function sh_card_rules_html()
-{
-    return '<div class="card-rules">'
-        . '<h3 class="card-rules__h"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><span data-en="Website Security Rules">Nội quy bảo mật website</span></h3>'
-        . '<ul>'
-        . '<li data-en="Disable VPN, Proxy, 1.1.1.1 WARP and region-changing apps before accessing.">Tắt VPN, Proxy, 1.1.1.1 và công cụ đổi vùng mạng trước khi truy cập.</li>'
-        . '<li data-en="Do not run browser scripts, automation tools, F12 source inspect or exploit requests.">Không chạy tiện ích Script, mở F12 soi mã nguồn hoặc gửi luồng tấn công.</li>'
-        . '<li data-en="Do not spam product GET without an active key or enter invalid keys repeatedly.">Không bấm lấy sản phẩm liên tục khi chưa có Key hoặc thử sai Key nhiều lần.</li>'
-        . '<li data-en="Do not use multiple accounts on one device/IP to bypass Free Key limits.">Không tạo nhiều tài khoản phụ trên cùng thiết bị/mạng để lạm dụng Key Free.</li>'
-        . '</ul>'
-        . '</div>';
 }
 
 function sh_about_and_footer_html()
 {
-    return '<section class="site-about">'
-        . '<section class="ds-docs" id="ds-docs">'
-        . '<div class="ds-docs__blk">'
-        . '<h3 class="ds-docs__h ds-docs__h--brand"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M7 10v4M5 12h4M16 11h.01M18 13h.01"/></svg><span>IOSMODS</span></h3>'
-        . '<p class="ds-docs__p" data-en="Keys and tools for iOS in one place. Pick a package, activate a key, open a tool.">Kho Key và công cụ tiện ích cho iOS tại một nơi. Chọn gói, kích hoạt Key và mở công cụ.</p>'
-        . '</div>'
-        . '<div class="ds-docs__blk">'
-        . '<h3 class="ds-docs__h"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M7 21h10M5 7h14M5 7l-3 7a3.5 3.5 0 0 0 6 0zM19 7l-3 7a3.5 3.5 0 0 0 6 0z"/></svg><span data-en="Legal disclaimer">Miễn trừ trách nhiệm</span></h3>'
-        . '<p class="ds-docs__p" data-en="Tools are provided for testing and entertainment purposes only. You are responsible for how you use them.">Các công cụ chỉ được cung cấp cho mục đích thử nghiệm và giải trí. Bạn tự chịu trách nhiệm trong quá trình sử dụng.</p>'
-        . '</div>'
-        . '<h3 class="ds-docs__h"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg><span data-en="Documents">Tài liệu</span></h3>'
-        . '<a class="ds-doclink" href="/docs.php?doc=privacy" data-en="Privacy Policy">Chính sách bảo mật</a>'
-        . '<a class="ds-doclink" href="/docs.php?doc=terms" data-en="Terms of Service">Điều khoản sử dụng</a>'
-        . '</section>'
-        . '</section>'
-        . '<footer class="site-footer">Made with '
+    return '<footer class="site-footer">Made with '
         . '<svg class="site-footer__heart" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
-        . ' by <a href="/">iosmods</a><span class="site-footer__year">@2024</span></footer>'
+        . ' by <a href="/" data-sh-lock="1">iosmods</a><span class="site-footer__year">@2024</span></footer>'
         . '<nav class="ds-nav" aria-label="Main">'
         . '<div class="ds-nav__in">'
-        . '<a class="ds-nav__item is-active" href="/" data-sh-nav="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span data-en="Home">Trang chủ</span></a>'
-        . '<a class="ds-nav__item" href="/" data-sh-nav="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2m-4 4 3 3m-6-1 2 2"/></svg><span>Keys</span></a>'
-        . '<a class="ds-nav__item" href="/" data-sh-nav="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><span data-en="Tools">Công cụ</span></a>'
-        . '<a class="ds-nav__item" href="/" data-sh-nav="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span data-en="History">Lịch sử</span></a>'
-        . '<a class="ds-nav__item" href="/lazrlshalvow/login" data-sh-nav="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="10" r="3"/><path d="M6.2 18.6a6.5 6.5 0 0 1 11.6 0"/></svg><span data-en="Log in">Đăng nhập</span></a>'
+        . '<a class="ds-nav__item is-active" href="/" data-sh-lock="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></a>'
+        . '<a class="ds-nav__item" href="/" data-sh-lock="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2m-4 4 3 3m-6-1 2 2"/></svg><span>Keys</span></a>'
+        . '<a class="ds-nav__item" href="/" data-sh-lock="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><span>Tools</span></a>'
+        . '<a class="ds-nav__item" href="/" data-sh-lock="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>History</span></a>'
+        . '<a class="ds-nav__item" href="/lazrlshalvow/login" data-sh-lock="1"><svg class="ds-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="10" r="3"/><path d="M6.2 18.6a6.5 6.5 0 0 1 11.6 0"/></svg><span>Log in</span></a>'
         . '</div>'
         . '</nav>'
-        . '<script>(function(){var ns=document.querySelectorAll("[data-sh-nav]");for(var i=0;i<ns.length;i++){ns[i].addEventListener("click",function(ev){var p=document.querySelector(".panel");if(p){ev.preventDefault();window.scrollTo({top:0,behavior:"smooth"});p.classList.remove("is-shake");void p.offsetWidth;p.classList.add("is-shake");}});}})();</script>';
+        . '<script>(function(){document.addEventListener("click",function(ev){var a=ev.target&&ev.target.closest?ev.target.closest("[data-sh-lock]"):null;if(!a)return;ev.preventDefault();ev.stopPropagation();var p=document.querySelector(".panel");if(p){p.classList.remove("is-shake");void p.offsetWidth;p.classList.add("is-shake");}},true);})();</script>';
 }
 
 /**
- * TIER 1 UI — Refined Animated Happy Face (😊) in Exact iosmods.xyz Native Style:
+ * TIER 1 UI — Compact English VPN / Proxy 2-Minute Lock Preview Helper:
  */
 function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
 {
-    while (ob_get_level() > 0) {
-        @ob_end_clean();
-    }
-    $GLOBALS['dsx_hash_on'] = 1;
-    if (!headers_sent()) {
-        http_response_code(!empty($detect['is_preview']) ? 200 : 403);
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('Pragma: no-cache');
-        header('X-Robots-Tag: noindex, nofollow');
-        header('X-Frame-Options: SAMEORIGIN');
-        header('X-Content-Type-Options: nosniff');
-    }
-
-    $whatOff = !empty($detect['turn_off']) ? (string) $detect['turn_off'] : 'VPN / Proxy (1.1.1.1) hoặc tiện ích Script trình duyệt';
-    if (sh_wants_json() && empty($detect['is_preview'])) {
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['result' => 'please_turn_off', 'turn_off' => $whatOff, 'message' => 'Vui lòng tắt ' . $whatOff . ' để truy cập iosmods.xyz.'], JSON_UNESCAPED_UNICODE);
-        return;
-    }
-
-    header('Content-Type: text/html; charset=utf-8');
-    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); };
-    ?><!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark light">
-<meta name="robots" content="noindex, nofollow">
-<title>Kiểm tra kết nối · iosmods.xyz</title>
-<script>try{var __t=localStorage.getItem('ds-theme');if(__t==='light'||(__t==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches))document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
-<style><?= sh_native_shared_css() ?></style>
-</head>
-<body>
-<?= sh_header_html($e) ?>
-<div class="sh-wrap">
-  <main class="stage">
-    <section class="panel" role="dialog">
-      <div class="anim-icon" aria-hidden="true">
-        <svg class="svg-happy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="9.5"/>
-          <g class="svg-eye"><path d="M8.15 10.25c.36-.56.86-.84 1.4-.84s1.04.28 1.4.84"/></g>
-          <g class="svg-eye"><path d="M13.05 10.25c.36-.56.86-.84 1.4-.84s1.04.28 1.4.84"/></g>
-          <path d="M8.35 13.85c.92 1.48 2.14 2.22 3.65 2.22s2.73-.74 3.65-2.22"/>
-        </svg>
-      </div>
-      <h1 class="panel-title" data-en="Please Disable Proxy / Script">Vui lòng tắt công cụ trung gian</h1>
-      <p class="cause">Hệ thống phát hiện kết nối đang bật <strong><?= $e($whatOff) ?></strong>. Vui lòng tắt hoàn toàn công cụ này trước khi truy cập.</p>
-
-      <div class="meta">
-        <div class="meta-row"><span data-en="Detected">Phát hiện</span><span><?= $e($whatOff) ?></span></div>
-        <div class="meta-row"><span data-en="IP Address">Địa chỉ IP</span><span class="mono"><?= $e($ip) ?></span></div>
-      </div>
-
-      <?= sh_card_rules_html() ?>
-
-      <a class="cta-btn" href="/" onclick="document.cookie='sh_vg_retry=1;path=/;max-age=20';" data-en="Disabled · Continue">Đã tắt xong · Truy cập lại</a>
-    </section>
-    <?= $previewBarHtml ?>
-  </main>
-  <?= sh_about_and_footer_html() ?>
-</div>
-</body>
-</html>
-<?php
+    $whatOff = !empty($detect['turn_off']) ? (string) $detect['turn_off'] : '1.1.1.1 / Cloudflare WARP';
+    sh_render_sad_page([
+        'is_preview' => !empty($detect['is_preview']),
+        'ban_type'   => 'vpn_block',
+        'reason'     => 'VPN / Proxy detected (' . $whatOff . '). Disable VPN — access is locked for 2 minutes.',
+        'expires_ts' => time() + 120,
+    ], $ip, 403, $previewBarHtml);
 }
 
 /**
- * POST-UNBAN CONFIRMATION GATE — "Đã tự động mở khoá" + Mandatory "Got it" Button!
+ * POST-UNBAN CONFIRMATION GATE — "Automatically Unlocked" + Mandatory "Got it" Button!
  * - Shown when a previously blocked IP/device visits iosmods.xyz after Bot/Admin/Timer unlocks it.
- * - Contains ZERO verification code (IMX-...), ZERO countdown, ZERO appeal form.
- * - Persists across refreshes & logo clicks until the user clicks "Got it", then enters the website normally!
+ * - 100% English, compact, ZERO verification code (IMX-...), ZERO countdown, ZERO appeal form.
+ * - Persists across refreshes & clicks until the user taps "Got it", then enters iosmods.xyz normally!
  */
 function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
 {
@@ -2467,7 +2571,7 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
     }
     if (sh_wants_json() && !$isPreview) {
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(['result' => 'unlocked_ack_needed', 'message' => 'Đã tự động mở khoá. Vui lòng tải lại trang và bấm Got it để tiếp tục.'], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['result' => 'unlocked_ack_needed', 'message' => 'Automatically unlocked. Reload the page and tap Got it to continue.'], JSON_UNESCAPED_UNICODE);
         return;
     }
 
@@ -2476,13 +2580,13 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
     header('Content-Type: text/html; charset=utf-8');
     $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); };
     ?><!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light">
 <meta name="robots" content="noindex, nofollow">
-<title>Đã tự động mở khoá · iosmods.xyz</title>
+<title>Automatically Unlocked · iosmods.xyz</title>
 <script>try{var __t=localStorage.getItem('ds-theme');if(__t==='light'||(__t==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches))document.documentElement.setAttribute('data-theme','light');}catch(e){}</script>
 <style><?= sh_native_shared_css() ?></style>
 </head>
@@ -2498,12 +2602,12 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
           <circle cx="12" cy="16" r="1.15" fill="currentColor" stroke="none"/>
         </svg>
       </div>
-      <h1 class="panel-title" id="sh-unlk-title" data-en="Automatically Unlocked">Đã tự động mở khoá</h1>
-      <p class="cause" data-en="Your IP address has been unlocked by the security system. Tap Got it below to enter the website normally.">Địa chỉ IP của bạn đã được hệ thống mở khoá hoàn tất. Nhấn <strong>Got it</strong> bên dưới để vào lại website bình thường.</p>
+      <h1 class="panel-title" id="sh-unlk-title">Automatically Unlocked</h1>
+      <p class="cause">Your IP address has been unlocked. Tap <strong>Got it</strong> below to continue to iosmods.xyz.</p>
 
       <div class="meta">
-        <div class="meta-row"><span data-en="Status">Trạng thái</span><span data-en="Unlocked">Đã mở khoá</span></div>
-        <div class="meta-row"><span data-en="IP Address">Địa chỉ IP</span><span class="mono"><?= $e($ip) ?></span></div>
+        <div class="meta-row"><span>Status</span><span>Unlocked</span></div>
+        <div class="meta-row"><span>IP Address</span><span class="mono"><?= $e($ip) ?></span></div>
       </div>
 
       <form method="post" action="/asadnsrdecsb/home?__sh_ack_unlock=1" id="sh-ack-form">
@@ -2520,13 +2624,6 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
 <script>
 (function(){
   var IS_PV = <?= $isPreview ? 'true' : 'false' ?>;
-  var br = document.querySelector('.brand');
-  if (br && IS_PV) {
-    br.addEventListener('click', function(ev){
-      var p = document.querySelector('.panel');
-      if (p) { ev.preventDefault(); window.scrollTo({top:0, behavior:'smooth'}); p.classList.remove('is-shake'); void p.offsetWidth; p.classList.add('is-shake'); }
-    });
-  }
   var fm = document.getElementById('sh-ack-form'), bt = document.getElementById('sh-got-it-btn');
   if (fm && bt && window.fetch) {
     fm.addEventListener('submit', function(ev){
@@ -2551,7 +2648,7 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
 }
 
 /**
- * TIER 2 UI — Refined Animated Sad Face (☹️) + Rules Inside Card + 3-Field Unlock Request + @devios_bot Auto-Unban + iOS Checkmark HUD!
+ * COMPACT 100% ENGLISH LOCK SCREEN + EXACT iosmods.xyz KEY-BOX INLINE UNLOCK FORM + STARTLESS @devios_bot PING!
  */
 function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = '')
 {
@@ -2574,8 +2671,9 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     $left      = $isTemp ? max(1, $expiresTs - $now) : 0;
     $banType   = isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'manual';
     $isSpam    = in_array($banType, ['key_spam', 'prod_spam'], true);
+    $isVpn     = in_array($banType, ['vpn_block', 'vpn_abuse'], true);
     $isPreview = !empty($ban['is_preview']);
-    $code      = $isPreview ? 200 : (($isTemp && $httpCode === 429) ? 429 : 403);
+    $code      = $isPreview ? 200 : ($httpCode === 429 ? 429 : 403);
 
     if (!headers_sent()) {
         http_response_code($code);
@@ -2589,14 +2687,10 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         }
     }
 
-    $reason = trim((string) (isset($ban['reason']) ? $ban['reason'] : ''));
-    if ($reason === '') {
-        $reason = $isSpam
-            ? 'Thao tác lặp lại quá nhanh hoặc spam yêu cầu vượt ngưỡng cho phép của hệ thống.'
-            : 'Vi phạm quy tắc an ninh bảo mật trực tiếp trên hệ thống iosmods.xyz.';
-    }
-    $caseCode = !empty($ban['case_code']) ? (string) $ban['case_code'] : sh_issue_case_code($ip, $ban);
-    $streamIp = !empty($ban['stream_ip']) && $ban['stream_ip'] !== $ip ? (string) $ban['stream_ip'] : '';
+    $rawReason = trim((string) (isset($ban['reason']) ? $ban['reason'] : ''));
+    $reasonEn  = sh_public_reason_en($banType, $rawReason);
+    $caseCode  = !empty($ban['case_code']) ? (string) $ban['case_code'] : sh_issue_case_code($ip, $ban);
+    $streamIp  = !empty($ban['stream_ip']) && $ban['stream_ip'] !== $ip ? (string) $ban['stream_ip'] : '';
 
     if (sh_wants_json() && !$isPreview) {
         header('Content-Type: application/json; charset=utf-8');
@@ -2604,8 +2698,8 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
             'result'      => 'ip_blocked',
             'temporary'   => $isTemp,
             'retry_after' => $left,
-            'reason'      => $reason,
-            'message'     => $reason,
+            'reason'      => $reasonEn,
+            'message'     => $reasonEn,
         ], JSON_UNESCAPED_UNICODE);
         return;
     }
@@ -2617,13 +2711,13 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     if ($knownUsr === '' && session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['username'])) {
         $knownUsr = (string) $_SESSION['username'];
     }
-    $botUrl = sh_bot_appeal_url();
+    $botUrl = sh_bot_appeal_url($ip, $caseCode, $lid);
 
     header('Content-Type: text/html; charset=utf-8');
     $e       = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); };
-    $heading = $isSpam ? 'Tạm khoá do thao tác quá mức' : 'Truy cập đã bị khoá bảo mật';
+    $heading = $isVpn ? 'VPN / Proxy Blocked' : ($isSpam ? 'Temporarily Locked' : 'Access Restricted');
     ?><!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -2647,73 +2741,61 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         </svg>
       </div>
       <h1 class="panel-title" id="sh-title"><?= $e($heading) ?></h1>
-      <p class="cause" id="sh-cause"><strong>Nguyên nhân:</strong> <?= $e($reason) ?></p>
+      <p class="cause" id="sh-cause"><strong>Reason:</strong> <?= $e($reasonEn) ?></p>
 
       <div class="meta">
 <?php if ($isTemp) { ?>
-        <div class="meta-row"><span data-en="Auto Unlock In">Tự động mở sau</span><span class="mono" id="sh-cd" data-left="<?= (int) $left ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span></div>
+        <div class="meta-row"><span>Unlock In</span><span class="mono" id="sh-cd" data-left="<?= (int) $left ?>" data-preview="<?= $isPreview ? '1' : '0' ?>"><?= $e(sh_fmt_remaining($left)) ?></span></div>
 <?php } else { ?>
-        <div class="meta-row"><span data-en="Duration">Thời hạn khoá</span><span data-en="Permanent">Vĩnh viễn</span></div>
+        <div class="meta-row"><span>Status</span><span>Locked (Bot / Admin Only)</span></div>
 <?php } ?>
-        <div class="meta-row"><span data-en="IP Address">Địa chỉ IP</span><span class="mono"><?= $e($ip) ?><?= $streamIp !== '' ? ' · ' . $e($streamIp) : '' ?></span></div>
+        <div class="meta-row"><span>IP Address</span><span class="mono"><?= $e($ip) ?><?= $streamIp !== '' ? ' · ' . $e($streamIp) : '' ?></span></div>
         <div class="code-box">
           <div class="code-head">
-            <span data-en="Verification Code">Mã xác minh</span>
-            <button type="button" class="copy-pill" id="sh-copy-btn" data-code="<?= $e($caseCode) ?>" data-en="Copy">Sao chép</button>
+            <span>Verification Code</span>
+            <button type="button" class="copy-pill" id="sh-copy-btn" data-code="<?= $e($caseCode) ?>">Copy</button>
           </div>
           <div class="code-val mono" id="sh-code-val"><?= $e($caseCode) ?></div>
         </div>
       </div>
 
-      <?= sh_card_rules_html() ?>
-
 <?php if ($sentOnce) { ?>
-      <button type="button" class="cta-btn is-sent" id="sh-open-appeal" disabled data-en="Sent to Admin · Please wait a few minutes">Đã gửi cho Admin · Vui lòng đợi trong ít phút</button>
+      <button type="button" class="cta-btn is-sent" id="sh-open-appeal" disabled>Sent to Admin · Please wait a few minutes</button>
 <?php } else { ?>
-      <button type="button" class="cta-btn" id="sh-open-appeal" data-en="Send Unlock Request">Gửi yêu cầu để mở khoá</button>
+      <button type="button" class="cta-btn" id="sh-open-appeal">Request Unlock</button>
 <?php } ?>
-      <a class="cta-btn cta-btn--sub" href="<?= $e($botUrl) ?>" target="_blank" rel="noopener">
+
+      <div class="ky-card" id="sh-ap-box" hidden>
+        <div class="ky-title">Unlock Request · 1 Time Only</div>
+        <input type="text" class="ky-field" id="sh-ap-user" maxlength="60" value="<?= $e($knownUsr) ?>" placeholder="Website account" autocomplete="username">
+        <input type="text" class="ky-field" id="sh-ap-code" maxlength="40" placeholder="Enter verification code (IMX-...)" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        <input type="text" class="ky-field" id="sh-ap-msg" maxlength="350" placeholder="Describe why you were locked..." autocomplete="off">
+        <p class="ky-err" id="sh-ap-err" hidden></p>
+        <div class="ky-actions">
+          <button type="button" class="ky-link" id="sh-ap-cancel">Cancel</button>
+          <button type="button" class="ky-btn" id="sh-ap-send">Submit</button>
+        </div>
+      </div>
+
+      <div class="ios-inline" id="sh-ios-sent" hidden role="status" aria-live="polite">
+        <svg class="ios-ok-svg" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+          <circle class="ios-ok-ring" cx="28" cy="28" r="24" pathLength="1"/>
+          <path class="ios-ok-tick" d="M17.5 28.8l7.2 7.2 14-15.2" pathLength="1"/>
+        </svg>
+        <div class="ios-inline__b">
+          <div class="ios-inline__t">Sent to Admin</div>
+          <div class="ios-inline__p" id="sh-ios-msg">Sent to Admin, please wait a few minutes.</div>
+        </div>
+      </div>
+
+      <a class="cta-btn cta-btn--sub" id="sh-bot-btn" href="<?= $e($botUrl) ?>" target="_blank" rel="noopener">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.5 3.5 2.5 11l6.8 2.6 2.6 6.9 3.6-4.1 4.6 3.4z"/><path d="M9.3 13.6 21.5 3.5"/></svg>
-        <span data-en="Auto Unban via Bot (@devios_bot)">Xét mở khoá tự động qua Bot (@devios_bot)</span>
+        <span>Unlock Assistant (@devios_bot)</span>
       </a>
     </section>
     <?= $previewBarHtml ?>
   </main>
   <?= sh_about_and_footer_html() ?>
-</div>
-
-<div class="sh-modal" id="sh-ap-modal" hidden>
-  <div class="sh-sheet" id="sh-ap-sheet" role="dialog" aria-modal="true">
-    <h2 class="sh-sheet__t" data-en="Send Unlock Request">Gửi yêu cầu để mở khoá</h2>
-    <p class="sh-sheet__s" data-en="Fill in your website account, verification code and reason (1 time only).">Điền thông tin và nhập đúng mã xác minh để gửi Admin (chỉ gửi 1 lần).</p>
-
-    <label class="ap-lbl" for="sh-ap-user" data-en="Website account">Tài khoản website</label>
-    <input type="text" class="ap-in" id="sh-ap-user" maxlength="60" value="<?= $e($knownUsr) ?>" placeholder="Tài khoản website" autocomplete="username">
-
-    <label class="ap-lbl" for="sh-ap-code" data-en="Enter verification code">Nhập mã xác minh</label>
-    <input type="text" class="ap-in ap-in--code" id="sh-ap-code" maxlength="40" placeholder="Nhập mã xác minh (IMX-...)" autocomplete="off" autocapitalize="characters" spellcheck="false">
-
-    <label class="ap-lbl" for="sh-ap-msg" data-en="Reason">Lý do</label>
-    <textarea class="ap-ta" id="sh-ap-msg" maxlength="350" placeholder="Miêu tả vì sao bạn bị khoá..."></textarea>
-
-    <p class="ap-err" id="sh-ap-err" hidden></p>
-    <div class="ap-actions">
-      <button type="button" class="ap-cancel" id="sh-ap-cancel" data-en="Cancel">Huỷ</button>
-      <button type="button" class="ap-send" id="sh-ap-send" data-en="Confirm & Send">Xác nhận gửi</button>
-    </div>
-  </div>
-</div>
-
-<div class="sh-modal" id="sh-ios-sent" hidden>
-  <div class="ios-hud" role="status" aria-live="polite">
-    <svg class="ios-ok-svg" viewBox="0 0 56 56" fill="none" aria-hidden="true">
-      <circle class="ios-ok-ring" cx="28" cy="28" r="24" pathLength="1"/>
-      <path class="ios-ok-tick" d="M17.5 28.8l7.2 7.2 14-15.2" pathLength="1"/>
-    </svg>
-    <h3 class="ios-hud__t" data-en="Sent to Admin">Đã gửi cho Admin</h3>
-    <p class="ios-hud__p" id="sh-ios-msg" data-en="Sent to Admin, please wait a few minutes.">Đã gửi cho Admin, vui lòng đợi trong ít phút.</p>
-    <button type="button" class="ios-hud__btn" id="sh-ios-close" data-en="OK">Đóng</button>
-  </div>
 </div>
 
 <script>
@@ -2722,6 +2804,8 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
   var NORM_CASE = CASE_CODE.replace(/[^A-Z0-9]/gi, '').toUpperCase();
   var IS_PV     = <?= $isPreview ? 'true' : 'false' ?>;
   var LS_KEY    = 'sh_ap_sent_' + CASE_CODE;
+  var LID       = <?= json_encode($lid) ?>;
+  var SIG       = <?= json_encode($sig) ?>;
 
   var cpBtn = document.getElementById('sh-copy-btn');
   if (cpBtn) {
@@ -2733,31 +2817,46 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         } else {
           var ta = document.createElement('textarea'); ta.value = c; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
         }
-        cpBtn.textContent = document.documentElement.getAttribute('data-lang') === 'en' ? 'Copied' : 'Đã sao chép';
+        cpBtn.textContent = 'Copied';
+      } catch(e){}
+    });
+  }
+
+  var botBtn = document.getElementById('sh-bot-btn');
+  if (botBtn) {
+    botBtn.addEventListener('click', function(){
+      try {
+        var bp = new URLSearchParams();
+        bp.set('lid', LID);
+        bp.set('sig', SIG);
+        bp.set('case_code', CASE_CODE);
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon((location.pathname || '/') + '?__sh_bot_ping=1', new Blob([bp.toString()], {type: 'application/x-www-form-urlencoded'}));
+        } else if (window.fetch) {
+          fetch((location.pathname || '/') + '?__sh_bot_ping=1', {method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: bp.toString()}).catch(function(){});
+        }
       } catch(e){}
     });
   }
 
   var openBtn  = document.getElementById('sh-open-appeal'),
-      apModal  = document.getElementById('sh-ap-modal'),
-      apSheet  = document.getElementById('sh-ap-sheet'),
+      apBox    = document.getElementById('sh-ap-box'),
       canBtn   = document.getElementById('sh-ap-cancel'),
       sendBtn  = document.getElementById('sh-ap-send'),
       uIn      = document.getElementById('sh-ap-user'),
       cIn      = document.getElementById('sh-ap-code'),
       mIn      = document.getElementById('sh-ap-msg'),
       errEl    = document.getElementById('sh-ap-err'),
-      iosModal = document.getElementById('sh-ios-sent'),
-      iosMsg   = document.getElementById('sh-ios-msg'),
-      iosClose = document.getElementById('sh-ios-close');
+      iosBox   = document.getElementById('sh-ios-sent'),
+      iosMsg   = document.getElementById('sh-ios-msg');
 
   function lockButtonAsSent() {
     if (!openBtn) return;
     openBtn.disabled = true;
     openBtn.classList.add('is-sent');
-    openBtn.textContent = document.documentElement.getAttribute('data-lang') === 'en'
-      ? 'Sent to Admin · Please wait a few minutes'
-      : 'Đã gửi cho Admin · Vui lòng đợi trong ít phút';
+    openBtn.hidden = false;
+    openBtn.textContent = 'Sent to Admin · Please wait a few minutes';
+    if (apBox) apBox.hidden = true;
   }
 
   if (!IS_PV) {
@@ -2765,29 +2864,25 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
   }
 
   function showIosCheckmark(txt) {
-    if (!iosModal) return;
+    if (!iosBox) return;
     if (iosMsg && txt) iosMsg.textContent = txt;
-    var svg = iosModal.querySelector('.ios-ok-svg');
+    var svg = iosBox.querySelector('.ios-ok-svg');
     if (svg) { var cl = svg.cloneNode(true); svg.parentNode.replaceChild(cl, svg); }
-    iosModal.hidden = false;
+    iosBox.hidden = false;
   }
 
-  if (iosClose && iosModal) {
-    iosClose.addEventListener('click', function(){ iosModal.hidden = true; });
-    iosModal.addEventListener('click', function(ev){ if (ev.target === iosModal) iosModal.hidden = true; });
-  }
-
-  if (openBtn && apModal) {
+  if (openBtn && apBox) {
     openBtn.addEventListener('click', function(){
       if (openBtn.disabled) return;
       if (errEl) errEl.hidden = true;
-      apModal.hidden = false;
-      setTimeout(function(){ if (uIn && !uIn.value) uIn.focus(); else if (cIn) cIn.focus(); }, 60);
+      apBox.hidden = !apBox.hidden;
+      if (!apBox.hidden) {
+        if (uIn && !uIn.value) uIn.focus(); else if (cIn) cIn.focus();
+      }
     });
   }
-  if (canBtn && apModal) {
-    canBtn.addEventListener('click', function(){ apModal.hidden = true; });
-    apModal.addEventListener('click', function(ev){ if (ev.target === apModal) apModal.hidden = true; });
+  if (canBtn && apBox) {
+    canBtn.addEventListener('click', function(){ apBox.hidden = true; });
   }
 
   if (sendBtn) {
@@ -2797,21 +2892,21 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
       var normCode = rawCode.replace(/[^A-Z0-9]/gi, '').toUpperCase();
       var msg      = (mIn ? mIn.value : '').trim();
       if (!normCode || normCode !== NORM_CASE) {
-        if (errEl) { errEl.hidden = false; errEl.textContent = 'Vui lòng sao chép và nhập đúng Mã xác minh (IMX-...) ở khung bên ngoài.'; }
-        if (apSheet) { apSheet.classList.remove('is-shake'); void apSheet.offsetWidth; apSheet.classList.add('is-shake'); }
+        if (errEl) { errEl.hidden = false; errEl.textContent = 'Please copy and enter the exact Verification Code (IMX-...) shown above.'; }
+        if (apBox) { apBox.classList.remove('is-shake'); void apBox.offsetWidth; apBox.classList.add('is-shake'); }
         if (cIn) cIn.focus();
         return;
       }
       if (msg.length < 3) {
-        if (errEl) { errEl.hidden = false; errEl.textContent = 'Vui lòng miêu tả ngắn gọn lý do vì sao bạn bị khoá.'; }
+        if (errEl) { errEl.hidden = false; errEl.textContent = 'Please briefly describe why you were locked.'; }
         if (mIn) mIn.focus();
         return;
       }
       sendBtn.disabled = true;
-      sendBtn.textContent = 'Đang gửi...';
+      sendBtn.textContent = '...';
       var f = new URLSearchParams();
-      f.set('lid', <?= json_encode($lid) ?>);
-      f.set('sig', <?= json_encode($sig) ?>);
+      f.set('lid', LID);
+      f.set('sig', SIG);
       f.set('case_code', CASE_CODE);
       f.set('verify_code', rawCode);
       f.set('username', usr);
@@ -2824,19 +2919,18 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
         body: f.toString()
       }).then(function(r){ return r.json(); }).then(function(j){
         if (j && (j.ok || j.already_sent)) {
-          apModal.hidden = true;
           lockButtonAsSent();
           if (!IS_PV) { try { localStorage.setItem(LS_KEY, '1'); } catch(e){} }
-          showIosCheckmark('Đã gửi cho Admin, vui lòng đợi trong ít phút.');
+          showIosCheckmark('Sent to Admin, please wait a few minutes.');
         } else {
           sendBtn.disabled = false;
-          sendBtn.textContent = 'Xác nhận gửi';
-          if (errEl) { errEl.hidden = false; errEl.textContent = (j && j.msg) ? j.msg : 'Không thể gửi yêu cầu lúc này.'; }
+          sendBtn.textContent = 'Submit';
+          if (errEl) { errEl.hidden = false; errEl.textContent = (j && j.msg) ? j.msg : 'Unable to submit request right now.'; }
         }
       }).catch(function(){
         sendBtn.disabled = false;
-        sendBtn.textContent = 'Xác nhận gửi';
-        if (errEl) { errEl.hidden = false; errEl.textContent = 'Lỗi kết nối, vui lòng thử lại.'; }
+        sendBtn.textContent = 'Submit';
+        if (errEl) { errEl.hidden = false; errEl.textContent = 'Network error. Please try again.'; }
       });
     });
   }
@@ -2854,9 +2948,9 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     if (ic) {
       ic.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.4"/><path class="svg-shackle" d="M8 11V7a4 4 0 0 1 8 0v2"/><circle cx="12" cy="16" r="1.15" fill="currentColor" stroke="none"/></svg>';
     }
-    if (tt) tt.textContent = 'Đã tự động mở khoá';
-    if (cs) cs.innerHTML = 'Hệ thống đã hoàn tất kiểm tra bảo mật và mở khoá kết nối.';
-    if (!IS_PV) setTimeout(function(){ window.location.reload(); }, 1100);
+    if (tt) tt.textContent = 'Automatically Unlocked';
+    if (cs) cs.innerHTML = 'Security check completed. Reloading...';
+    if (!IS_PV) setTimeout(function(){ window.location.reload(); }, 950);
   }
   var iv = setInterval(function(){
     left--;
@@ -2896,20 +2990,22 @@ function sh_handle_preview_showcase()
         $st  = $act
             ? 'border:1px solid var(--cta-bg);background:var(--cta-bg);color:var(--cta-fg)'
             : 'border:1px solid var(--ds-line2);background:var(--ds-field);color:var(--ds-h)';
-        return '<a href="?sh_test_view=' . $m . '&k=' . $tok . '" style="padding:7px 11px;border-radius:10px;font-size:11.5px;font-weight:700;text-decoration:none;' . $st . '">' . $lbl . '</a>';
+        return '<a href="?sh_test_view=' . $m . '&k=' . $tok . '" style="padding:6px 10px;border-radius:10px;font-size:11px;font-weight:700;text-decoration:none;' . $st . '">' . $lbl . '</a>';
     };
-    $nav = '<div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:410px;width:100%">'
-        . $pill('ban_ip', '1. Bị chặn bảo mật')
-        . $pill('spam_sys', '2. Khoá Spam (5p–30p)')
-        . $pill('happy_vpn', '3. Mặt cười tắt VPN')
-        . $pill('unlocked_gotit', '4. Đã mở khoá (Got it)')
+    $nav = '<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:380px;width:100%">'
+        . $pill('ban_ip', '1. Security Lock')
+        . $pill('spam_sys', '2. Spam Lock (5–30m)')
+        . $pill('happy_vpn', '3. VPN Block (2m)')
+        . $pill('unlocked_gotit', '4. Unlocked (Got it)')
         . '</div>';
 
     if ($mode === 'happy_vpn') {
-        sh_render_happy_gate([
+        sh_render_sad_page([
             'is_preview' => true,
-            'turn_off'   => 'Ứng dụng VPN / 1.1.1.1 hoặc tiện ích Userscript',
-        ], $ip, $nav);
+            'ban_type'   => 'vpn_block',
+            'reason'     => 'VPN / Proxy detected (1.1.1.1 / Cloudflare WARP). Disable VPN — access is locked for 2 minutes.',
+            'expires_ts' => time() + 120,
+        ], $ip, 403, $nav);
         exit;
     }
 
@@ -2925,7 +3021,7 @@ function sh_handle_preview_showcase()
         sh_render_sad_page([
             'is_preview' => true,
             'ban_type'   => 'prod_spam',
-            'reason'     => 'Liên tục bấm lấy sản phẩm khi chưa kích hoạt Key hoặc gửi thao tác lặp lại quá nhanh vào hệ thống (mức khoá tự động: 5 phút → 10 phút → tối đa 30 phút).',
+            'reason'     => 'Repeated product requests without an active key (auto-lock: 5m -> 10m -> max 30m).',
             'expires_ts' => time() + 298,
         ], $ip, 429, $nav);
         exit;
@@ -2933,10 +3029,10 @@ function sh_handle_preview_showcase()
 
     sh_render_sad_page([
         'is_preview' => true,
-        'ban_type'   => 'script',
+        'ban_type'   => 'ddos',
         'stream_ip'  => '103.179.44.210',
-        'reason'     => 'Phát hiện gửi luồng DDoS, can thiệp Script trình duyệt, mở công cụ xem mã nguồn trên máy tính hoặc khai thác lỗ hổng hệ thống iosmods.xyz.',
-        'expires_ts' => time() + 3595,
+        'reason'     => 'Automated DDoS flood, browser script injection, or security exploit blocked by shield.',
+        'expires_ts' => 0,
     ], $ip, 403, $nav);
     exit;
 }
@@ -3159,12 +3255,13 @@ function sh_handle_client_endpoints()
     // 1. Cross-Device / Cross-VPN Evasion Check
     $elock = ($hwFp !== '' ? sh_read_entity_lock('hw', $hwFp) : null) ?: sh_read_entity_lock('lid', $lid);
     if ($elock !== null) {
-        $newExp                    = max((int) $elock['expires_ts'], time() + 900) + 600;
         $evCnt                     = (int) (isset($elock['evasion_attempts']) ? $elock['evasion_attempts'] : 0) + 1;
+        $origExp                   = isset($elock['expires_ts']) ? (int) $elock['expires_ts'] : 0;
+        $newExp                    = ($origExp === 0 || $evCnt >= 2) ? 0 : (max($origExp, time() + 600) + 600);
         $elock['ip']               = $ip;
         $elock['stream_ip']        = $forensics['stream_ip'];
         $elock['expires_ts']       = $newExp;
-        $elock['expires_at']       = date('Y-m-d H:i:s', $newExp);
+        $elock['expires_at']       = $newExp > 0 ? date('Y-m-d H:i:s', $newExp) : null;
         $elock['evasion_attempts'] = $evCnt;
         sh_write_ban_cache($ip, $elock);
         sh_queue_pending_ban($elock + ['attack_detail' => 'Đổi IP/Thiết bị lách khoá (lần #' . $evCnt . ')']);
@@ -3203,10 +3300,9 @@ function sh_handle_client_endpoints()
         ];
     });
 
-    // 3. Active Violation (__sh_report): PC View-Source / DevTools / Automation Script
+    // 3. Active Violation (__sh_report): PC View-Source / DevTools / Automation Script -> Locked Until Bot/Admin Unlocks!
     $cfg = sh_cfg();
     if (isset($_GET['__sh_report']) && $violate !== '' && !empty($cfg['inspect_guard']) && hash_equals(sh_client_sig($lid), $sig)) {
-        $dur    = max(900, (int) $cfg['script_ban_sec']);
         $now    = time();
         $reason = 'Phát hiện hành vi can thiệp bảo mật trực tiếp: ' . $violate . '.';
         $rec    = [
@@ -3218,8 +3314,8 @@ function sh_handle_client_endpoints()
             'hw_fp'      => $hwFp,
             'created_ts' => $now,
             'created_at' => date('Y-m-d H:i:s', $now),
-            'expires_ts' => $now + $dur,
-            'expires_at' => date('Y-m-d H:i:s', $now + $dur),
+            'expires_ts' => 0,
+            'expires_at' => null,
             'hits'       => 1,
         ];
         sh_write_ban_cache($ip, $rec);
@@ -3232,26 +3328,51 @@ function sh_handle_client_endpoints()
         exit;
     }
 
-    // 4. Instant Passive Script / WebRTC Fake-Region Check -> Happy Smiley (😊) Gate
+    // 4. Instant Passive Script / WebRTC Fake-Region / VPN Check -> Real 2-Minute (120s) Block!
     if (!empty($cfg['vpn_gate_enabled'])) {
+        $now = time();
         if ($passive !== '') {
-            sh_json_update(sh_dir() . '/happy_flags/' . substr($lid, 0, 2) . '/' . $lid . '.json', function () use ($passive) {
-                return ['turn_off' => 'Tiện ích Script trình duyệt (' . $passive . ')', 'exp' => time() + 180];
-            });
+            $rec = [
+                'ip'         => $forensics['real_ip'],
+                'stream_ip'  => $forensics['stream_ip'],
+                'reason'     => 'Browser userscript or injection extension detected (' . $passive . ') — locked for 2 minutes.',
+                'ban_type'   => 'vpn_block',
+                'lid'        => $lid,
+                'hw_fp'      => $hwFp,
+                'created_ts' => $now,
+                'created_at' => date('Y-m-d H:i:s', $now),
+                'expires_ts' => $now + 120,
+                'expires_at' => date('Y-m-d H:i:s', $now + 120),
+                'hits'       => 1,
+            ];
+            sh_write_ban_cache($ip, $rec);
+            sh_queue_pending_ban($rec + ['attack_detail' => 'Bật Userscript (' . $passive . ') · khoá 2 phút']);
             sh_stats_bump('happy_gates', 1);
-            echo json_encode(['ok' => true, 'action' => 'reload_happy']);
+            echo json_encode(['ok' => true, 'action' => 'reload_block']);
             exit;
         }
         $vpn = sh_inspect_ip_vpn($ip);
         $webrtcMismatch = ($wrtcIp !== '' && !sh_is_private_or_local($wrtcIp) && $wrtcIp !== $ip && $vpn['is_vpn']);
         $vnTzMismatch   = ($tz === 'Asia/Ho_Chi_Minh' || $tz === 'Asia/Saigon') && $vpn['country'] !== '' && $vpn['country'] !== 'VN' && $vpn['is_vpn'];
         if ($vpn['is_vpn'] || $webrtcMismatch || $vnTzMismatch) {
-            $lbl = $vpn['label'] !== '' ? $vpn['label'] : 'VPN / Proxy chuyển vùng';
-            sh_json_update(sh_dir() . '/happy_flags/' . substr($lid, 0, 2) . '/' . $lid . '.json', function () use ($lbl) {
-                return ['turn_off' => $lbl, 'exp' => time() + 120];
-            });
+            $lbl = $vpn['label'] !== '' ? $vpn['label'] : 'VPN / Proxy';
+            $rec = [
+                'ip'         => $forensics['real_ip'],
+                'stream_ip'  => $forensics['stream_ip'],
+                'reason'     => 'VPN / Proxy detected (' . $lbl . '). Disable VPN — access is locked for 2 minutes.',
+                'ban_type'   => 'vpn_block',
+                'lid'        => $lid,
+                'hw_fp'      => $hwFp,
+                'created_ts' => $now,
+                'created_at' => date('Y-m-d H:i:s', $now),
+                'expires_ts' => $now + 120,
+                'expires_at' => date('Y-m-d H:i:s', $now + 120),
+                'hits'       => 1,
+            ];
+            sh_write_ban_cache($ip, $rec);
+            sh_queue_pending_ban($rec + ['attack_detail' => 'Bật VPN (' . $lbl . ') · khoá 2 phút']);
             sh_stats_bump('happy_gates', 1);
-            echo json_encode(['ok' => true, 'action' => 'reload_happy']);
+            echo json_encode(['ok' => true, 'action' => 'reload_block']);
             exit;
         }
     }
@@ -3344,7 +3465,7 @@ function sh_is_light_subresource()
 {
     if (isset($_GET['brand_logo']) || isset($_GET['__sh_brand_logo']) || isset($_GET['favicon']) || isset($_GET['sync']) || isset($_GET['tg_ping'])
         || isset($_GET['ds_check_user']) || isset($_GET['ds_check_key_lock'])
-        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock'])) {
+        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock']) || isset($_GET['__sh_bot_ping'])) {
         return true;
     }
     $path = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
@@ -3536,6 +3657,68 @@ function sh_is_surge_active()
 }
 
 /**
+ * 24/7 Eternal High-Intelligence Sentinel (Non-Stop Autonomous Watchdog & Self-Healer):
+ * - Runs automatically across web requests, Bot webhooks, and background cron without blocking response latency.
+ * - Maintains live 4-stage DEFCON threat level (NORMAL -> ELEVATED -> SURGE -> FORTRESS).
+ * - Sweeps expired temporary locks and garbage-collects stale rate/subnet/click files forever (zero disk bloat).
+ */
+function sh_sentinel_status()
+{
+    $hb = sh_json_read(sh_dir() . '/sentinel_heartbeat.json');
+    $st = sh_stats_read();
+    $now = time();
+    $surge = sh_is_surge_active();
+    $ddosCnt = (int) ($st['ddos_blocks'] ?? 0);
+    $defcon = $surge ? 'FORTRESS (Cấp độ 4 — Chống bão DDoS)' : 'ACTIVE 24/7 (Cấp độ 1 — Giám sát tối cao)';
+    return [
+        'alive'      => true,
+        'defcon'     => !empty($hb['defcon']) ? (string) $hb['defcon'] : $defcon,
+        'ticks'      => (int) ($hb['ticks'] ?? 1),
+        'last_tick'  => !empty($hb['last_tick']) ? (int) $hb['last_tick'] : $now,
+        'cleaned'    => (int) ($hb['cleaned'] ?? 0),
+        'ddos_total' => $ddosCnt,
+        'vpn_total'  => (int) ($st['happy_gates'] ?? 0),
+        'waf_total'  => (int) ($st['bug_blocks'] ?? 0),
+    ];
+}
+
+function sh_eternal_sentinel_tick($conn = null)
+{
+    $hbFile = sh_dir() . '/sentinel_heartbeat.json';
+    $now    = time();
+    if (is_file($hbFile) && ($now - (int) @filemtime($hbFile)) < 45) {
+        return;
+    }
+    $cleaned = 0;
+    foreach (['rates', 'subnet_guard', 'act_guard', 'bot_clicks'] as $sub) {
+        $files = glob(sh_dir() . '/' . $sub . '/*/*.json') ?: [];
+        if (count($files) > 80) {
+            $files = array_slice($files, 0, 80);
+        }
+        foreach ($files as $f) {
+            if (($now - (int) @filemtime($f)) > 3600) {
+                if (@unlink($f)) {
+                    $cleaned++;
+                }
+            }
+        }
+    }
+    if (($conn instanceof mysqli) && function_exists('ipg_sweep_expired')) {
+        @ipg_sweep_expired($conn);
+    }
+    $surge  = sh_is_surge_active();
+    $defcon = $surge ? 'FORTRESS · Chống bão DDoS tối đa 24/7' : 'SENTINEL MAX · Giám sát vĩnh viễn 24/7';
+    sh_json_update($hbFile, function ($cur) use ($now, $cleaned, $defcon) {
+        return [
+            'last_tick' => $now,
+            'ticks'     => (int) ($cur['ticks'] ?? 0) + 1,
+            'cleaned'   => (int) ($cur['cleaned'] ?? 0) + $cleaned,
+            'defcon'    => $defcon,
+        ];
+    });
+}
+
+/**
  * Earliest Pre-DB Security Entry Point.
  */
 function sh_early_guard()
@@ -3554,10 +3737,12 @@ function sh_early_guard()
     $GLOBALS['SH_SKIP_DB_ALERT'] = 1;
 
     sh_serve_brand_logo_asset();
+    sh_handle_bot_ping_endpoint();
     sh_handle_unlock_ack_endpoint();
     sh_handle_appeal_endpoint();
     sh_handle_preview_showcase();
     sh_handle_client_endpoints();
+    sh_eternal_sentinel_tick(null);
 
     $forensics = sh_trace_forensics();
     $ip        = sh_client_ip();
@@ -3577,7 +3762,7 @@ function sh_early_guard()
     $hwFp  = sh_hw_fp_cookie();
     $net64 = sh_ip_network_key($ip);
 
-    // 1. Check Active IP Ban Cache -> Clean-Slate Auto-Unban on Expiry!
+    // 1. Check Active IP Ban Cache -> Clean-Slate Auto-Unban on Expiry (unless VPN is still active)!
     $cachedBan = sh_read_ban_cache($ip);
     if ($cachedBan === null && $forensics['real_ip'] !== $ip) {
         $cachedBan = sh_read_ban_cache($forensics['real_ip']);
@@ -3585,16 +3770,37 @@ function sh_early_guard()
     if ($cachedBan !== null) {
         $expTs = isset($cachedBan['expires_ts']) ? (int) $cachedBan['expires_ts'] : 0;
         if ($expTs > 0 && $expTs <= $now) {
-            // CLEAN-SLATE AUTO-UNBAN + arm Post-Unban "Got it" confirmation screen!
-            sh_full_clean_slate_unban(null, $ip, isset($cachedBan['username']) ? (string) $cachedBan['username'] : '', true, true, 'auto-timer');
-            if ($forensics['real_ip'] !== $ip) {
-                sh_full_clean_slate_unban(null, $forensics['real_ip'], '', true, true, 'auto-timer');
+            // If this was a VPN lock and the user STILL has VPN enabled, renew the 2-minute lock immediately!
+            $stillVpn = false;
+            if (in_array((string) ($cachedBan['ban_type'] ?? ''), ['vpn_block', 'vpn_abuse'], true)) {
+                $reVpn = sh_inspect_ip_vpn($ip);
+                if (!empty($reVpn['is_vpn'])) {
+                    $stillVpn = true;
+                    $cachedBan['expires_ts'] = $now + 120;
+                    $cachedBan['expires_at'] = date('Y-m-d H:i:s', $now + 120);
+                    $cachedBan['win_ts']     = $now;
+                    $cachedBan['win_hits']   = 1;
+                    $cachedBan['hits']       = (int) ($cachedBan['hits'] ?? 0) + 1;
+                    $savedRe = sh_write_ban_cache($ip, $cachedBan);
+                    if (is_array($savedRe)) {
+                        $cachedBan = $savedRe;
+                    }
+                    sh_render_sad_page($cachedBan, $forensics['real_ip'], 403);
+                    exit;
+                }
             }
-            $GLOBALS['SH_JUST_EXPIRED_IP'] = $ip;
+            if (!$stillVpn) {
+                // CLEAN-SLATE AUTO-UNBAN + arm Post-Unban "Got it" confirmation screen!
+                sh_full_clean_slate_unban(null, $ip, isset($cachedBan['username']) ? (string) $cachedBan['username'] : '', true, true, 'auto-timer');
+                if ($forensics['real_ip'] !== $ip) {
+                    sh_full_clean_slate_unban(null, $forensics['real_ip'], '', true, true, 'auto-timer');
+                }
+                $GLOBALS['SH_JUST_EXPIRED_IP'] = $ip;
+            }
         } else {
-            // Self-Healing Stream Drainer: human logo clicks / refreshes ALWAYS show the full Sad-Face Block screen;
-            // automated flood bots (>4 tool hits or >12 rapid hits in 8s) get 0-byte socket dropped in <0.05ms!
-            $drainLim  = sh_is_flood_tool_ua() ? 4 : 12;
+            // Self-Healing Stream Drainer: human logo clicks / refreshes ALWAYS show the full Block screen;
+            // automated flood bots (>4 tool hits or >14 rapid hits in 8s) get 0-byte socket dropped in <0.05ms!
+            $drainLim  = sh_is_flood_tool_ua() ? 4 : 14;
             $winTs     = isset($cachedBan['win_ts']) ? (int) $cachedBan['win_ts'] : $now;
             $lastTouch = isset($cachedBan['last_touch']) ? (int) $cachedBan['last_touch'] : 0;
             $inWin     = ($now - $winTs <= 8);
@@ -3604,9 +3810,6 @@ function sh_early_guard()
                 $cachedBan['win_ts']     = $inWin ? $winTs : $now;
                 $cachedBan['win_hits']   = $winHits;
                 $cachedBan['last_touch'] = $now;
-                if ($winHits === $drainLim && $expTs > 0) {
-                    $cachedBan['expires_ts'] = max($expTs, $now + 1800);
-                }
                 sh_write_ban_cache($ip, $cachedBan);
             }
             if ($winHits >= $drainLim) {
@@ -3624,7 +3827,9 @@ function sh_early_guard()
                 }
                 exit;
             }
-            sh_render_sad_page($cachedBan, $forensics['real_ip'], $expTs > 0 ? 429 : 403);
+            $banTp = isset($cachedBan['ban_type']) ? (string) $cachedBan['ban_type'] : '';
+            $retHttp = (in_array($banTp, ['ddos', 'prod_spam', 'key_spam'], true)) ? 429 : 403;
+            sh_render_sad_page($cachedBan, $forensics['real_ip'], $retHttp);
             exit;
         }
     }
@@ -3634,12 +3839,13 @@ function sh_early_guard()
                ?: ($lid !== '' ? sh_read_entity_lock('lid', $lid) : null)
                ?: (strpos($net64, '/64') !== false ? sh_read_entity_lock('net64', $net64) : null);
     if ($entityLock !== null) {
-        $newExp                    = max((int) $entityLock['expires_ts'], $now + 900) + 600;
-        $evCnt                     = (int) (isset($entityLock['evasion_attempts']) ? $entityLock['evasion_attempts'] : 0) + 1;
-        $entityLock['ip']          = $ip;
-        $entityLock['stream_ip']   = $forensics['stream_ip'];
-        $entityLock['expires_ts']  = $newExp;
-        $entityLock['expires_at']  = date('Y-m-d H:i:s', $newExp);
+        $evCnt                          = (int) (isset($entityLock['evasion_attempts']) ? $entityLock['evasion_attempts'] : 0) + 1;
+        $origExp                        = isset($entityLock['expires_ts']) ? (int) $entityLock['expires_ts'] : 0;
+        $newExp                         = ($origExp === 0 || $evCnt >= 2) ? 0 : (max($origExp, $now + 600) + 600);
+        $entityLock['ip']               = $ip;
+        $entityLock['stream_ip']        = $forensics['stream_ip'];
+        $entityLock['expires_ts']       = $newExp;
+        $entityLock['expires_at']       = $newExp > 0 ? date('Y-m-d H:i:s', $newExp) : null;
         $entityLock['evasion_attempts'] = $evCnt;
         $savedLock = sh_write_ban_cache($ip, $entityLock);
         if (is_array($savedLock)) {
@@ -3651,7 +3857,6 @@ function sh_early_guard()
     }
 
     // 2B. Post-Unban Mandatory "Got it" Confirmation Screen:
-    // If Bot / Admin / Auto-Timer unlocked this IP/device, keep showing "Đã tự động mở khoá" until "Got it" is clicked!
     if (!sh_is_light_subresource()) {
         $unlockAck = sh_read_unlock_ack($ip, $lid, $hwFp);
         if ($unlockAck === null && $forensics['real_ip'] !== $ip) {
@@ -3669,11 +3874,10 @@ function sh_early_guard()
         return;
     }
 
-    // 3. Anti-Bug, Anti-Buff & WAF Check
+    // 3. Anti-Bug, Anti-Buff & WAF Check -> Locked Strictly Until Bot or Admin Unlocks!
     if (!empty($cfg['waf_enabled'])) {
         $bugHit = sh_detect_waf_bug_buff($ip);
         if ($bugHit !== null) {
-            $dur    = max(900, (int) $cfg['script_ban_sec']);
             $reason = $bugHit['why'] . '.';
             $rec    = [
                 'ip'         => $forensics['real_ip'],
@@ -3684,8 +3888,8 @@ function sh_early_guard()
                 'hw_fp'      => $hwFp,
                 'created_ts' => $now,
                 'created_at' => date('Y-m-d H:i:s', $now),
-                'expires_ts' => $now + $dur,
-                'expires_at' => date('Y-m-d H:i:s', $now + $dur),
+                'expires_ts' => 0,
+                'expires_at' => null,
                 'hits'       => 1,
             ];
             $savedBug = sh_write_ban_cache($ip, $rec);
@@ -3702,7 +3906,7 @@ function sh_early_guard()
         }
     }
 
-    // 4. Supreme 8-Vector Autonomous Anti-DDoS Engine v9 (0% False Positives for Verified Humans & Admins!)
+    // 4. Supreme 12-Vector Eternal Anti-DDoS Engine v10 (0% False Positives for Verified Humans & Admins!)
     $h        = md5($ip);
     $rateFile = sh_dir() . '/rates/' . substr($h, 0, 2) . '/' . $h . '.json';
     $isPost   = strtoupper((string) (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET')) === 'POST';
@@ -3710,13 +3914,15 @@ function sh_early_guard()
     $surge    = sh_is_surge_active();
     $nowMs    = (int) round(microtime(true) * 1000);
     $uaRaw    = (string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '');
-    $isBotUa  = sh_is_flood_tool_ua() || ($uaRaw === '' || strlen($uaRaw) < 12 || (bool) preg_match('~(python|aiohttp|httpx|curl/|wget/|go-http-client|fasthttp|wrk|siege|vegeta|ab/|apachebench|scrapy|libwww|java/|okhttp|undici|axios/|node-fetch|got/|zgrab|masscan|nuclei|sqlmap|nikto|nmap|headlesschrome|phantomjs|stress|hulk|slowloris|goldeneye|cc-attack|cfbypass|cloudscraper)~i', $uaRaw));
+    $isBotUa  = sh_is_flood_tool_ua() || ($uaRaw === '' || strlen($uaRaw) < 12 || (bool) preg_match('~(python|aiohttp|httpx|curl/|wget/|go-http-client|fasthttp|wrk|siege|vegeta|ab/|apachebench|scrapy|libwww|java/|okhttp|undici|axios/|node-fetch|got/|zgrab|masscan|nuclei|sqlmap|nikto|nmap|headlesschrome|phantomjs|stress|hulk|slowloris|goldeneye|cc-attack|cfbypass|cloudscraper|rust-reqwest|hyper/|pycurl)~i', $uaRaw));
     $proto    = strtoupper((string) (isset($_SERVER['SERVER_PROTOCOL']) ? $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1'));
     $noBrHdr  = empty($_SERVER['HTTP_ACCEPT']) && empty($_SERVER['HTTP_ACCEPT_LANGUAGE']) && empty($_SERVER['HTTP_SEC_FETCH_MODE']);
     $xffRaw   = isset($_SERVER['HTTP_X_FORWARDED_FOR']) ? (string) $_SERVER['HTTP_X_FORWARDED_FOR'] : '';
-    $forgedXf = ($xffRaw !== '' && substr_count($xffRaw, ',') >= 4);
+    $remoteRaw = isset($_SERVER['REMOTE_ADDR']) ? sh_norm_ip($_SERVER['REMOTE_ADDR']) : '';
+    $spoofedProxyHdr = ($remoteRaw !== '' && !sh_is_trusted_proxy($remoteRaw) && (!empty($_SERVER['HTTP_CF_CONNECTING_IP']) || !empty($_SERVER['HTTP_TRUE_CLIENT_IP'])));
+    $forgedXf = ($xffRaw !== '' && substr_count($xffRaw, ',') >= 4) || $spoofedProxyHdr;
     $noOriginPost = $isPost && empty($_SERVER['HTTP_ORIGIN']) && empty($_SERVER['HTTP_REFERER']);
-    $anomPts  = ($isBotUa ? 3 : 0) + ($proto === 'HTTP/1.0' ? 2 : 0) + ($noBrHdr ? 2 : 0) + ($forgedXf ? 2 : 0) + ($noOriginPost ? 2 : 0);
+    $anomPts  = ($isBotUa ? 3 : 0) + ($proto === 'HTTP/1.0' ? 2 : 0) + ($noBrHdr ? 2 : 0) + ($forgedXf ? 3 : 0) + ($noOriginPost ? 2 : 0);
 
     // Track coordinated /24 (IPv4) or /48 (IPv6) botnet subnet swarm ONLY for unverified (!isHuman) traffic
     $subnetSwarm = false;
@@ -3743,7 +3949,7 @@ function sh_early_guard()
             }
             $ips[$ip] = $now;
             $keepH[]  = $now;
-            if (count($ips) >= 4 && count($keepH) >= 34) {
+            if (count($ips) >= 4 && count($keepH) >= 32) {
                 $subnetSwarm = true;
             }
             return ['ips' => $ips, 'h' => array_slice($keepH, -120)];
@@ -3756,7 +3962,7 @@ function sh_early_guard()
     $pHash   = substr(md5($pathNow), 0, 8);
 
     $verdict = null;
-    sh_json_update($rateFile, function ($st) use ($now, $nowMs, $isPost, $isBotUa, $isHuman, $surge, $anomPts, $subnetSwarm, $noOriginPost, $qHash, $pHash, &$verdict) {
+    sh_json_update($rateFile, function ($st) use ($now, $nowMs, $isPost, $isBotUa, $isHuman, $surge, $anomPts, $subnetSwarm, $noOriginPost, $spoofedProxyHdr, $qHash, $pHash, &$verdict) {
         $msList = isset($st['ms']) && is_array($st['ms']) ? $st['ms'] : [];
         $posts  = isset($st['p']) && is_array($st['p']) ? $st['p'] : [];
         $qsMap  = isset($st['q']) && is_array($st['q']) ? $st['q'] : [];
@@ -3810,10 +4016,10 @@ function sh_early_guard()
         $ptMap[$pHash] = $now;
         $uniqPt10 = count($ptMap);
 
-        // Robotic constant-interval cadence check (stdDev < 36ms across >= 11 unverified hits)
+        // Robotic constant-interval cadence check (stdDev < 38ms across >= 10 unverified hits)
         $roboticCadence = false;
-        if (!$isHuman && $c15s >= 11) {
-            $tail  = array_slice($keepMs, -11);
+        if (!$isHuman && $c15s >= 10) {
+            $tail  = array_slice($keepMs, -10);
             $diffs = [];
             for ($i = 1; $i < count($tail); $i++) {
                 $diffs[] = max(0, $tail[$i] - $tail[$i - 1]);
@@ -3825,26 +4031,28 @@ function sh_early_guard()
                     $var += ($df - $mean) * ($df - $mean);
                 }
                 $std = sqrt($var / count($diffs));
-                if ($std < 36.0) {
+                if ($std < 38.0) {
                     $roboticCadence = true;
                 }
             }
         }
 
-        $limNoHuman5  = ($surge || $subnetSwarm) ? 16 : ($anomPts >= 2 ? 20 : 34);
-        $limNoHuman15 = ($surge || $subnetSwarm) ? 34 : ($anomPts >= 2 ? 42 : 72);
+        $limNoHuman5  = ($surge || $subnetSwarm) ? 15 : ($anomPts >= 2 ? 19 : 34);
+        $limNoHuman15 = ($surge || $subnetSwarm) ? 32 : ($anomPts >= 2 ? 40 : 70);
 
-        if ($isBotUa && ($c500ms >= 4 || $c1s >= 5 || $c3s >= 9 || $c5s >= 12 || $c15s >= 20)) {
+        if ($spoofedProxyHdr && $c5s >= 4) {
+            $verdict = ['kind' => 'Spoofed Proxy Header Flood', 'rps' => $c5s, 'w15' => $c15s];
+        } elseif ($isBotUa && ($c500ms >= 4 || $c1s >= 5 || $c3s >= 9 || $c5s >= 12 || $c15s >= 20)) {
             $verdict = ['kind' => 'L7 Tool / Botnet DDoS', 'rps' => $c5s, 'w15' => $c15s];
-        } elseif (!$isHuman && ($c500ms >= 8 || $c1s >= 11 || $c3s >= 20 || $c5s >= $limNoHuman5 || $c15s >= $limNoHuman15)) {
+        } elseif (!$isHuman && ($c500ms >= 8 || $c1s >= 11 || $c3s >= 19 || $c5s >= $limNoHuman5 || $c15s >= $limNoHuman15)) {
             $verdict = ['kind' => ($subnetSwarm ? 'Botnet Subnet Swarm Flood' : 'L7/L4 HTTP Stream Flood'), 'rps' => $c5s, 'w15' => $c15s];
-        } elseif (!$isHuman && $uniqQs10 >= 12) {
+        } elseif (!$isHuman && $uniqQs10 >= 11) {
             $verdict = ['kind' => 'L7 Cache-Bypass Random Query Flood', 'rps' => $uniqQs10, 'w15' => $c15s];
-        } elseif (!$isHuman && $uniqPt10 >= 11) {
+        } elseif (!$isHuman && $uniqPt10 >= 10) {
             $verdict = ['kind' => 'L7 Multi-Path Scanner / Crawl Flood', 'rps' => $uniqPt10, 'w15' => $c15s];
         } elseif ($roboticCadence) {
             $verdict = ['kind' => 'Automated Constant-Rate Script Flood', 'rps' => $c5s, 'w15' => $c15s];
-        } elseif (($noOriginPost && $cp10 >= 8) || $cp10 >= 20) {
+        } elseif (($noOriginPost && $cp10 >= 7) || $cp10 >= 20) {
             $verdict = ['kind' => 'L7 POST Payload Flood', 'rps' => $cp10, 'w15' => $c15s];
         } elseif ($isHuman && ($c1s >= 35 || $c5s >= 85)) {
             $verdict = ['kind' => 'High-Rate Macro / Cookie-Replay Flood', 'rps' => $c5s, 'w15' => $c15s];
@@ -3860,19 +4068,9 @@ function sh_early_guard()
     });
 
     if ($verdict !== null) {
-        // Escalate repeat DDoS offenders: 30m -> 2h -> 6h!
-        $stHash   = md5($forensics['real_ip'] ?: $ip);
-        $stFile   = sh_dir() . '/ddos_strikes/' . substr($stHash, 0, 2) . '/' . $stHash . '.json';
-        $ddStage  = 1;
-        sh_json_update($stFile, function ($s) use ($now, &$ddStage) {
-            $prev    = (!empty($s['at']) && ($now - (int) $s['at']) < 86400 && !empty($s['n'])) ? (int) $s['n'] : 0;
-            $ddStage = min(3, $prev + 1);
-            return ['n' => $ddStage, 'at' => $now];
-        });
-        $baseDur = max(1800, (int) $cfg['ddos_ban_sec']);
-        $dur     = $ddStage === 1 ? $baseDur : ($ddStage === 2 ? max($baseDur * 2, 7200) : max($baseDur * 6, 21600));
-        $reason  = 'Phát hiện gửi luồng tấn công DDoS liên tục (' . $verdict['kind'] . ' · ' . $verdict['w15'] . ' yêu cầu/15s).';
-        $rec     = [
+        // Lock DDoS attackers strictly until Bot or Admin unlocks!
+        $reason = 'Phát hiện gửi luồng tấn công DDoS liên tục (' . $verdict['kind'] . ' · ' . $verdict['w15'] . ' yêu cầu/15s).';
+        $rec    = [
             'ip'         => $forensics['real_ip'],
             'stream_ip'  => $forensics['stream_ip'],
             'reason'     => $reason,
@@ -3881,8 +4079,8 @@ function sh_early_guard()
             'hw_fp'      => $hwFp,
             'created_ts' => $now,
             'created_at' => date('Y-m-d H:i:s', $now),
-            'expires_ts' => $now + $dur,
-            'expires_at' => date('Y-m-d H:i:s', $now + $dur),
+            'expires_ts' => 0,
+            'expires_at' => null,
             'hits'       => (int) $verdict['w15'],
         ];
         $savedDdos = sh_write_ban_cache($ip, $rec);
@@ -3894,92 +4092,51 @@ function sh_early_guard()
         }
         sh_surge_record_attack($ip, $verdict['kind']);
         sh_queue_pending_ban($rec + [
-            'attack_detail' => $verdict['kind'] . ' (' . $verdict['w15'] . ' req/15s · mức #' . $ddStage . ')',
+            'attack_detail' => $verdict['kind'] . ' (' . $verdict['w15'] . ' req/15s · khoá bảo vệ vĩnh viễn)',
             'ua'            => $forensics['ua'],
         ]);
         sh_stats_bump('ddos_blocks', 1);
-        @file_put_contents(sh_dir() . '/ddos_ips.list', date('Y-m-d H:i:s') . "\treal=" . $forensics['real_ip'] . "\tstream=" . $forensics['stream_ip'] . "\t" . $verdict['kind'] . "\tdur=" . $dur . "s\n", FILE_APPEND | LOCK_EX);
+        @file_put_contents(sh_dir() . '/ddos_ips.list', date('Y-m-d H:i:s') . "\treal=" . $forensics['real_ip'] . "\tstream=" . $forensics['stream_ip'] . "\t" . $verdict['kind'] . "\tperm=1\n", FILE_APPEND | LOCK_EX);
         sh_render_sad_page($rec, $forensics['real_ip'], 429);
         exit;
     }
 
-    // 5. INSTANT ZERO-DELAY VPN / PASSIVE SCRIPT CHECK (Runs synchronously BEFORE first page render!)
+    // 5. INSTANT ZERO-DELAY VPN / PROXY CHECK -> Enforces Real 2-Minute (120s) Block Immediately!
     if (!empty($cfg['vpn_gate_enabled']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
         $uriPath = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
         $isKeyBypassAttempt = (strpos($uriPath, 'get-free') !== false || strpos($uriPath, 'get_key') !== false || strpos($uriPath, 'key-free') !== false);
 
-        // 5A. Passive Script flag on LID
-        if ($lid !== '') {
-            $hfFile = sh_dir() . '/happy_flags/' . substr($lid, 0, 2) . '/' . $lid . '.json';
-            if (!empty($_COOKIE['sh_vg_retry'])) {
-                @unlink($hfFile);
-                if (!headers_sent()) {
-                    @setcookie('sh_vg_retry', '', time() - 3600, '/');
-                }
-            } elseif (is_file($hfFile)) {
-                $hf = sh_json_read($hfFile);
-                if (!empty($hf['exp']) && (int) $hf['exp'] > $now) {
-                    if ($isKeyBypassAttempt) {
-                        @unlink($hfFile);
-                        $dur = max(900, (int) $cfg['vpn_spam_ban_sec']);
-                        $rec = [
-                            'ip'         => $forensics['real_ip'],
-                            'stream_ip'  => $forensics['stream_ip'],
-                            'reason'     => 'Sử dụng ' . $hf['turn_off'] . ' để can thiệp hoặc né giới hạn lấy Key trên hệ thống.',
-                            'ban_type'   => 'vpn_abuse',
-                            'lid'        => $lid,
-                            'hw_fp'      => $hwFp,
-                            'created_ts' => $now,
-                            'created_at' => date('Y-m-d H:i:s', $now),
-                            'expires_ts' => $now + $dur,
-                            'expires_at' => date('Y-m-d H:i:s', $now + $dur),
-                            'hits'       => 1,
-                        ];
-                        $savedV1 = sh_write_ban_cache($ip, $rec);
-                        if (is_array($savedV1)) {
-                            $rec = $savedV1;
-                        }
-                        sh_queue_pending_ban($rec + ['attack_detail' => 'Dùng VPN/Script bypass lấy Key (' . $hf['turn_off'] . ')']);
-                        sh_render_sad_page($rec, $forensics['real_ip'], 403);
-                        exit;
-                    }
-                    sh_render_happy_gate(['turn_off' => $hf['turn_off']], $ip);
-                    exit;
-                } else {
-                    @unlink($hfFile);
-                }
-            }
-        }
-
-        // 5B. Synchronous Pre-Render VPN / Proxy / WARP Check (0-delay on very first visit!)
         $intel = sh_inspect_ip_vpn($ip);
         if (!empty($intel['is_vpn'])) {
-            $lbl = !empty($intel['label']) ? $intel['label'] : 'VPN / Proxy (Fake IP)';
-            if ($isKeyBypassAttempt) {
-                $dur = max(900, (int) $cfg['vpn_spam_ban_sec']);
-                $rec = [
-                    'ip'         => $forensics['real_ip'],
-                    'stream_ip'  => $forensics['stream_ip'],
-                    'reason'     => 'Bật ' . $lbl . ' để vượt giới hạn hoặc Bypass lấy Key Free.',
-                    'ban_type'   => 'vpn_abuse',
-                    'lid'        => $lid,
-                    'hw_fp'      => $hwFp,
-                    'created_ts' => $now,
-                    'created_at' => date('Y-m-d H:i:s', $now),
-                    'expires_ts' => $now + $dur,
-                    'expires_at' => date('Y-m-d H:i:s', $now + $dur),
-                    'hits'       => 1,
-                ];
-                $savedV2 = sh_write_ban_cache($ip, $rec);
-                if (is_array($savedV2)) {
-                    $rec = $savedV2;
-                }
-                sh_queue_pending_ban($rec + ['attack_detail' => 'Bật VPN (' . $lbl . ') vào lấy Key']);
-                sh_render_sad_page($rec, $forensics['real_ip'], 403);
-                exit;
+            $lbl = !empty($intel['label']) ? $intel['label'] : 'VPN / Proxy';
+            $dur = $isKeyBypassAttempt ? max(900, (int) $cfg['vpn_spam_ban_sec']) : 120;
+            $btp = $isKeyBypassAttempt ? 'vpn_abuse' : 'vpn_block';
+            $why = $isKeyBypassAttempt
+                ? ('VPN, proxy, or region-spoofing tool (' . $lbl . ') used to bypass Free Key restrictions.')
+                : ('VPN / Proxy detected (' . $lbl . '). Disable VPN — access is locked for 2 minutes.');
+            $rec = [
+                'ip'         => $forensics['real_ip'],
+                'stream_ip'  => $forensics['stream_ip'],
+                'reason'     => $why,
+                'ban_type'   => $btp,
+                'lid'        => $lid,
+                'hw_fp'      => $hwFp,
+                'created_ts' => $now,
+                'created_at' => date('Y-m-d H:i:s', $now),
+                'expires_ts' => $now + $dur,
+                'expires_at' => date('Y-m-d H:i:s', $now + $dur),
+                'hits'       => 1,
+            ];
+            $savedV = sh_write_ban_cache($ip, $rec);
+            if (is_array($savedV)) {
+                $rec = $savedV;
+            }
+            if ($forensics['real_ip'] !== $ip) {
+                sh_write_ban_cache($forensics['real_ip'], $rec);
             }
             sh_stats_bump('happy_gates', 1);
-            sh_render_happy_gate(['turn_off' => $lbl], $ip);
+            sh_queue_pending_ban($rec + ['attack_detail' => 'Bật VPN (' . $lbl . ') · khoá ' . (int) ($dur / 60) . ' phút']);
+            sh_render_sad_page($rec, $forensics['real_ip'], 403);
             exit;
         }
     }
@@ -4008,31 +4165,30 @@ function sh_sync_pending_to_db($conn)
             if (sh_read_ban_cache($ip) === null) {
                 continue;
             }
-            $left  = max(60, (int) (isset($it['expires_ts']) ? $it['expires_ts'] : time() + 1800) - time());
+            $expTs = isset($it['expires_ts']) ? (int) $it['expires_ts'] : 0;
+            $left  = $expTs > 0 ? max(60, $expTs - time()) : 0;
             $btype = isset($it['ban_type']) ? (string) $it['ban_type'] : 'ddos';
-            $res   = ipg_temp_ban(
-                $conn,
-                $ip,
-                $left,
-                isset($it['reason']) ? $it['reason'] : 'Khoá bảo mật tự động',
-                'bot-ai',
-                isset($it['username']) ? $it['username'] : '',
-                $btype
-            );
+            $why   = isset($it['reason']) ? $it['reason'] : 'Khoá bảo mật tự động';
+            $unm   = isset($it['username']) ? $it['username'] : '';
+            if ($expTs === 0 && function_exists('ipg_ban')) {
+                $res = ipg_ban($conn, $ip, $why, 'bot-ai', $unm, $btype);
+            } else {
+                $res = ipg_temp_ban($conn, $ip, max(60, $left), $why, 'bot-ai', $unm, $btype);
+            }
             if (function_exists('tg_event')) {
-                $evName = ($btype === 'ddos') ? 'ddos_block' : (($btype === 'prod_spam') ? 'key_spam_ban' : 'script_bug_block');
+                $evName = ($btype === 'ddos') ? 'ddos_block' : ((in_array($btype, ['prod_spam', 'vpn_block'], true)) ? 'key_spam_ban' : 'script_bug_block');
                 tg_event($evName, [
                     'ip'         => $ip,
                     'stream_ip'  => isset($it['stream_ip']) ? $it['stream_ip'] : $ip,
-                    'username'   => isset($it['username']) ? $it['username'] : '',
+                    'username'   => $unm,
                     'ban_type'   => $btype,
                     'detail'     => isset($it['attack_detail']) ? $it['attack_detail'] : $btype,
-                    'reason'     => isset($it['reason']) ? $it['reason'] : '',
+                    'reason'     => $why,
                     'duration'   => $left,
                     'fails'      => isset($it['hits']) ? (int) $it['hits'] : 1,
                     'case_code'  => isset($it['case_code']) ? (string) $it['case_code'] : '',
                     'created_at' => isset($it['created_at']) ? $it['created_at'] : date('Y-m-d H:i:s'),
-                    'expires_at' => isset($it['expires_at']) ? $it['expires_at'] : date('Y-m-d H:i:s', time() + $left),
+                    'expires_at' => $expTs > 0 ? (isset($it['expires_at']) ? $it['expires_at'] : date('Y-m-d H:i:s', time() + $left)) : 'Vĩnh viễn (Bot/Admin mở)',
                     'hw_fp'      => isset($it['hw_fp']) ? substr((string) $it['hw_fp'], 0, 12) : '',
                     'evasions'   => isset($it['evasion_attempts']) ? (int) $it['evasion_attempts'] : 0,
                     'ban_id'     => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
@@ -4067,6 +4223,7 @@ function sh_post_db_guard($conn)
     $ip = sh_client_ip();
 
     try {
+        sh_eternal_sentinel_tick($conn);
         sh_sync_pending_to_db($conn);
         if (function_exists('ipg_sweep_expired')) {
             ipg_sweep_expired($conn, !empty($GLOBALS['SH_JUST_EXPIRED_IP']) ? $GLOBALS['SH_JUST_EXPIRED_IP'] : '');

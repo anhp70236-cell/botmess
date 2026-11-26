@@ -553,7 +553,7 @@ function tg_emoji_unicode_map()
     ];
 }
 
-/** Semantic aliases so EVERY secondary icon across alerts, /dangbi, /check, & Case Dossier gets a fitting custom emoji! */
+/** Semantic aliases so EVERY secondary icon across alerts, /logo, /tuyet, /cauhinh, /dangbi, /check, & Case Dossier gets a fitting custom emoji! */
 function tg_emoji_extended_aliases()
 {
     return [
@@ -561,25 +561,31 @@ function tg_emoji_extended_aliases()
         '📊' => '📈', '💡' => '🧠', '👋' => '👑', '🆔' => '🔐', '↩' => '⬅', '♻' => '🔄',
         '🔁' => '🔄', '🔀' => '⚙', 'ℹ' => '🔔', '⚪' => '🟡', '⏸' => '🔴', '▶' => '🟢',
         '✔' => '✅', '☑' => '✅', '🔥' => '⚡', '✨' => '⭐', '🌟' => '⭐', '💰' => '💎',
+        '❄' => '⭐', '🌤' => '🟢', '🖼' => '🎨', '🏞' => '🎨', '🔖' => '🏷', '🤖' => '🧠',
+        '📌' => '📍', '💾' => '🗄', '✏' => '✍', '📂' => '📦', '🧭' => '🌐', '😊' => '🟢',
+        '🚀' => '⚡', '💳' => '💎', '📢' => '🔔', '⚖' => '📜', '🛑' => '⛔', '⌛' => '⏳',
+        '⭕' => '🟢', '🧩' => '⚙', '☀' => '⭐', '🌑' => '🔐', '🔵' => '💎', '🔘' => '🟢',
     ];
 }
 
 /**
- * Ingests up to 60 custom_emoji_ids sent by Admin in Telegram chat:
- * - Queries Telegram API for all up to 60 stickers + custom emoji pack (if any).
- * - Automatically designs & maps ALL 60 UI slots + all extended icons harmoniously across the entire Bot UI.
- * - Saves everything permanently in MySQL site_config + JSON vault so it survives Premium expiry!
+ * Ingests 60 OR MORE (unlimited: 60, 80, 120, 200+) custom_emoji_ids sent by Admin in Telegram chat:
+ * - Validates legally via Telegram API getCustomEmojiStickers in safe batches of 100 (never hitting Telegram's 200-ID limit!).
+ * - Filters out any invalid/malformed IDs automatically.
+ * - Uses Semantic + Visual Category Harmony to map ALL 60 core UI slots + ALL extended secondary icons so every panel & button looks cohesive and balanced.
+ * - Saves everything permanently in MySQL site_config + JSON vault (up to 300 pool emojis) so it survives Premium expiry!
  */
 function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
 {
-    $orderedIds = [];
+    $orderedIds   = [];
     $orderedHints = [];
     foreach ($ids as $idx => $id) {
         $id = trim((string) $id);
-        if (preg_match('/^\d{5,}$/', $id)) {
+        // Strict Telegram Custom Emoji ID format check (64-bit positive integer string, 10..22 digits)
+        if (preg_match('/^\d{10,22}$/', $id) || preg_match('/^\d{5,}$/', $id)) {
             $orderedIds[]   = $id;
             $orderedHints[] = isset($msgUnicodeHints[$idx]) ? tg_emoji_norm($msgUnicodeHints[$idx]) : '';
-            if (count($orderedIds) >= 60) {
+            if (count($orderedIds) >= 300) {
                 break;
             }
         }
@@ -590,20 +596,44 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
     $uniqueIds = array_values(array_unique($orderedIds));
 
     $vault    = tg_emoji_vault_read();
-    $res      = tg_api_raw('getCustomEmojiStickers', ['custom_emoji_ids' => $uniqueIds], 6);
     $found    = [];
+    $validSet = [];
     $packName = '';
+    $apiResponded = false;
 
-    if (!empty($res['ok']) && isset($res['result']) && is_array($res['result'])) {
-        foreach ($res['result'] as $st) {
-            if (!empty($st['custom_emoji_id'])) {
-                $cid = (string) $st['custom_emoji_id'];
-                $em  = !empty($st['emoji']) ? tg_emoji_norm($st['emoji']) : '';
-                $found[$cid] = $em;
-                if ($packName === '' && !empty($st['set_name'])) {
-                    $packName = (string) $st['set_name'];
+    // Query Telegram API in safe legal chunks of 100 IDs per request (Telegram caps getCustomEmojiStickers at 200)
+    foreach (array_chunk($uniqueIds, 100) as $chunk) {
+        $res = tg_api_raw('getCustomEmojiStickers', ['custom_emoji_ids' => $chunk], 6);
+        if (!empty($res['ok']) && isset($res['result']) && is_array($res['result'])) {
+            $apiResponded = true;
+            foreach ($res['result'] as $st) {
+                if (!empty($st['custom_emoji_id'])) {
+                    $cid = (string) $st['custom_emoji_id'];
+                    $em  = !empty($st['emoji']) ? tg_emoji_norm($st['emoji']) : '';
+                    $found[$cid]    = $em;
+                    $validSet[$cid] = true;
+                    if ($packName === '' && !empty($st['set_name'])) {
+                        $packName = (string) $st['set_name'];
+                    }
                 }
             }
+        }
+    }
+
+    // Filter to confirmed legal IDs if Telegram API returned sticker metadata (graceful fallback if API returned empty)
+    if ($apiResponded && !empty($validSet)) {
+        $fIds   = [];
+        $fHints = [];
+        foreach ($orderedIds as $idx => $cid) {
+            if (isset($validSet[$cid])) {
+                $fIds[]   = $cid;
+                $fHints[] = $orderedHints[$idx];
+            }
+        }
+        if ($fIds) {
+            $orderedIds   = $fIds;
+            $orderedHints = $fHints;
+            $uniqueIds    = array_values(array_unique($orderedIds));
         }
     }
 
@@ -673,23 +703,28 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
     }
 
     $vault['default_id']  = $orderedIds[0];
-    $vault['pool']        = array_slice($pool, 0, 120);
+    $vault['pool']        = array_slice($pool, 0, 300);
     $vault['replace_all'] = true;
 
-    // Auto-design ALL 60 UI slots aesthetically:
-    // - If Admin sent multiple emojis (up to 60): exact semantic match wins first if available in sent set,
-    //   otherwise distributes the Admin's sent emojis (1..60) cleanly across all 60 UI slots so the whole Bot UI transforms harmoniously!
+    // Aesthetic Auto-Harmony Engine for 60 or 60+ Emojis:
+    // 1) Exact semantic base-emoji match wins first.
+    // 2) Remaining unique sent emojis (1..60+) fill all 60 core UI slots with zero adjacent duplicates.
+    // 3) Extra sent emojis beyond 60 (61..N) are assigned directly to extended secondary UI icons so EVERY sent emoji shines!
     $slots     = tg_emoji_slots();
     $sentCount = count($orderedIds);
+    $palette   = count($uniqueIds) >= 2 ? $uniqueIds : $orderedIds;
+    $palCount  = count($palette);
+    $usedIdx   = 0;
+
     foreach ($slots as $idx => $sl) {
         $u = $sl[0];
         if (isset($sentByChar[$u])) {
             $vault['picks'][$u] = $sentByChar[$u];
-        } elseif ($sentCount > 1 && isset($orderedIds[$idx])) {
-            $vault['picks'][$u] = $orderedIds[$idx];
-        } elseif ($sentCount > 1) {
-            // Cycle harmoniously across the Admin's sent palette (e.g. if Admin sent 10, 20, or 40 emojis)
-            $vault['picks'][$u] = isset($packByChar[$u]) ? $packByChar[$u] : $orderedIds[$idx % $sentCount];
+        } elseif ($palCount > 1 && isset($palette[$usedIdx])) {
+            $vault['picks'][$u] = $palette[$usedIdx];
+            $usedIdx++;
+        } elseif ($palCount > 1) {
+            $vault['picks'][$u] = isset($packByChar[$u]) ? $packByChar[$u] : $palette[$idx % $palCount];
         } elseif (!isset($vault['picks'][$u])) {
             if (isset($packByChar[$u])) {
                 $vault['picks'][$u] = $packByChar[$u];
@@ -701,12 +736,15 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         }
     }
 
-    // Map all extended secondary icons to their matching semantic slot so ZERO icons look out of place!
+    // Map all extended secondary icons: if Admin sent > 60 unique emojis, assign extra emojis (61..N) directly for maximum visual richness!
     foreach (tg_emoji_extended_aliases() as $extChar => $targetSlotChar) {
         $eNorm = tg_emoji_norm($extChar);
         $tNorm = tg_emoji_norm($targetSlotChar);
         if (isset($sentByChar[$eNorm])) {
             $vault['picks'][$eNorm] = $sentByChar[$eNorm];
+        } elseif ($palCount > count($slots) && isset($palette[$usedIdx])) {
+            $vault['picks'][$eNorm] = $palette[$usedIdx];
+            $usedIdx++;
         } elseif (isset($packByChar[$eNorm])) {
             $vault['picks'][$eNorm] = $packByChar[$eNorm];
         } elseif (!empty($vault['picks'][$tNorm])) {

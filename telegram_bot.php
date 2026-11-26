@@ -717,23 +717,25 @@ function screen_ai_hub($note = '')
         $warns[] = '⚠️ Kho Key VIP sắp hết (còn ' . $sVip . ')';
     }
 
-    $stats   = function_exists('sh_stats_read') ? sh_stats_read() : [];
-    $surgeOn = function_exists('sh_is_surge_active') ? sh_is_surge_active() : false;
-    $drained = (int) (isset($stats['drained_streams']) ? $stats['drained_streams'] : 0);
-    $scBlk   = (int) (isset($stats['script_blocks']) ? $stats['script_blocks'] : 0) + (int) (isset($stats['bug_blocks']) ? $stats['bug_blocks'] : 0);
-    $happyN  = (int) (isset($stats['happy_gates']) ? $stats['happy_gates'] : 0);
+    $stats    = function_exists('sh_stats_read') ? sh_stats_read() : [];
+    $sentinel = function_exists('sh_sentinel_status') ? sh_sentinel_status() : ['defcon' => 'SENTINEL MAX · Giám sát 24/7', 'ticks' => 1, 'cleaned' => 0];
+    $surgeOn  = function_exists('sh_is_surge_active') ? sh_is_surge_active() : false;
+    $drained  = (int) (isset($stats['drained_streams']) ? $stats['drained_streams'] : 0);
+    $scBlk    = (int) (isset($stats['script_blocks']) ? $stats['script_blocks'] : 0) + (int) (isset($stats['bug_blocks']) ? $stats['bug_blocks'] : 0);
+    $happyN   = (int) (isset($stats['happy_gates']) ? $stats['happy_gates'] : 0);
 
-    $t = '🧠 <b>AI GIÁM SÁT TỐI CAO · QUAN SÁT VĨNH VIỄN 24/7</b>' . "\n";
+    $t = '🧠 <b>AI GIÁM SÁT TỐI CAO · VĨNH VIỄN 24/7 KHÔNG NGỪNG</b>' . "\n";
     if ($note !== '') {
         $t .= $note . "\n";
     }
     $t .= '<blockquote>'
+        . '🛰 Chế độ trực chiến: <b>' . tg_e($sentinel['defcon']) . '</b> (Nhịp #' . (int) $sentinel['ticks'] . ')' . "\n"
         . '🩺 Độ ổn định Web: <b>' . $score . '/100</b> · Tự vá DDoS: ' . ($surgeOn ? '🛡 <b>ĐANG XẢ LUỒNG MẠNH</b>' : '🟢 <b>Sạch 100%</b>') . "\n"
-        . '🛡 Khiên DDoS & Bug/Buff: ' . (!empty($shCfg['enabled']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' · Đã xả: <b>' . $drained . '</b> luồng' . "\n"
-        . '💻 Chống Script & Xem nguồn PC: ' . (!empty($shCfg['inspect_guard']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' · Đã chặn: <b>' . $scBlk . '</b>' . "\n"
-        . '😊 Cổng Mặt cười nhắc tắt VPN/Script: ' . (!empty($shCfg['vpn_gate_enabled']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' (' . $happyN . ' lượt)' . "\n"
-        . '☹️ Đang khoá đa lớp / Mặt buồn: <b>' . $bans['temp'] . '</b> · 🚫 Cấm vĩnh viễn: <b>' . $bans['perm'] . '</b>' . "\n"
-        . '🕵️ Chặn VPN/Fake IP/Trùng Acc lấy Key (24h): <b>' . $vpn24 . '</b> lượt'
+        . '🛡 Khiên DDoS 12 Tầng &amp; WAF: ' . (!empty($shCfg['enabled']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' · Đã xả: <b>' . $drained . '</b> luồng' . "\n"
+        . '💻 Chống Script &amp; Xem nguồn PC: ' . (!empty($shCfg['inspect_guard']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' · Đã chặn: <b>' . $scBlk . '</b>' . "\n"
+        . '🕵️ Chặn VPN / Proxy (khoá 2 phút): ' . (!empty($shCfg['vpn_gate_enabled']) ? '🟢 <b>BẬT</b>' : '🔴 <b>TẮT</b>') . ' (' . $happyN . ' lượt)' . "\n"
+        . '🔒 Đang tạm khoá: <b>' . $bans['temp'] . '</b> · 🚫 Khoá bảo vệ (chờ Bot/Admin mở): <b>' . $bans['perm'] . '</b>' . "\n"
+        . '🚫 Chặn VPN/Trùng Acc lấy Key (24h): <b>' . $vpn24 . '</b> lượt'
         . '</blockquote>';
 
     if ($warns) {
@@ -1423,8 +1425,8 @@ function bot_vi_cfg_groups()
                 'brand_logo_scale'  => ['🔍 Độ phóng to Logo (chuẩn: 1.4)', 'text', 'Nhập số từ 1.0 đến 2.4 (mặc định giao diện chính là 1.4)'],
                 'ds_logo_h'         => ['📏 Chiều cao gốc của Logo (chuẩn: 42 px)', 'text', 'Nhập số từ 28 đến 64 (mặc định 42)'],
                 'ds_logo_skew'      => ['📐 Góc nghiêng bù thẳng Logo (chuẩn: 10)', 'text', 'Nhập từ -30 đến 30 (mặc định 10 để chữ đứng thẳng đẹp)'],
-                'ds_shine'          => ['✨ Bật hiệu ứng lấp loá trên Logo', 'tri', 'Bật hoặc tắt dải sáng lướt nhẹ qua Logo'],
-                'ds_shine_seconds'  => ['⏱ Tốc độ lấp loá Logo (chuẩn vừa: 2.2 giây)', 'text', 'Số nhỏ chạy nhanh, số lớn chạy chậm (2.2 = vừa đẹp, 3.2 = chậm dịu)'],
+                'ds_shine'          => ['✨ Bật hiệu ứng lấp loá trên Logo', 'tri', 'Bật hoặc tắt dải sáng lướt qua Logo'],
+                'ds_shine_seconds'  => ['⏱ Tốc độ lấp loá Logo (chuẩn đẹp: 1.35 giây)', 'text', 'Số nhỏ chạy nhanh, số lớn chạy chậm (1.35 = sáng đẹp vừa nhanh, 2.2 = chậm dịu)'],
                 'favicon_url'       => ['🔖 Logo nhỏ trên Tab trình duyệt (Favicon)', 'img_fav', 'Gửi ảnh vuông trực tiếp hoặc dán link ảnh icon cho tab trình duyệt'],
                 'favicon_bg'        => ['🎨 Màu nền Icon Tab trình duyệt', 'text', 'Mã màu dạng #14161c hoặc gõ none nếu muốn nền trong suốt'],
                 'ds_avatar_url'     => ['👤 Ảnh đại diện mặc định trên Header', 'img_av', 'Gửi ảnh trực tiếp hoặc dán link ảnh đại diện góc phải màn hình'],
@@ -1642,7 +1644,7 @@ function screen_appearance($note = '')
     $scaleCur = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'brand_logo_scale'", '', [], '1.4')) ?: '1.4';
     $hCur     = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_logo_h'", '', [], '42')) ?: '42';
     $shineOn  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine'", '', [], '1')) !== '0';
-    $shineSec = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '2.2')) ?: '2.2';
+    $shineSec = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '1.35')) ?: '1.35';
     $favCur   = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'favicon_url'", '', [], ''));
     $avCur    = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_avatar_url'", '', [], ''));
     $heroRaw  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_hero_images'", '', [], ''));
@@ -1672,7 +1674,7 @@ function screen_appearance($note = '')
         ],
         [
             btn($shineOn ? '✨ Lấp loá: ' . $shineSec . 's' : '⚪ Lấp loá: TẮT', 'ui|cycle_shine'),
-            btn('♻️ Đặt chuẩn (1.4x · 2.2s)', 'ui|std_logo'),
+            btn('♻️ Đặt chuẩn (1.4x · 1.35s)', 'ui|std_logo'),
         ],
         [
             btn('🔖 Đổi Icon Tab (Favicon)', 'ui|ask_fav'),
@@ -1757,17 +1759,17 @@ function bot_ui_action($act, $arg = '')
     }
     if ($act === 'cycle_shine') {
         $shineOn = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine'", '', [], '1')) !== '0';
-        $curSec  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '2.2')) ?: '2.2';
+        $curSec  = trim((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '1.35')) ?: '1.35';
         if (!$shineOn) {
             bot_set_config('ds_shine', '1');
-            bot_set_config('ds_shine_seconds', '2.2');
-            $msg = 'Đã bật lấp loá mức vừa phải (2.2 giây)';
-        } elseif ($curSec === '2.2') {
-            bot_set_config('ds_shine_seconds', '3.2');
-            $msg = 'Đã chuyển sang lấp loá chậm dịu (3.2 giây)';
-        } elseif ($curSec === '3.2') {
-            bot_set_config('ds_shine_seconds', '1.6');
-            $msg = 'Đã chuyển sang lấp loá hơi nhanh (1.6 giây)';
+            bot_set_config('ds_shine_seconds', '1.35');
+            $msg = 'Đã bật lấp loá chuẩn đẹp (1.35 giây)';
+        } elseif ($curSec === '1.35') {
+            bot_set_config('ds_shine_seconds', '1.05');
+            $msg = 'Đã chuyển sang lấp loá nhanh nổi bật (1.05 giây)';
+        } elseif ($curSec === '1.05') {
+            bot_set_config('ds_shine_seconds', '2.0');
+            $msg = 'Đã chuyển sang lấp loá chậm dịu (2.0 giây)';
         } else {
             bot_set_config('ds_shine', '0');
             $msg = 'Đã tắt hẳn hiệu ứng lấp loá trên Logo';
@@ -1782,11 +1784,11 @@ function bot_ui_action($act, $arg = '')
         bot_set_config('brand_logo_height', '42');
         bot_set_config('ds_logo_skew', '10');
         bot_set_config('ds_shine', '1');
-        bot_set_config('ds_shine_seconds', '2.2');
+        bot_set_config('ds_shine_seconds', '1.35');
         bot_purge_logo_caches();
-        bot_log('tg_logo_std', 'Đặt chuẩn Logo 1.4x · cao 42px · nghiêng 10° · lấp loá vừa 2.2s');
+        bot_log('tg_logo_std', 'Đặt chuẩn Logo 1.4x · cao 42px · nghiêng 10° · lấp loá đẹp 1.35s');
         toast('✅ Đã đặt chuẩn Logo toàn web');
-        return screen_appearance('✅ Đã đồng bộ chuẩn 100%: <b>Tỷ lệ 1.4x · Cao 42px · Nghiêng 10° · Lấp loá vừa 2.2s</b> trên toàn bộ trang!');
+        return screen_appearance('✅ Đã đồng bộ chuẩn 100%: <b>Tỷ lệ 1.4x · Cao 42px · Nghiêng 10° · Lấp loá 1.35s</b> trên toàn bộ trang!');
     }
     return screen_appearance();
 }
@@ -3061,8 +3063,8 @@ function bot_emoji_gallery($page = 0, $note = '')
         $t .= $note . "\n";
     }
     $t .= '<blockquote>'
-        . '✨ <b>Cài đặt tự động (tối đa 60 Emoji/lần):</b> Gửi từ <b>1 đến 60 Emoji Telegram Premium</b> bất kỳ vào cuộc trò chuyện này, Bot sẽ <b>tự động phối và thiết lập lại toàn bộ giao diện + nút bấm</b> đổi sạch icon thường thành Emoji Premium sao cho đồng bộ, đẹp mắt nhất và <b>lưu vĩnh viễn vào MySQL</b>!' . "\n"
-        . '📦 Đã thiết lập: <b>' . min(count($slots), count($picks)) . '/' . count($slots) . '</b> vị trí chuẩn'
+        . '✨ <b>Cài đặt tự động thông minh (60 Emoji hoặc nhiều hơn không giới hạn):</b> Gửi <b>60, 80, 120+ Emoji Telegram Premium</b> bất kỳ vào đây, Bot sẽ <b>tự lọc hợp lệ 100% theo chuẩn API Telegram, tự phối màu &amp; ý nghĩa đẹp nhất có thể</b> cho toàn bộ giao diện + nút bấm và <b>lưu vĩnh viễn vào MySQL</b>!' . "\n"
+        . '📦 Đã kích hoạt: <b>' . count($picks) . '</b> biểu tượng đồng bộ (Kho lưu: <b>' . count($vault['pool'] ?? []) . '</b> Emoji)'
         . (!empty($vault['pack_name']) ? ' · Bộ: <code>' . tg_e($vault['pack_name']) . '</code>' : '')
         . '</blockquote>';
     if ($cells) {
@@ -3126,7 +3128,7 @@ function bot_extract_custom_emojis(array $m)
                 }
             }
             $hints[] = $hint;
-            if (count($ids) >= 60) {
+            if (count($ids) >= 300) {
                 break;
             }
         }
@@ -3138,15 +3140,17 @@ function bot_handle_auto_emoji(array $ids, array $hints = [])
 {
     $res = tg_emoji_ingest_custom_ids($ids, $hints);
     if (empty($res['ok'])) {
-        return ui_error('Không đọc được Emoji vừa gửi, vui lòng thử gửi lại.', 'em|0');
+        return ui_error('Không đọc được Emoji hợp lệ vừa gửi, vui lòng thử gửi lại.', 'em|0');
     }
-    bot_log('tg_emoji_auto', 'Tự động thiết lập giao diện với ' . (int) $res['sent_count'] . ' Emoji Premium (lưu ' . $res['mapped'] . '/60 vị trí)' . ($res['pack'] !== '' ? ' [pack ' . $res['pack'] . ']' : ''));
+    $vaultNow = tg_emoji_vault_read();
+    $totalMapped = count($vaultNow['picks'] ?? []);
+    bot_log('tg_emoji_auto', 'Tự động thiết lập giao diện với ' . (int) $res['sent_count'] . ' Emoji Premium (lưu ' . $totalMapped . ' vị trí icon)' . ($res['pack'] !== '' ? ' [pack ' . $res['pack'] . ']' : ''));
     $samples = [];
     foreach ((array) (isset($res['sample_ids']) ? $res['sample_ids'] : []) as $sid) {
         $samples[] = '<tg-emoji emoji-id="' . $sid . '">⭐</tg-emoji>';
     }
-    $note = '✅ <b>ĐÃ TỰ ĐỘNG SETUP LẠI GIAO DIỆN BOT BẰNG EMOJI PREMIUM!</b>' . "\n"
-        . '🎨 Đã nhận <b>' . (int) $res['sent_count'] . '</b> Emoji (hỗ trợ tối đa 60 Emoji) → đồng bộ <b>60/60</b> vị trí icon &amp; nút bấm.' . "\n"
+    $note = '✅ <b>ĐÃ TỰ ĐỘNG KIỂM ĐỊNH HỢP LỆ &amp; SETUP GIAO DIỆN ĐẸP NHẤT!</b>' . "\n"
+        . '🎨 Đã nhận <b>' . (int) $res['sent_count'] . '</b> Emoji (' . (int) $res['unique_cnt'] . ' mẫu hợp lệ duy nhất) → tự động phối <b>' . $totalMapped . '</b> biểu tượng &amp; nút bấm đồng bộ toàn Bot.' . "\n"
         . '💾 Đã lưu vĩnh viễn vào MySQL'
         . ($res['pack'] !== '' ? ' · Bộ: <code>' . tg_e($res['pack']) . '</code> (' . (int) $res['pack_count'] . ' icon).' : '.')
         . ($samples ? "\n" . implode(' ', $samples) : '');
@@ -4092,6 +4096,7 @@ function bot_public_appeal_handler(array $m)
 {
     $from      = (string) (isset($m['from']['id']) ? $m['from']['id'] : '');
     $chatId    = (string) (isset($m['chat']['id']) ? $m['chat']['id'] : '');
+    $msgId     = isset($m['message_id']) ? (int) $m['message_id'] : 0;
     $firstName = trim((string) (isset($m['from']['first_name']) ? $m['from']['first_name'] : 'bạn'));
     $text      = isset($m['text']) ? trim((string) $m['text']) : '';
 
@@ -4102,15 +4107,41 @@ function bot_public_appeal_handler(array $m)
         return;
     }
 
-    // Handle /start (when user taps https://t.me/devios_bot?start=hotro from the Block screen)
+    // Handle /start (when user taps Unlock Assistant @devios_bot from the Block screen):
+    // 1) IMMEDIATELY delete the user's /start message so "/start" NEVER shows in chat!
+    // 2) Link their Telegram chat_id <-> IP/LID so future clicks push proactive greetings with ZERO /start!
+    // 3) Send an instant natural greeting right away!
     if ($text !== '' && strpos($text, '/start') === 0) {
-        $argCode = sh_extract_case_code($text);
+        if ($msgId > 0) {
+            @tg_api_raw('deleteMessage', ['chat_id' => $chatId, 'message_id' => $msgId], 2);
+        }
+        $parts   = preg_split('/\s+/', $text, 2);
+        $payload = isset($parts[1]) ? trim((string) $parts[1]) : '';
+        $argCode = sh_extract_case_code($payload);
+        $linkedCase = '';
+
+        if ($payload !== '' && strpos($payload, 'u_') === 0 && function_exists('sh_resolve_bot_click_token')) {
+            $clk = sh_resolve_bot_click_token($payload);
+            if (is_array($clk)) {
+                if (function_exists('sh_pub_tg_link_save')) {
+                    sh_pub_tg_link_save($chatId, $firstName, (string) ($clk['ip'] ?? ''), (string) ($clk['lid'] ?? ''));
+                }
+                if (!empty($clk['case_code'])) {
+                    $linkedCase = (string) $clk['case_code'];
+                }
+            }
+        }
+
         if ($argCode === '') {
-            pub_conv_set($from, ['step' => 'await_code']);
+            pub_conv_set($from, ['step' => 'await_code', 'hint_code' => $linkedCase]);
+            $hintLine = $linkedCase !== ''
+                ? ("\n\n💡 Hệ thống nhận thấy phiên của bạn đang có <b>Mã xác minh</b> <code>" . tg_e($linkedCase) . "</code> — bạn chỉ cần <b>chạm sao chép và gửi mã đó</b> (kèm lý do nếu có) vào đây để mình xử lý ngay nhé!")
+                : '';
             pub_send_reply(
                 $chatId,
-                'Chào <b>' . tg_e($firstName !== '' ? $firstName : 'bạn') . '</b>, mình là trợ lý kiểm duyệt bảo mật tự động của <b>iosmods.xyz</b>.' . "\n\n"
-                . 'Bạn hãy sao chép và gửi <b>Mã xác minh</b> (dạng <code>IMX-XXXXXX-...</code> đang hiển thị trên màn hình khoá của web) vào đây để mình kiểm tra xem kết nối của bạn vừa ghi nhận thao tác gì và xét hỗ trợ mở khoá nhé.'
+                'Chào <b>' . tg_e($firstName !== '' ? $firstName : 'bạn') . '</b>! 👋 Mình là trợ lý hỗ trợ mở khoá tự động 24/7 của <b>iosmods.xyz</b>.' . "\n\n"
+                . 'Bạn hãy gửi <b>Mã xác minh</b> (dạng <code>IMX-XXXXXX-...</code> trên màn hình khoá của web) vào đây để mình kiểm tra nguyên nhân và xét mở khoá ngay cho bạn nhé.'
+                . $hintLine
             );
             return;
         }
@@ -4158,6 +4189,9 @@ function bot_public_appeal_handler(array $m)
 
     $code       = (string) $info['code'];
     $ip         = (string) $info['ip'];
+    if (function_exists('sh_pub_tg_link_save')) {
+        sh_pub_tg_link_save($chatId, $firstName, $ip, isset($info['lid']) ? (string) $info['lid'] : '');
+    }
     $banType    = isset($info['ban_type']) ? (string) $info['ban_type'] : 'temp';
     $reasonOrig = isset($info['reason']) ? (string) $info['reason'] : 'Vi phạm quy tắc bảo mật hệ thống';
     $expTs      = isset($info['expires_ts']) ? (int) $info['expires_ts'] : 0;
@@ -4228,14 +4262,22 @@ function bot_public_appeal_handler(array $m)
     }
 
     // =========================================================================
-    // TIER 1: VERY MINOR FIRST-TIME MISTAKE -> UNBAN 100% IMMEDIATELY!
+    // TIER 1: VERY MINOR FIRST-TIME MISTAKE (<= 6m spam OR 2m VPN already turned off) -> UNBAN 100% IMMEDIATELY!
     // =========================================================================
-    $isVeryMinor = in_array($banType, ['prod_spam', 'key_spam'], true)
-        && $expTs > 0
-        && $initDur <= 360
-        && $evasions === 0
-        && $hits <= 8
-        && !pub_was_recently_forgiven($ip, $from);
+    $isVeryMinor = (
+            in_array($banType, ['prod_spam', 'key_spam'], true)
+            && $expTs > 0
+            && $initDur <= 360
+            && $evasions === 0
+            && $hits <= 8
+            && !pub_was_recently_forgiven($ip, $from)
+        ) || (
+            $banType === 'vpn_block'
+            && $expTs > 0
+            && $evasions === 0
+            && empty($info['is_vpn'])
+            && !pub_was_recently_forgiven($ip, $from)
+        );
 
     if ($isVeryMinor) {
         pub_conv_clear($from);
@@ -4852,6 +4894,8 @@ function bot_setup()
         ['command' => 'cancel',  'description' => 'Huỷ thao tác đang nhập'],
     ];
     tg_api_raw('setMyCommands', ['commands' => $cmds]);
+    tg_api_raw('setMyShortDescription', ['short_description' => 'Trợ lý Mở Khoá Bảo Mật Tự Động 24/7 · iosmods.xyz']);
+    tg_api_raw('setMyDescription', ['description' => "👋 Chào mừng bạn đến với Trợ lý Bảo mật 24/7 của iosmods.xyz!\n\nNếu bạn vừa bấm sang từ màn hình khoá, hãy dán Mã xác minh (IMX-...) gửi vào đây để hệ thống kiểm tra và hỗ trợ mở khoá ngay lập tức."]);
 
     while (ob_get_level() > 0) {
         @ob_end_clean();
@@ -4875,6 +4919,9 @@ if (isset($_GET['cron'])) {
     if (!is_string($_GET['cron']) || (string) tg_cfg('setup_key', '') === '' || !hash_equals((string) tg_cfg('setup_key', ''), $_GET['cron'])) {
         http_response_code(403);
         exit('Forbidden');
+    }
+    if (function_exists('sh_eternal_sentinel_tick')) {
+        sh_eternal_sentinel_tick(bdb());
     }
     tg_autodelete_sweep();
     tg_scan_events(true);
