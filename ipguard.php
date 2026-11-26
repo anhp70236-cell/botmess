@@ -200,19 +200,22 @@ function ipg_sweep_expired($conn, $priorityIp = '')
     ipg_ensure($conn);
     $lifted = 0;
     try {
-        $res = @mysqli_query($conn, "SELECT id, ip, username, ban_type, reason FROM ip_bans WHERE active = 1 AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 30");
+        $res = @mysqli_query($conn, "SELECT id, ip, username, ban_type, reason FROM ip_bans WHERE active = 1 AND ban_type <> 'manual' AND expires_at IS NOT NULL AND expires_at > '2000-01-01 00:00:00' AND expires_at <= NOW() LIMIT 30");
         $rows = [];
         while ($res && ($r = mysqli_fetch_assoc($res))) {
             $rows[] = $r;
         }
         if (!$rows) {
             if ($priorityIp !== '' && function_exists('sh_remove_ban_cache')) {
-                sh_remove_ban_cache($priorityIp);
+                $curPri = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($priorityIp) : null;
+                if ($curPri === null || (!empty($curPri['expires_ts']) && (int) $curPri['expires_ts'] <= time() && ($curPri['ban_type'] ?? '') !== 'manual')) {
+                    sh_remove_ban_cache($priorityIp);
+                }
             }
             return 0;
         }
         foreach ($rows as $r) {
-            $st = ipg_q($conn, "UPDATE ip_bans SET active = 0, unbanned_by = 'auto-timer', unbanned_at = NOW() WHERE id = ? AND active = 1", 'i', [(int) $r['id']]);
+            $st = ipg_q($conn, "UPDATE ip_bans SET active = 0, unbanned_by = 'auto-timer', unbanned_at = NOW() WHERE id = ? AND active = 1 AND ban_type <> 'manual' AND expires_at IS NOT NULL", 'i', [(int) $r['id']]);
             if ($st !== null) {
                 if ($st->affected_rows > 0) {
                     $lifted++;
@@ -221,13 +224,7 @@ function ipg_sweep_expired($conn, $priorityIp = '')
                     } elseif (function_exists('sh_remove_ban_cache')) {
                         sh_remove_ban_cache($r['ip']);
                     }
-                    if (function_exists('tg_event')) {
-                        tg_event('ip_auto_unban', [
-                            'ip'       => (string) $r['ip'],
-                            'username' => (string) (isset($r['username']) ? $r['username'] : ''),
-                            'ban_type' => (string) (isset($r['ban_type']) ? $r['ban_type'] : 'temp'),
-                        ]);
-                    }
+                    // Intentionally silent in Telegram: expired temporary cooldowns NEVER spam Admin chat!
                 }
                 $st->close();
             }
@@ -274,33 +271,38 @@ function ipg_is_banned($conn, $ip)
     return $row;
 }
 
-/** Permanent IP ban (Admin action). */
-function ipg_ban($conn, $ip, $reason, $by, $username = '')
+/** Permanent or Non-Expiring IP ban (Admin permanent ban defaults to ban_type = 'manual'). */
+function ipg_ban($conn, $ip, $reason, $by, $username = '', $banType = 'manual')
 {
     $ip = ipg_norm($ip);
     list($can, $why) = ipg_can_ban($ip);
     if (!$can) {
         return ['ok' => false, 'msg' => $why, 'row' => null, 'new' => false];
     }
+    $btype  = preg_replace('/[^a-z0-9_]/i', '', (string) $banType) ?: 'manual';
     $reason = trim((string) $reason);
     if ($reason === '') {
         $reason = 'Vi phạm quy định của website';
     }
-    $reason   = function_exists('mb_substr') ? mb_substr($reason, 0, 250, 'UTF-8') : substr($reason, 0, 250);
-    $existing = ipg_find($conn, $ip);
-    $already  = $existing && (int) $existing['active'] === 1 && empty($existing['expires_at']);
-    $uname    = $username !== '' ? $username : null;
+    $reason    = function_exists('mb_substr') ? mb_substr($reason, 0, 250, 'UTF-8') : substr($reason, 0, 250);
+    $existing  = ipg_find($conn, $ip);
+    $prevCache = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($ip) : null;
+    $already   = $existing && (int) $existing['active'] === 1 && empty($existing['expires_at']) && ($existing['ban_type'] ?? '') === $btype;
+    if ($username === '' && $prevCache && !empty($prevCache['username'])) {
+        $username = (string) $prevCache['username'];
+    }
+    $uname = $username !== '' ? $username : null;
 
     $st = ipg_q(
         $conn,
         "INSERT INTO ip_bans (ip, reason, ban_type, username, banned_by, active, hits, created_at, expires_at)
-         VALUES (?, ?, 'manual', ?, ?, 1, 0, NOW(), NULL)
+         VALUES (?, ?, ?, ?, ?, 1, 0, NOW(), NULL)
          ON DUPLICATE KEY UPDATE created_at = IF(active = 1, created_at, NOW()), active = 1,
-             reason = VALUES(reason), ban_type = 'manual', expires_at = NULL,
+             reason = VALUES(reason), ban_type = VALUES(ban_type), expires_at = NULL,
              username = COALESCE(VALUES(username), username), banned_by = VALUES(banned_by),
              unbanned_by = NULL, unbanned_at = NULL",
-        'ssss',
-        [$ip, $reason, $uname, (string) $by]
+        'sssss',
+        [$ip, $reason, $btype, $uname, (string) $by]
     );
     if ($st === null) {
         return ['ok' => false, 'msg' => 'Lỗi cơ sở dữ liệu khi lưu chặn IP.', 'row' => null, 'new' => false];
@@ -308,15 +310,49 @@ function ipg_ban($conn, $ip, $reason, $by, $username = '')
     $st->close();
     $row = ipg_find($conn, $ip);
     if ($row && function_exists('sh_write_ban_cache')) {
-        sh_write_ban_cache($ip, [
+        $cachePayload = [
             'id'         => (int) $row['id'],
             'reason'     => (string) $row['reason'],
-            'ban_type'   => 'manual',
+            'ban_type'   => $btype,
             'username'   => (string) (isset($row['username']) ? $row['username'] : ''),
             'banned_by'  => (string) $by,
             'expires_ts' => 0,
             'expires_at' => null,
-        ]);
+        ];
+        if (is_array($prevCache)) {
+            foreach (['lid', 'hw_fp', 'case_code', 'real_origin_ip', 'real_origin_isp', 'real_ip_source', 'vpn_ip', 'vpn_lbl'] as $pk) {
+                if (!empty($prevCache[$pk])) {
+                    $cachePayload[$pk] = $prevCache[$pk];
+                }
+            }
+        }
+        sh_write_ban_cache($ip, $cachePayload);
+        if (function_exists('sh_upgrade_cases_to_permanent')) {
+            sh_upgrade_cases_to_permanent($ip, (string) $row['reason'], (string) $by, (string) ($row['username'] ?? ''), $btype);
+        }
+        // If Admin permanently banned a fake VPN IP and we already unmasked their REAL residential IP, ban the real IP too so disabling VPN cannot bypass Admin's ban!
+        if ($btype === 'manual' && !empty($cachePayload['real_origin_ip']) && $cachePayload['real_origin_ip'] !== $ip) {
+            $realOrigin = ipg_norm($cachePayload['real_origin_ip']);
+            list($canReal, ) = ipg_can_ban($realOrigin);
+            if ($canReal) {
+                $stR = ipg_q(
+                    $conn,
+                    "INSERT INTO ip_bans (ip, reason, ban_type, username, banned_by, active, hits, created_at, expires_at)
+                     VALUES (?, ?, 'manual', ?, ?, 1, 0, NOW(), NULL)
+                     ON DUPLICATE KEY UPDATE active = 1, reason = VALUES(reason), ban_type = 'manual', expires_at = NULL,
+                         username = COALESCE(VALUES(username), username), banned_by = VALUES(banned_by), unbanned_by = NULL, unbanned_at = NULL",
+                    'ssss',
+                    [$realOrigin, $reason . ' [IP Thật sau lớp VPN ' . $ip . ']', $uname, (string) $by]
+                );
+                if ($stR !== null) {
+                    $stR->close();
+                }
+                sh_write_ban_cache($realOrigin, array_merge($cachePayload, ['ip' => $realOrigin, 'vpn_ip' => $ip]));
+                if (function_exists('sh_upgrade_cases_to_permanent')) {
+                    sh_upgrade_cases_to_permanent($realOrigin, (string) $row['reason'], (string) $by, (string) ($row['username'] ?? ''), 'manual');
+                }
+            }
+        }
     }
     return ['ok' => true, 'msg' => $already ? 'Đã cập nhật lý do chặn vĩnh viễn.' : 'Đã chặn IP vĩnh viễn.', 'row' => $row, 'new' => !$already];
 }

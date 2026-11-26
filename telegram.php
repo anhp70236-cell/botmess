@@ -1452,6 +1452,8 @@ function tg_activity_map($type, array $d)
             return [$user !== '' ? $user : 'ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'key_spam_ban', 'spam nhập key sai'];
         case 'vpn_multi_acc':
             return [$user !== '' ? $user : 'ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'vpn_multi_acc', isset($d['reason']) ? $d['reason'] : 'VPN/Multi-acc'];
+        case 'vpn_gate_block':
+            return [$user !== '' ? $user : 'ip:' . (isset($d['ip']) ? $d['ip'] : ''), 'blocked', 'vpn_gate_block', isset($d['vpn_lbl']) && $d['vpn_lbl'] !== '' ? ('Bật ' . $d['vpn_lbl']) : 'Bật VPN/Fake IP'];
         case 'admin_log':
             return [$user !== '' ? $user : 'admin_cp', 'admin_cp', 'cp:' . (isset($d['action']) ? $d['action'] : ''), isset($d['detail']) ? $d['detail'] : ''];
         case 'ip_ban':
@@ -1745,10 +1747,65 @@ function tg_render($type, array $d)
                 'kb'       => $kbRows ? tg_alert_kb($kbRows) : null,
             ];
 
+        case 'vpn_gate_block':
+            $realIp   = !empty($d['real_origin_ip']) ? (string) $d['real_origin_ip'] : '';
+            $realIsp  = !empty($d['real_origin_isp']) ? (string) $d['real_origin_isp'] : '';
+            $realSrc  = !empty($d['real_ip_source']) ? (string) $d['real_ip_source'] : '';
+            $vpnIp    = !empty($d['vpn_ip']) ? (string) $d['vpn_ip'] : $ip;
+            $vpnLbl   = !empty($d['vpn_lbl']) ? (string) $d['vpn_lbl'] : 'VPN / Proxy';
+            $cc       = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $mins     = max(1, (int) ceil((isset($d['duration']) ? (int) $d['duration'] : 120) / 60));
+            $thKey    = ($realIp !== '' && $realIp !== $vpnIp)
+                ? ('vpng:unmask:' . $realIp . ':' . $vpnIp)
+                : ('vpng:init:' . (!empty($d['hw_fp']) ? $d['hw_fp'] : (!empty($d['lid']) ? $d['lid'] : $vpnIp)));
+
+            $vRows = [];
+            if ($user !== '') {
+                $vRows[] = '👤 Tài khoản: ' . $uTag;
+            }
+            if ($realIp !== '' && $realIp !== $vpnIp) {
+                $vRows[] = '🎯 <b>IP Thật (Mạng gốc):</b> ' . tg_c($realIp) . ($realIsp !== '' ? ' · 📡 <b>' . tg_e($realIsp) . '</b>' : '');
+                if ($realSrc !== '') {
+                    $vRows[] = '🧠 Nguồn truy vết: <i>' . tg_e($realSrc) . '</i>';
+                }
+            } else {
+                $vRows[] = '🎯 <b>IP Thật (Mạng gốc):</b> <i>Đang truy vết qua WebRTC/Thiết bị (khách bật VPN từ trước khi mở trình duyệt)</i>';
+            }
+            $vRows[] = '🎭 <b>IP Ảo (VPN đang bật):</b> ' . tg_c($vpnIp) . ' · ⚠️ <b>' . tg_e($vpnLbl) . '</b>';
+            $vRows[] = '⏱ Đã chặn tự động: <b>' . $mins . ' phút</b>' . ($cc !== '' ? ' · 🔐 ' . tg_c($cc) : '');
+
+            $kbV = [];
+            $targetUnban = $vpnIp !== '' ? $vpnIp : $realIp;
+            $targetPerm  = $realIp !== '' ? $realIp : $vpnIp;
+            if ($targetUnban !== '' && strlen($targetUnban) <= 42) {
+                $r1 = [['text' => '🔓 Gỡ khoá ngay', 'callback_data' => 'qa|unban|' . $targetUnban]];
+                if ($targetPerm !== '' && strlen($targetPerm) <= 42) {
+                    $r1[] = ['text' => ($realIp !== '' ? '🚫 Cấm vĩnh viễn IP Thật' : '🚫 Cấm vĩnh viễn'), 'callback_data' => 'qa|permban|' . $targetPerm];
+                }
+                $kbV[] = $r1;
+            }
+            if ($cc !== '' && strlen($cc) <= 40) {
+                $kbV[] = [['text' => '🔍 Hồ sơ mã IMX', 'callback_data' => 'qa|case|' . $cc]];
+            }
+            return [
+                'cat'      => 'vpn',
+                'title'    => ($realIp !== '' && $realIp !== $vpnIp)
+                    ? '🕵️ <b>PHÁT HIỆN FAKE IP / VPN · ĐÃ TÌM RA IP THẬT</b>'
+                    : '🕵️ <b>PHÁT HIỆN BẬT VPN / FAKE IP TRUY CẬP WEB</b>',
+                'throttle' => [$thKey, 120],
+                'rows'     => $vRows,
+                'kb'       => $kbV ? tg_alert_kb($kbV) : null,
+            ];
+
         case 'vpn_multi_acc':
-            $dur  = (int) (isset($d['duration']) ? $d['duration'] : 0);
+            $dur    = (int) (isset($d['duration']) ? $d['duration'] : 0);
+            $realIp = !empty($d['real_origin_ip']) ? (string) $d['real_origin_ip'] : '';
+            $vpnIp  = !empty($d['vpn_ip']) ? (string) $d['vpn_ip'] : '';
+            $ipLine = ($realIp !== '' && $vpnIp !== '' && $realIp !== $vpnIp)
+                ? ('🎯 IP Thật: ' . tg_c($realIp) . ' · 🎭 IP Ảo (VPN): ' . tg_c($vpnIp))
+                : ('🌐 IP: ' . $ipTag);
             $rows = [
-                '👤 ' . $uTag . ' · 🌐 ' . $ipTag,
+                '👤 ' . $uTag . ' · ' . $ipLine,
                 '📝 ' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : 'Phát hiện VPN / Tạo acc phụ lấy Key Free', 160)),
             ];
             $btns = [];
@@ -1767,32 +1824,43 @@ function tg_render($type, array $d)
             ];
 
         case 'user_appeal':
-            $cc       = !empty($d['case_code']) ? (string) $d['case_code'] : '';
-            $streamIp = isset($d['stream_ip']) && $d['stream_ip'] !== '' && $d['stream_ip'] !== $ip ? (string) $d['stream_ip'] : '';
-            $msg      = isset($d['message']) ? (string) $d['message'] : '';
-            $reason   = isset($d['reason']) ? (string) $d['reason'] : '';
-            $verU     = !empty($d['verified_u']);
-            $uDisp    = $user !== '' ? (tg_c($user) . ($verU ? ' <i>(đã đăng nhập)</i>' : ' <i>(khách nhập)</i>')) : '<i>khách chưa nhập tên</i>';
-            $kbRows   = [];
-            if ($ip !== '' && strlen($ip) <= 42) {
-                $row1 = [['text' => '🔓 Gỡ chặn ngay', 'callback_data' => 'qa|unban|' . $ip]];
+            $cc        = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $realIp    = !empty($d['real_origin_ip']) ? (string) $d['real_origin_ip'] : '';
+            $realIsp   = !empty($d['real_origin_isp']) ? (string) $d['real_origin_isp'] : '';
+            $vpnIp     = !empty($d['vpn_ip']) ? (string) $d['vpn_ip'] : '';
+            $vpnLbl    = !empty($d['vpn_lbl']) ? (string) $d['vpn_lbl'] : '';
+            $streamIp  = isset($d['stream_ip']) && $d['stream_ip'] !== '' && $d['stream_ip'] !== $ip ? (string) $d['stream_ip'] : '';
+            $msg       = isset($d['message']) ? (string) $d['message'] : '';
+            $reason    = isset($d['reason']) ? (string) $d['reason'] : '';
+            $verU      = !empty($d['verified_u']);
+            $uDisp     = $user !== '' ? (tg_c($user) . ($verU ? ' <i>(đã đăng nhập)</i>' : ' <i>(khách nhập)</i>')) : '<i>khách chưa nhập tên</i>';
+            $unbanIp   = $vpnIp !== '' ? $vpnIp : $ip;
+            $permBanIp = $realIp !== '' ? $realIp : $unbanIp;
+            $kbRows    = [];
+            if ($unbanIp !== '' && strlen($unbanIp) <= 42) {
+                $row1 = [['text' => '🔓 Gỡ chặn ngay', 'callback_data' => 'qa|unban|' . $unbanIp]];
                 if ($user !== '' && strlen($user) <= 36) {
-                    $row1[] = ['text' => '🎁 Gỡ + Mở Get Key', 'callback_data' => 'qa|unban_fk|' . $ip . ':' . $user];
+                    $row1[] = ['text' => '🎁 Gỡ + Mở Get Key', 'callback_data' => 'qa|unban_fk|' . $unbanIp . ':' . $user];
                 }
                 $kbRows[] = $row1;
                 $row2 = [];
                 if ($cc !== '' && strlen($cc) <= 40) {
                     $row2[] = ['text' => '🔍 Xem hồ sơ mã', 'callback_data' => 'qa|case|' . $cc];
                 }
-                $row2[]   = ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip];
+                $row2[]   = ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $permBanIp];
                 $kbRows[] = $row2;
             }
             $aRows = [
                 '👤 Tài khoản web: ' . $uDisp,
-                '🌐 Địa chỉ IP: ' . $ipTag . ($streamIp !== '' ? ' · 🖥 Luồng: ' . tg_c($streamIp) : ''),
-                '🔎 Đang bị chặn vì: ' . tg_e(tg_clip($reason, 140)),
-                '💬 Yêu cầu gửi Admin: <b>' . tg_e(tg_clip($msg, 260)) . '</b>',
             ];
+            if ($realIp !== '' && $vpnIp !== '' && $realIp !== $vpnIp) {
+                $aRows[] = '🎯 <b>IP Thật (Mạng gốc):</b> ' . tg_c($realIp) . ($realIsp !== '' ? ' (' . tg_e($realIsp) . ')' : '');
+                $aRows[] = '🎭 <b>IP Ảo (VPN):</b> ' . tg_c($vpnIp) . ($vpnLbl !== '' ? ' (' . tg_e($vpnLbl) . ')' : '');
+            } else {
+                $aRows[] = '🌐 Địa chỉ IP: ' . $ipTag . ($vpnLbl !== '' ? ' · ⚠️ <b>' . tg_e($vpnLbl) . '</b>' : '') . ($streamIp !== '' ? ' · 🖥 Luồng: ' . tg_c($streamIp) : '');
+            }
+            $aRows[] = '🔎 Đang bị chặn vì: ' . tg_e(tg_clip($reason, 140));
+            $aRows[] = '💬 Yêu cầu gửi Admin: <b>' . tg_e(tg_clip($msg, 260)) . '</b>';
             if ($cc !== '') {
                 $aRows[] = '🔐 Mã xác minh: ' . tg_c($cc);
             }

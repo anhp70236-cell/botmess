@@ -321,7 +321,13 @@ function sh_issue_case_code($ip, array $ban)
                 'active'           => 1,
                 'ip'               => $ip,
                 'stream_ip'        => isset($ban['stream_ip']) ? (string) $ban['stream_ip'] : $ip,
+                'real_origin_ip'   => isset($ban['real_origin_ip']) ? (string) $ban['real_origin_ip'] : '',
+                'real_origin_isp'  => isset($ban['real_origin_isp']) ? (string) $ban['real_origin_isp'] : '',
+                'real_ip_source'   => isset($ban['real_ip_source']) ? (string) $ban['real_ip_source'] : '',
+                'vpn_ip'           => isset($ban['vpn_ip']) ? (string) $ban['vpn_ip'] : '',
+                'vpn_lbl'          => isset($ban['vpn_lbl']) ? (string) $ban['vpn_lbl'] : '',
                 'ban_type'         => isset($ban['ban_type']) ? (string) $ban['ban_type'] : 'temp',
+                'banned_by'        => isset($ban['banned_by']) ? (string) $ban['banned_by'] : 'bot-shield',
                 'reason'           => isset($ban['reason']) ? (string) $ban['reason'] : '',
                 'attack_detail'    => isset($ban['attack_detail']) ? (string) $ban['attack_detail'] : '',
                 'username'         => isset($ban['username']) ? (string) $ban['username'] : '',
@@ -353,21 +359,128 @@ function sh_issue_case_code($ip, array $ban)
     return $code;
 }
 
-/** Lookup encrypted Case Code from Telegram Bot. Returns array or null. */
+/** Upgrades all existing IMX-... case files for an IP when Admin permanently bans it! */
+function sh_upgrade_cases_to_permanent($ip, $reason, $by = 'admin', $username = '', $banType = 'manual')
+{
+    $ip = sh_norm_ip($ip);
+    if ($ip === '') {
+        return;
+    }
+    $codes = [];
+    $idxFile = sh_dir() . '/cases/ip_' . md5($ip) . '.json';
+    if (is_file($idxFile)) {
+        $codes = array_merge($codes, (array) sh_json_read($idxFile));
+    }
+    $apLog = sh_json_read(sh_dir() . '/appeals_log.json');
+    if (is_array($apLog)) {
+        foreach ($apLog as $ap) {
+            if (is_array($ap) && !empty($ap['case_code']) && sh_norm_ip($ap['ip'] ?? '') === $ip) {
+                $codes[] = (string) $ap['case_code'];
+            }
+        }
+    }
+    foreach (array_unique(array_filter($codes)) as $c) {
+        $cf = sh_case_file($c);
+        sh_json_update($cf, function ($d) use ($c, $ip, $reason, $by, $username, $banType) {
+            return array_merge([
+                'code'       => (string) $c,
+                'ip'         => $ip,
+                'created_ts' => time(),
+                'created_at' => date('Y-m-d H:i:s'),
+                'hits'       => 1,
+            ], is_array($d) ? $d : [], [
+                'active'     => 1,
+                'ban_type'   => (string) $banType,
+                'banned_by'  => (string) $by,
+                'reason'     => (string) $reason,
+                'expires_ts' => 0,
+                'username'   => $username !== '' ? (string) $username : (string) ($d['username'] ?? ''),
+            ]);
+        });
+    }
+}
+
+/** Lookup encrypted Case Code from Telegram Bot. NEVER deletes case file before live DB/cache verification! */
 function sh_lookup_case_code($code)
 {
     $extracted = sh_extract_case_code($code);
     $target    = $extracted !== '' ? $extracted : $code;
     $cf        = sh_case_file($target);
     if (!is_file($cf)) {
+        // Fallback recovery from appeals_log if Admin permanently banned the IP after an earlier timed case file expired!
+        if ($extracted !== '') {
+            $apLog = sh_json_read(sh_dir() . '/appeals_log.json');
+            if (is_array($apLog)) {
+                for ($i = count($apLog) - 1; $i >= 0; $i--) {
+                    $ap = $apLog[$i];
+                    if (is_array($ap) && !empty($ap['case_code']) && strcasecmp((string) $ap['case_code'], $extracted) === 0 && !empty($ap['ip'])) {
+                        $apIp  = sh_norm_ip($ap['ip']);
+                        $liveB = $apIp !== '' ? sh_read_ban_cache($apIp) : null;
+                        if ($liveB !== null) {
+                            return array_merge($liveB, ['code' => $extracted, 'active' => 1, 'ip' => $apIp]);
+                        }
+                    }
+                }
+            }
+        }
         return null;
     }
     $d = sh_json_read($cf);
-    if (empty($d['code'])) {
+    if (empty($d['code']) || empty($d['active'])) {
         return null;
     }
-    if (!empty($d['active']) && !empty($d['expires_ts']) && (int) $d['expires_ts'] <= time()) {
-        $d['active'] = 0;
+    if (!empty($d['expires_ts']) && (int) $d['expires_ts'] <= time()) {
+        // Check if IP was upgraded to a permanent or extended ban in live cache BEFORE treating as expired!
+        $ip    = !empty($d['ip']) ? sh_norm_ip($d['ip']) : '';
+        $liveC = $ip !== '' ? sh_read_ban_cache($ip) : null;
+        if ($liveC !== null && ((int) ($liveC['expires_ts'] ?? 0) === 0 || (int) $liveC['expires_ts'] > time())) {
+            $d['expires_ts'] = (int) ($liveC['expires_ts'] ?? 0);
+            $d['ban_type']   = (string) ($liveC['ban_type'] ?? $d['ban_type']);
+            $d['banned_by']  = (string) ($liveC['banned_by'] ?? ($d['banned_by'] ?? ''));
+            if (!empty($liveC['reason'])) {
+                $d['reason'] = (string) $liveC['reason'];
+            }
+            sh_json_update($cf, function () use ($d) { return $d; });
+            return $d;
+        }
+        // Check MySQL ip_bans too if connection is available
+        $conn = isset($GLOBALS['conn']) && ($GLOBALS['conn'] instanceof mysqli) ? $GLOBALS['conn'] : null;
+        if ($conn === null && is_file(__DIR__ . '/config.php')) {
+            try {
+                require_once __DIR__ . '/config.php';
+                if (defined('DB_USER') && DB_USER !== '') {
+                    $conn = defined('DB_PORT') ? @mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME, (int) DB_PORT) : @mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+                }
+            } catch (Throwable $e) {
+                $conn = null;
+            }
+        }
+        if (($conn instanceof mysqli) && $ip !== '') {
+            try {
+                $st = @$conn->prepare("SELECT id, reason, ban_type, banned_by, username, expires_at FROM ip_bans WHERE ip = ? AND active = 1 AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1");
+                if ($st) {
+                    $st->bind_param('s', $ip);
+                    if ($st->execute()) {
+                        $rs = $st->get_result();
+                        $rb = $rs ? $rs->fetch_assoc() : null;
+                        $st->close();
+                        if ($rb) {
+                            $d['expires_ts'] = (!empty($rb['expires_at']) && strpos((string) $rb['expires_at'], '0000') !== 0) ? (int) strtotime((string) $rb['expires_at']) : 0;
+                            $d['ban_type']   = (string) ($rb['ban_type'] ?: 'manual');
+                            $d['banned_by']  = (string) ($rb['banned_by'] ?? '');
+                            $d['reason']     = (string) ($rb['reason'] ?: $d['reason']);
+                            if (!empty($rb['username'])) {
+                                $d['username'] = (string) $rb['username'];
+                            }
+                            sh_json_update($cf, function () use ($d) { return $d; });
+                            return $d;
+                        }
+                    } else {
+                        $st->close();
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
         @unlink($cf);
         return null;
     }
@@ -416,8 +529,14 @@ function sh_enrich_case_dossier($conn, $rawCode)
     if (is_array($live)) {
         $base['hits']             = max((int) (isset($base['hits']) ? $base['hits'] : 1), (int) (isset($live['hits']) ? $live['hits'] : 1));
         $base['evasion_attempts'] = max((int) (isset($base['evasion_attempts']) ? $base['evasion_attempts'] : 0), (int) (isset($live['evasion_attempts']) ? $live['evasion_attempts'] : 0));
-        if (!empty($live['expires_ts'])) {
+        if (array_key_exists('expires_ts', $live)) {
             $base['expires_ts'] = (int) $live['expires_ts'];
+        }
+        if (!empty($live['ban_type'])) {
+            $base['ban_type'] = (string) $live['ban_type'];
+        }
+        if (!empty($live['banned_by'])) {
+            $base['banned_by'] = (string) $live['banned_by'];
         }
         if (!empty($live['reason'])) {
             $base['reason'] = (string) $live['reason'];
@@ -428,8 +547,14 @@ function sh_enrich_case_dossier($conn, $rawCode)
         if (!empty($live['ai_reduced'])) {
             $base['ai_reduced'] = (int) $live['ai_reduced'];
         }
+        foreach (['real_origin_ip', 'real_origin_isp', 'real_ip_source', 'vpn_ip', 'vpn_lbl', 'lid', 'hw_fp'] as $fk) {
+            if (empty($base[$fk]) && !empty($live[$fk])) {
+                $base[$fk] = $live[$fk];
+            }
+        }
     }
 
+    $isAdminPerm = false;
     if (($conn instanceof mysqli) && $ip !== '' && function_exists('ipg_find')) {
         $dbRow = ipg_find($conn, $ip);
         if ($dbRow) {
@@ -437,44 +562,241 @@ function sh_enrich_case_dossier($conn, $rawCode)
                 sh_revoke_case_codes_for_ip($ip);
                 return null;
             }
-            $base['hits'] = max((int) $base['hits'], (int) $dbRow['hits']);
-            if (empty($dbRow['expires_at']) && (int) $dbRow['active'] === 1 && $dbRow['ban_type'] === 'manual') {
-                $base['expires_ts'] = 0;
-                $base['ban_type']   = 'manual';
-            }
-            if (empty($base['username']) && !empty($dbRow['username'])) {
-                $base['username'] = (string) $dbRow['username'];
+            if ((int) $dbRow['active'] === 1) {
+                $base['hits'] = max((int) $base['hits'], (int) $dbRow['hits']);
+                $dbExpEmpty   = empty($dbRow['expires_at']) || strpos((string) $dbRow['expires_at'], '0000') === 0;
+                if ($dbExpEmpty) {
+                    $base['expires_ts'] = 0;
+                    $base['ban_type']   = !empty($dbRow['ban_type']) ? (string) $dbRow['ban_type'] : 'manual';
+                    $base['banned_by']  = (string) ($dbRow['banned_by'] ?? '');
+                    if (!empty($dbRow['reason'])) {
+                        $base['reason'] = (string) $dbRow['reason'];
+                    }
+                    if ($base['ban_type'] === 'manual' || !in_array((string) ($dbRow['banned_by'] ?? ''), ['bot-ai', 'bot-shield', 'bot-keyguard', 'bot-antivpn', ''], true)) {
+                        $isAdminPerm = true;
+                    }
+                } elseif (strtotime((string) $dbRow['expires_at']) > time()) {
+                    $base['expires_ts'] = (int) strtotime((string) $dbRow['expires_at']);
+                }
+                if (empty($base['username']) && !empty($dbRow['username'])) {
+                    $base['username'] = (string) $dbRow['username'];
+                }
             }
         }
     }
 
-    $intel            = $ip !== '' ? sh_inspect_ip_vpn($ip) : ['is_vpn' => false, 'label' => '', 'isp' => '', 'country' => ''];
+    // Also check if the user's account itself is permanently locked by Admin in tg_user_blocks!
+    if (($conn instanceof mysqli) && !empty($base['username'])) {
+        try {
+            $stUb = @$conn->prepare('SELECT reason, blocked_by, created_at FROM tg_user_blocks WHERE username = ? AND active = 1 LIMIT 1');
+            if ($stUb) {
+                $unChk = (string) $base['username'];
+                $stUb->bind_param('s', $unChk);
+                if ($stUb->execute()) {
+                    $rsUb = $stUb->get_result();
+                    $ubRow = $rsUb ? $rsUb->fetch_assoc() : null;
+                    if ($ubRow) {
+                        $isAdminPerm        = true;
+                        $base['expires_ts'] = 0;
+                        $base['ban_type']   = 'manual';
+                        $base['banned_by']  = (string) ($ubRow['blocked_by'] ?? 'admin');
+                        $base['reason']     = 'Khoá tài khoản bởi Admin: ' . (string) $ubRow['reason'];
+                    }
+                }
+                $stUb->close();
+            }
+        } catch (Throwable $e) {}
+    }
+
+    if (($base['ban_type'] ?? '') === 'manual') {
+        $isAdminPerm        = true;
+        $base['expires_ts'] = 0;
+    }
+    $base['is_admin_perm'] = $isAdminPerm ? 1 : 0;
+
+    // Resolve True Origin IP behind VPN/Proxy if not yet populated!
+    $intel = $ip !== '' ? sh_inspect_ip_vpn($ip) : ['is_vpn' => false, 'label' => '', 'isp' => '', 'country' => ''];
+    if (!empty($intel['is_vpn']) && empty($base['real_origin_ip'])) {
+        $resolved = sh_resolve_true_origin_ip($conn, $ip, (string) ($base['lid'] ?? ''), (string) ($base['hw_fp'] ?? ''), (string) ($base['username'] ?? ''));
+        if (!empty($resolved['real_ip']) && $resolved['real_ip'] !== $ip) {
+            $base['real_origin_ip']  = $resolved['real_ip'];
+            $base['real_origin_isp'] = $resolved['real_isp'];
+            $base['real_ip_source']  = $resolved['real_source'];
+            $base['vpn_ip']          = $ip;
+            $base['vpn_lbl']         = $resolved['vpn_label'];
+        }
+    }
+
     $btype            = isset($base['ban_type']) ? (string) $base['ban_type'] : 'temp';
     $evasions         = (int) (isset($base['evasion_attempts']) ? $base['evasion_attempts'] : 0);
-    $hits             = (int) (isset($base['hits']) ? $base['hits'] : 1);
     $uaSummary        = sh_summarize_ua(isset($base['ua']) ? $base['ua'] : '');
-    $base['type_lbl'] = sh_ban_type_label($btype);
+    $base['type_lbl'] = $isAdminPerm ? '🚫 Cấm vĩnh viễn trực tiếp bởi Admin' : sh_ban_type_label($btype);
     $base['device']   = $uaSummary;
     $base['isp']      = !empty($intel['isp']) ? (string) $intel['isp'] : 'Chưa xác định';
     $base['country']  = !empty($intel['country']) ? (string) $intel['country'] : '';
     $base['is_vpn']   = !empty($intel['is_vpn']);
-    $base['vpn_lbl']  = !empty($intel['label']) ? (string) $intel['label'] : '';
+    $base['vpn_lbl']  = !empty($base['vpn_lbl']) ? (string) $base['vpn_lbl'] : (!empty($intel['label']) ? (string) $intel['label'] : '');
 
     // Smart AI Risk Assessment & Actionable Recommendation
-    if (in_array($btype, ['ddos', 'waf', 'bug_buff', 'inspect'], true) || $evasions >= 2 || strpos($uaSummary, 'Công cụ Script') === 0) {
+    if ($isAdminPerm) {
+        $base['risk_badge'] = '⛔ LỆNH CẤM VĨNH VIỄN BỞI QUẢN TRỊ VIÊN (ADMIN)';
+        $base['ai_advice']  = 'Đối tượng này đã bị Admin trực tiếp ra lệnh cấm vĩnh viễn. Bot AI tự động sẽ từ chối 100% mọi yêu cầu mở khoá — chỉ Admin mới có quyền gỡ.';
+    } elseif (in_array($btype, ['ddos', 'waf', 'bug_buff', 'inspect'], true) || $evasions >= 2 || strpos($uaSummary, 'Công cụ Script') === 0) {
         $base['risk_badge'] = '🔴 NGHIÊM TRỌNG (Can thiệp / Tấn công trực tiếp)';
         $base['ai_advice']  = $evasions > 0
             ? 'Đối tượng đã cố tình đổi IP/thiết bị ' . $evasions . ' lần để lách khoá. Khuyến nghị GIỮ KHOÁ hoặc chuyển sang CẤM VĨNH VIỄN.'
             : 'Phát hiện dấu hiệu chạy công cụ Script, soi mã nguồn hoặc gửi gói tin tấn công. Chỉ gỡ nếu xác nhận đúng người quen thao tác nhầm.';
     } elseif ($btype === 'vpn_abuse' || !empty($intel['is_vpn']) || $evasions === 1) {
-        $base['risk_badge'] = '🟡 TRUNG BÌNH (Có dùng VPN / Đổi mạng)';
-        $base['ai_advice']  = 'Kết nối có sử dụng ' . ($base['vpn_lbl'] !== '' ? $base['vpn_lbl'] : 'VPN / đổi mạng') . '. Hãy nhắc người dùng tắt hẳn VPN / 1.1.1.1 trước khi bấm Gỡ chặn.';
+        $base['risk_badge'] = '🟡 TRUNG BÌNH (Có dùng VPN / Fake IP)';
+        $realNote = !empty($base['real_origin_ip']) ? (' IP thật gốc của khách là ' . $base['real_origin_ip'] . '.') : '';
+        $base['ai_advice']  = 'Kết nối đang bật ' . ($base['vpn_lbl'] !== '' ? $base['vpn_lbl'] : 'VPN / Proxy') . '.' . $realNote . ' Nhắc người dùng tắt hẳn VPN trước khi gỡ chặn.';
     } else {
         $base['risk_badge'] = '🟢 MỨC NHẸ (Người dùng thao tác quá nhanh)';
-        $base['ai_advice']  = 'Người dùng mạng thông thường bấm lấy sản phẩm khi chưa có Key hoặc nhập sai Key liên tiếp (0 lần cố lách khoá). Có thể bấm «Gỡ chặn sạch ngay» an toàn.';
+        $base['ai_advice']  = 'Người dùng mạng gốc thông thường bấm lấy sản phẩm khi chưa có Key hoặc nhập sai Key liên tiếp (0 lần cố lách khoá). Có thể bấm «Gỡ chặn sạch ngay» an toàn.';
     }
 
     return $base;
+}
+
+/**
+ * Finds any LIVE active ban for a public Telegram user even if their IMX-... code was old/missing/not pasted!
+ * Checks: 1) IMX code dossier, 2) tg_pub_links (chat_id -> ip / lid), 3) elocks, 4) ip_bans, 5) tg_user_blocks.
+ */
+function sh_find_active_ban_for_public_user($conn, $chatId = '', $rawCode = '', $hintUsername = '')
+{
+    if ($rawCode !== '') {
+        $dos = sh_enrich_case_dossier($conn, $rawCode);
+        if (is_array($dos) && !empty($dos['active'])) {
+            return $dos;
+        }
+    }
+
+    $candIps   = [];
+    $candLids  = [];
+    $candUsers = [];
+    if ($hintUsername !== '') {
+        $candUsers[] = trim((string) $hintUsername);
+    }
+
+    $chatId = trim((string) $chatId);
+    if ($chatId !== '') {
+        $p = dirname(sh_dir()) . '/tg_pub_links.json';
+        if (is_file($p)) {
+            $raw = @file_get_contents($p);
+            $map = is_string($raw) ? json_decode($raw, true) : null;
+            if (is_array($map)) {
+                foreach ($map as $k => $v) {
+                    if (is_array($v) && (string) ($v['chat_id'] ?? '') === $chatId) {
+                        if (strpos($k, 'ip:') === 0) {
+                            $candIps[] = sh_norm_ip(substr($k, 3));
+                        } elseif (strpos($k, 'lid:') === 0) {
+                            $candLids[] = strtolower(substr($k, 4));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check elocks by lid first (catches IP rotation / VPN switches!)
+    foreach (array_unique(array_filter($candLids)) as $ld) {
+        $el = sh_read_entity_lock('lid', $ld);
+        if (is_array($el) && !empty($el['ip'])) {
+            $candIps[] = sh_norm_ip($el['ip']);
+            if (!empty($el['origin_ip'])) {
+                $candIps[] = sh_norm_ip($el['origin_ip']);
+            }
+            if (!empty($el['real_origin_ip'])) {
+                $candIps[] = sh_norm_ip($el['real_origin_ip']);
+            }
+            if (!empty($el['username'])) {
+                $candUsers[] = (string) $el['username'];
+            }
+        }
+    }
+
+    // Check active bans across candidate IPs (newest / permanent prioritized!)
+    $best = null;
+    foreach (array_unique(array_filter($candIps)) as $cip) {
+        $fast = sh_read_ban_cache($cip);
+        $dbB  = (($conn instanceof mysqli) && function_exists('ipg_is_banned')) ? ipg_is_banned($conn, $cip) : null;
+        if (!$fast && !$dbB) {
+            continue;
+        }
+        $expTs = 0;
+        if ($dbB && (empty($dbB['expires_at']) || strpos((string) $dbB['expires_at'], '0000') === 0)) {
+            $expTs = 0;
+        } elseif ($fast && isset($fast['expires_ts'])) {
+            $expTs = (int) $fast['expires_ts'];
+        } elseif ($dbB && !empty($dbB['expires_at'])) {
+            $expTs = max(0, (int) strtotime((string) $dbB['expires_at']));
+        }
+        if ($expTs > 0 && $expTs <= time()) {
+            continue;
+        }
+        $bType = ($dbB && ($dbB['ban_type'] ?? '') === 'manual') ? 'manual' : (string) ($fast['ban_type'] ?? ($dbB['ban_type'] ?? 'manual'));
+        $bBy   = (string) ($dbB['banned_by'] ?? ($fast['banned_by'] ?? ''));
+        $isAdm = ($bType === 'manual') || ($expTs === 0 && !in_array($bBy, ['bot-ai', 'bot-shield', 'bot-keyguard', 'bot-antivpn', ''], true));
+        $cc    = !empty($fast['case_code']) ? (string) $fast['case_code'] : sh_issue_case_code($cip, $fast ?: $dbB);
+        $candDossier = sh_enrich_case_dossier($conn, $cc);
+        if (!$candDossier) {
+            $candDossier = [
+                'code'          => $cc,
+                'active'        => 1,
+                'ip'            => $cip,
+                'ban_type'      => $bType,
+                'banned_by'     => $bBy,
+                'is_admin_perm' => $isAdm ? 1 : 0,
+                'reason'        => (string) ($dbB['reason'] ?? ($fast['reason'] ?? 'Vi phạm quy định của website')),
+                'username'      => (string) ($dbB['username'] ?? ($fast['username'] ?? '')),
+                'expires_ts'    => $expTs,
+                'hits'          => (int) ($dbB['hits'] ?? ($fast['hits'] ?? 1)),
+                'device'        => 'Thiết bị trình duyệt',
+            ];
+        }
+        if ($isAdm) {
+            return $candDossier; // Admin permanent ban ALWAYS wins immediately!
+        }
+        if ($best === null) {
+            $best = $candDossier;
+        }
+    }
+
+    // Check permanent account lock in tg_user_blocks
+    if ($conn instanceof mysqli) {
+        foreach (array_unique(array_filter($candUsers)) as $un) {
+            try {
+                $st = @$conn->prepare('SELECT user_id, username, reason, blocked_by, created_at FROM tg_user_blocks WHERE username = ? AND active = 1 LIMIT 1');
+                if ($st) {
+                    $st->bind_param('s', $un);
+                    if ($st->execute()) {
+                        $rs = $st->get_result();
+                        $ur = $rs ? $rs->fetch_assoc() : null;
+                        $st->close();
+                        if ($ur) {
+                            return [
+                                'code'          => $rawCode !== '' ? $rawCode : ('ACC-' . strtoupper($ur['username'])),
+                                'active'        => 1,
+                                'ip'            => $candIps ? $candIps[0] : '',
+                                'ban_type'      => 'manual',
+                                'banned_by'     => (string) ($ur['blocked_by'] ?? 'admin'),
+                                'is_admin_perm' => 1,
+                                'reason'        => 'Khoá tài khoản vĩnh viễn bởi Admin: ' . (string) $ur['reason'],
+                                'username'      => (string) $ur['username'],
+                                'expires_ts'    => 0,
+                                'hits'          => 1,
+                                'device'        => 'Tài khoản Website',
+                            ];
+                        }
+                    } else {
+                        $st->close();
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
+    }
+
+    return $best;
 }
 
 /**
@@ -1383,10 +1705,18 @@ function sh_full_clean_slate_unban($conn, $ip, $username = '', $createUnlockGate
     $hwsToClean  = array_values(array_unique(array_filter($hwsToClean)));
     $lidsToClean = array_values(array_unique(array_filter($lidsToClean)));
 
-    // Scan bans/*/*.json so any secondary IP banned via cross-device/4G evasion from the same user/device/origin_ip is ALSO cleanly lifted!
+    $isAutoTimer = ($unbannedBy === 'auto-timer');
+    if ($isAutoTimer && $rec && ((int) ($rec['expires_ts'] ?? -1) === 0 || ($rec['ban_type'] ?? '') === 'manual')) {
+        return; // Auto-timer MUST NEVER touch permanent / non-expiring locks!
+    }
+
+    // Scan bans/*/*.json so any secondary IP banned via cross-device/4G evasion from the same user/device/origin_ip is ALSO cleanly lifted (except permanent locks during auto-timer)!
     foreach (glob(sh_dir() . '/bans/*/*.json') ?: [] as $bf) {
         $bd = sh_json_read($bf);
         if (empty($bd['ip'])) {
+            continue;
+        }
+        if ($isAutoTimer && ((int) ($bd['expires_ts'] ?? -1) === 0 || ($bd['ban_type'] ?? '') === 'manual')) {
             continue;
         }
         $bIp   = sh_norm_ip($bd['ip']);
@@ -1419,15 +1749,24 @@ function sh_full_clean_slate_unban($conn, $ip, $username = '', $createUnlockGate
     $lidsToClean = array_values(array_unique(array_filter($lidsToClean)));
 
     foreach ($hwsToClean as $hw) {
-        @unlink(sh_entity_lock_path('hw', $hw));
+        $eh = sh_read_entity_lock('hw', $hw);
+        if (!$isAutoTimer || !$eh || ((int) ($eh['expires_ts'] ?? -1) > 0 && ($eh['ban_type'] ?? '') !== 'manual')) {
+            @unlink(sh_entity_lock_path('hw', $hw));
+        }
     }
     foreach ($lidsToClean as $ld) {
-        @unlink(sh_entity_lock_path('lid', $ld));
+        $el = sh_read_entity_lock('lid', $ld);
+        if (!$isAutoTimer || !$el || ((int) ($el['expires_ts'] ?? -1) > 0 && ($el['ban_type'] ?? '') !== 'manual')) {
+            @unlink(sh_entity_lock_path('lid', $ld));
+        }
     }
 
     // Scan elocks directory to purge any secondary device/VPN locks linked to these IPs/devices
     foreach (glob(sh_dir() . '/elocks/*/*.json') ?: [] as $ef) {
         $ed = sh_json_read($ef);
+        if ($isAutoTimer && ((int) ($ed['expires_ts'] ?? -1) === 0 || ($ed['ban_type'] ?? '') === 'manual')) {
+            continue;
+        }
         if (!empty($ed['ip']) && in_array(sh_norm_ip($ed['ip']), $ipsToClean, true)) {
             @unlink($ef);
         } elseif (!empty($ed['origin_ip']) && in_array(sh_norm_ip($ed['origin_ip']), $ipsToClean, true)) {
@@ -1478,11 +1817,14 @@ function sh_full_clean_slate_unban($conn, $ip, $username = '', $createUnlockGate
         });
     }
 
-    // Also clear old MySQL key_attempts / ds_key_attempts and mark any linked secondary ip_bans inactive!
+    // Also clear old MySQL key_attempts / ds_key_attempts and mark any linked secondary ip_bans inactive (NEVER touching manual permanent bans on auto-timer)!
     if ($conn instanceof mysqli) {
         foreach ($ipsToClean as $cip) {
             try {
-                $st0 = @$conn->prepare("UPDATE ip_bans SET active = 0, unbanned_by = COALESCE(unbanned_by, 'linked-clean'), unbanned_at = COALESCE(unbanned_at, NOW()) WHERE ip = ? AND active = 1");
+                $sqlUpd = $isAutoTimer
+                    ? "UPDATE ip_bans SET active = 0, unbanned_by = COALESCE(unbanned_by, 'linked-clean'), unbanned_at = COALESCE(unbanned_at, NOW()) WHERE ip = ? AND active = 1 AND ban_type <> 'manual' AND expires_at IS NOT NULL"
+                    : "UPDATE ip_bans SET active = 0, unbanned_by = COALESCE(unbanned_by, 'linked-clean'), unbanned_at = COALESCE(unbanned_at, NOW()) WHERE ip = ? AND active = 1";
+                $st0 = @$conn->prepare($sqlUpd);
                 if ($st0) {
                     $st0->bind_param('s', $cip);
                     @$st0->execute();
@@ -1494,7 +1836,7 @@ function sh_full_clean_slate_unban($conn, $ip, $username = '', $createUnlockGate
             } catch (Throwable $e) {}
             try {
                 $st = @$conn->prepare('DELETE FROM key_attempts WHERE ip = ?');
-                if ($st) { $st->bind_param('s', $cip); @$st0->execute(); $st->close(); }
+                if ($st) { $st->bind_param('s', $cip); @$st->execute(); $st->close(); }
             } catch (Throwable $e) {}
             try {
                 $st2 = @$conn->prepare('DELETE FROM ds_key_attempts WHERE ip = ?');
@@ -1638,6 +1980,282 @@ function sh_inspect_ip_vpn($ip)
     return $info;
 }
 
+/** Detects legitimate search engine & link-preview crawlers so they never create fake VPN ban noise. */
+function sh_is_benign_crawler_ua($ua = null)
+{
+    $ua = $ua !== null ? (string) $ua : (string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '');
+    if ($ua === '') {
+        return false;
+    }
+    return (bool) preg_match('~(Googlebot|AdsBot-Google|Mediapartners-Google|Google-InspectionTool|Bingbot|Applebot|TelegramBot|Twitterbot|facebookexternalhit|Facebot|Discordbot|Slackbot|WhatsApp|LinkedInBot|UptimeRobot|Amazonbot|DuckDuckBot|YandexBot|AhrefsBot|SemrushBot|PetalBot)~i', $ua);
+}
+
+function sh_real_ip_vault_path($kind, $val)
+{
+    $h = md5('rip12|' . $kind . '|' . strtolower(trim((string) $val)));
+    return sh_dir() . '/real_ips/' . substr($h, 0, 2) . '/' . $h . '.json';
+}
+
+function sh_current_dev_sig()
+{
+    $ua   = trim((string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : ''));
+    $lang = trim((string) (isset($_SERVER['HTTP_ACCEPT_LANGUAGE']) ? $_SERVER['HTTP_ACCEPT_LANGUAGE'] : ''));
+    if ($ua === '' || sh_is_benign_crawler_ua($ua)) {
+        return '';
+    }
+    return md5($ua . '|' . substr($lang, 0, 48));
+}
+
+/**
+ * Records a verified non-VPN residential/mobile IP across Hardware FP, Browser LID, Username & Device Sig
+ * so the instant the user enables 1.1.1.1 / VPN / Proxy, their REAL origin IP is immediately known!
+ */
+function sh_record_real_ip_identity($ip, array $intel = [], $lid = '', $hwFp = '', $username = '')
+{
+    $ip = sh_norm_ip($ip);
+    if ($ip === '' || sh_is_private_or_local($ip) || sh_is_trusted_proxy($ip) || sh_is_known_vpn_cidr($ip)) {
+        return;
+    }
+    if (empty($intel)) {
+        $intel = sh_inspect_ip_vpn($ip);
+    }
+    if (!empty($intel['is_vpn'])) {
+        return; // NEVER overwrite real-IP vault with a virtual VPN/Proxy IP!
+    }
+    $lid  = $lid !== '' ? strtolower($lid) : sh_browser_lid();
+    $hwFp = $hwFp !== '' ? strtolower($hwFp) : sh_hw_fp_cookie();
+    $rec  = [
+        'ip'      => $ip,
+        'isp'     => substr((string) ($intel['isp'] ?? ''), 0, 90),
+        'country' => strtoupper((string) ($intel['country'] ?? '')),
+        'at'      => time(),
+    ];
+    if ($hwFp !== '') {
+        sh_json_update(sh_real_ip_vault_path('hw', $hwFp), function () use ($rec) { return $rec; });
+    }
+    if ($lid !== '') {
+        sh_json_update(sh_real_ip_vault_path('lid', $lid), function () use ($rec) { return $rec; });
+    }
+    if ($username !== '') {
+        sh_json_update(sh_real_ip_vault_path('user', $username), function () use ($rec) { return $rec; });
+    }
+}
+
+/**
+ * 5-Layer Forensic Real-IP Unmasker:
+ * Separates Fake VPN/Proxy IP vs True Residential Origin IP across:
+ * 1) Live WebRTC STUN ICE leak candidates, 2) Non-VPN Proxy Headers, 3) Hardware Fingerprint Vault,
+ * 4) Persistent Browser LID Vault, 5) MySQL Historical User/Device IPs & Telegram Links, 6) Short-Window Device Sig!
+ */
+function sh_resolve_true_origin_ip($conn, $connIp, $lid = '', $hwFp = '', $username = '', array $wrtcIps = [])
+{
+    $connIp = sh_norm_ip($connIp);
+    $lid    = $lid !== '' ? strtolower($lid) : sh_browser_lid();
+    $hwFp   = $hwFp !== '' ? strtolower($hwFp) : sh_hw_fp_cookie();
+    $intel  = $connIp !== '' ? sh_inspect_ip_vpn($connIp) : ['is_vpn' => false, 'label' => '', 'isp' => '', 'country' => ''];
+
+    if (empty($intel['is_vpn'])) {
+        sh_record_real_ip_identity($connIp, $intel, $lid, $hwFp, $username);
+        return [
+            'is_vpn'       => false,
+            'vpn_ip'       => '',
+            'vpn_label'    => '',
+            'vpn_isp'      => '',
+            'real_ip'      => $connIp,
+            'real_isp'     => (string) ($intel['isp'] ?? ''),
+            'real_country' => (string) ($intel['country'] ?? ''),
+            'real_source'  => 'Mạng gốc trực tiếp',
+        ];
+    }
+
+    $vpnLabel = !empty($intel['label']) ? (string) $intel['label'] : 'VPN / Proxy';
+
+    // Helper to verify a candidate is a real residential/mobile IP (NOT another VPN exit!)
+    $checkReal = function ($candIp) use ($connIp) {
+        $candIp = sh_norm_ip($candIp);
+        if ($candIp === '' || $candIp === $connIp || sh_is_private_or_local($candIp) || sh_is_trusted_proxy($candIp) || sh_is_known_vpn_cidr($candIp)) {
+            return null;
+        }
+        $ci = sh_inspect_ip_vpn($candIp);
+        if (!empty($ci['is_vpn'])) {
+            return null;
+        }
+        return [
+            'ip'      => $candIp,
+            'isp'     => (string) ($ci['isp'] ?? ''),
+            'country' => (string) ($ci['country'] ?? ''),
+        ];
+    };
+
+    // Layer 1: Live WebRTC STUN ICE Candidates (from Sad Page probe or telemetry)
+    if ($lid !== '') {
+        $tele = sh_json_read(sh_dir() . '/telemetry/' . substr($lid, 0, 2) . '/' . $lid . '.json');
+        if (!empty($tele['webrtc_ip'])) {
+            $wrtcIps[] = (string) $tele['webrtc_ip'];
+        }
+        if (empty($hwFp) && !empty($tele['hw_fp'])) {
+            $hwFp = strtolower((string) $tele['hw_fp']);
+        }
+    }
+    foreach (array_unique(array_filter($wrtcIps)) as $wip) {
+        $hit = $checkReal($wip);
+        if ($hit !== null) {
+            sh_record_real_ip_identity($hit['ip'], ['is_vpn' => false, 'isp' => $hit['isp'], 'country' => $hit['country']], $lid, $hwFp, $username);
+            return [
+                'is_vpn'       => true,
+                'vpn_ip'       => $connIp,
+                'vpn_label'    => $vpnLabel,
+                'vpn_isp'      => (string) ($intel['isp'] ?? ''),
+                'real_ip'      => $hit['ip'],
+                'real_isp'     => $hit['isp'],
+                'real_country' => $hit['country'],
+                'real_source'  => 'Rò rỉ WebRTC trực tiếp trên trình duyệt',
+            ];
+        }
+    }
+
+    // Layer 2: Forwarded / Proxy Header Chain
+    $forensics = sh_trace_forensics();
+    $hdrCands  = array_merge([$forensics['real_ip']], (array) ($forensics['hops'] ?? []));
+    foreach (array_unique(array_filter($hdrCands)) as $hIp) {
+        $hit = $checkReal($hIp);
+        if ($hit !== null) {
+            return [
+                'is_vpn'       => true,
+                'vpn_ip'       => $connIp,
+                'vpn_label'    => $vpnLabel,
+                'vpn_isp'      => (string) ($intel['isp'] ?? ''),
+                'real_ip'      => $hit['ip'],
+                'real_isp'     => $hit['isp'],
+                'real_country' => $hit['country'],
+                'real_source'  => 'Header luồng Proxy gốc',
+            ];
+        }
+    }
+
+    // Layer 3 & 4: Hardware Fingerprint Vault -> Browser LID Vault -> Username Vault
+    $vaultChecks = [];
+    if ($hwFp !== '') {
+        $vaultChecks[] = ['hw', $hwFp, 30 * 86400, 'Vân tay phần cứng thiết bị (HW)'];
+    }
+    if ($lid !== '') {
+        $vaultChecks[] = ['lid', $lid, 30 * 86400, 'Định danh trình duyệt trước khi bật VPN'];
+    }
+    if ($username !== '') {
+        $vaultChecks[] = ['user', $username, 30 * 86400, 'Tài khoản đăng nhập trước khi bật VPN'];
+    }
+    foreach ($vaultChecks as $vc) {
+        $vd = sh_json_read(sh_real_ip_vault_path($vc[0], $vc[1]));
+        if (!empty($vd['ip']) && !empty($vd['at']) && (time() - (int) $vd['at']) <= $vc[2] && $vd['ip'] !== $connIp) {
+            return [
+                'is_vpn'       => true,
+                'vpn_ip'       => $connIp,
+                'vpn_label'    => $vpnLabel,
+                'vpn_isp'      => (string) ($intel['isp'] ?? ''),
+                'real_ip'      => (string) $vd['ip'],
+                'real_isp'     => (string) ($vd['isp'] ?? ''),
+                'real_country' => (string) ($vd['country'] ?? ''),
+                'real_source'  => $vc[3],
+            ];
+        }
+    }
+
+    // Layer 5: MySQL Historical Real-IP Cross-Reference (users, free_key_claims, free_key_ip_log, key_attempts, tg_activity)
+    if ($conn === null && is_file(__DIR__ . '/config.php')) {
+        try {
+            require_once __DIR__ . '/config.php';
+            if (defined('DB_USER') && DB_USER !== '') {
+                $conn = defined('DB_PORT') ? @mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME, (int) DB_PORT) : @mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+            }
+        } catch (Throwable $e) {
+            $conn = null;
+        }
+    }
+    if ($conn instanceof mysqli) {
+        $dbCands = [];
+        try {
+            if ($username === '' && $lid !== '') {
+                $stU = @$conn->prepare("SELECT username FROM free_key_seen WHERE kind = 'dev' AND val = ? ORDER BY last_seen DESC LIMIT 1");
+                if ($stU) {
+                    $stU->bind_param('s', $lid);
+                    if ($stU->execute()) {
+                        $rU = $stU->get_result();
+                        $rowU = $rU ? $rU->fetch_assoc() : null;
+                        if ($rowU && !empty($rowU['username'])) {
+                            $username = (string) $rowU['username'];
+                        }
+                    }
+                    $stU->close();
+                }
+            }
+            if ($lid !== '') {
+                $stD = @$conn->prepare('SELECT ip FROM free_key_claims WHERE device_id = ? ORDER BY id DESC LIMIT 5');
+                if ($stD) {
+                    $stD->bind_param('s', $lid);
+                    if ($stD->execute()) {
+                        $rD = $stD->get_result();
+                        while ($rD && ($rw = $rD->fetch_assoc())) {
+                            $dbCands[] = (string) $rw['ip'];
+                        }
+                    }
+                    $stD->close();
+                }
+            }
+            if ($username !== '') {
+                $queries = [
+                    'SELECT last_login_ip AS ip FROM users WHERE username = ? AND last_login_ip IS NOT NULL LIMIT 1',
+                    'SELECT ip_raw AS ip FROM free_key_ip_log WHERE username = ? ORDER BY id DESC LIMIT 6',
+                    'SELECT ip FROM key_attempts WHERE username = ? ORDER BY id DESC LIMIT 6',
+                    'SELECT ip FROM tg_activity WHERE actor = ? AND ip IS NOT NULL AND ip <> "" ORDER BY id DESC LIMIT 8',
+                ];
+                foreach ($queries as $sql) {
+                    $stQ = @$conn->prepare($sql);
+                    if ($stQ) {
+                        $stQ->bind_param('s', $username);
+                        if ($stQ->execute()) {
+                            $rQ = $stQ->get_result();
+                            while ($rQ && ($rw = $rQ->fetch_assoc())) {
+                                if (!empty($rw['ip'])) {
+                                    $dbCands[] = (string) $rw['ip'];
+                                }
+                            }
+                        }
+                        $stQ->close();
+                    }
+                }
+            }
+        } catch (Throwable $e) {}
+
+        foreach (array_unique(array_filter($dbCands)) as $dIp) {
+            $hit = $checkReal($dIp);
+            if ($hit !== null) {
+                sh_record_real_ip_identity($hit['ip'], ['is_vpn' => false, 'isp' => $hit['isp'], 'country' => $hit['country']], $lid, $hwFp, $username);
+                return [
+                    'is_vpn'       => true,
+                    'vpn_ip'       => $connIp,
+                    'vpn_label'    => $vpnLabel,
+                    'vpn_isp'      => (string) ($intel['isp'] ?? ''),
+                    'real_ip'      => $hit['ip'],
+                    'real_isp'     => $hit['isp'],
+                    'real_country' => $hit['country'],
+                    'real_source'  => 'Lịch sử mạng gốc trong CSDL Website',
+                ];
+            }
+        }
+    }
+
+    return [
+        'is_vpn'       => true,
+        'vpn_ip'       => $connIp,
+        'vpn_label'    => $vpnLabel,
+        'vpn_isp'      => (string) ($intel['isp'] ?? ''),
+        'real_ip'      => '',
+        'real_isp'     => '',
+        'real_country' => '',
+        'real_source'  => '',
+    ];
+}
+
 /* ------------------------------------------------------------------
  * 8. Native iosmods.xyz Matte Monochrome UI (Zero Glow, Zero Colorful
  *    Boxes, Frameless Animated Sad / Happy / Unlock SVG Icons!)
@@ -1646,7 +2264,7 @@ function sh_inspect_ip_vpn($ip)
 function sh_wants_json()
 {
     return isset($_GET['ajax']) || isset($_GET['sync'])
-        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock']) || isset($_GET['__sh_bot_ping'])
+        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock']) || isset($_GET['__sh_bot_ping']) || isset($_GET['__sh_realip_probe'])
         || (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower((string) $_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
         || (isset($_SERVER['HTTP_ACCEPT']) && stripos((string) $_SERVER['HTTP_ACCEPT'], 'application/json') === 0);
 }
@@ -1839,6 +2457,149 @@ function sh_handle_bot_ping_endpoint()
     }
 
     echo json_encode(['ok' => true, 'pushed' => $pushed]);
+    exit;
+}
+
+/**
+ * Live Lock-Screen WebRTC + Hardware-FP Real-IP Unmasking Endpoint (?__sh_realip_probe=1):
+ * Fired silently from sh_render_sad_page() within ~350ms of any VPN/Security lock screen loading.
+ * Uncovers the visitor's REAL residential ISP IP behind 1.1.1.1 WARP / VPN / Proxy via WebRTC STUN ICE
+ * candidates + Hardware Fingerprint + recovered localStorage LID + MySQL history, updates the active ban
+ * & IMX-... dossier, and immediately alerts Admin on Telegram with BOTH Real IP and Fake VPN IP!
+ */
+function sh_handle_realip_probe_endpoint()
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_GET['__sh_realip_probe'])) {
+        return;
+    }
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+
+    $connIp   = sh_client_ip();
+    $lid      = isset($_POST['lid']) && preg_match('/^[a-f0-9]{32}$/i', (string) $_POST['lid']) ? strtolower((string) $_POST['lid']) : sh_browser_lid();
+    $recLid   = isset($_POST['rec_lid']) && preg_match('/^[a-f0-9]{32}$/i', (string) $_POST['rec_lid']) ? strtolower((string) $_POST['rec_lid']) : '';
+    $sig      = isset($_POST['sig']) ? (string) $_POST['sig'] : '';
+    $hwFp     = isset($_POST['hw']) && preg_match('/^[a-f0-9]{16,64}$/i', (string) $_POST['hw']) ? strtolower((string) $_POST['hw']) : sh_hw_fp_cookie();
+    $caseCode = isset($_POST['case_code']) ? sh_extract_case_code($_POST['case_code']) : '';
+    $wrtcRaw  = isset($_POST['wrtc_ips']) ? (string) $_POST['wrtc_ips'] : '';
+
+    if ($lid === '' || !hash_equals(sh_client_sig($lid), $sig)) {
+        echo json_encode(['ok' => false]);
+        exit;
+    }
+
+    if ($hwFp !== '' && !headers_sent()) {
+        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || strtolower((string) (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : '')) === 'https';
+        if (PHP_VERSION_ID >= 70300) {
+            @setcookie('sh_hw', $hwFp, ['expires' => time() + 63072000, 'path' => '/', 'secure' => $https, 'httponly' => true, 'samesite' => 'Lax']);
+        } else {
+            @setcookie('sh_hw', $hwFp, time() + 63072000, '/; samesite=Lax', '', $https, true);
+        }
+    }
+
+    $wrtcIps = [];
+    foreach (explode(',', $wrtcRaw) as $cand) {
+        $n = sh_norm_ip($cand);
+        if ($n !== '') {
+            $wrtcIps[] = $n;
+        }
+    }
+
+    $sessUser = '';
+    if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+        @session_start();
+    }
+    if (!empty($_SESSION['username']) && is_string($_SESSION['username'])) {
+        $sessUser = trim($_SESSION['username']);
+    }
+
+    $resolved = sh_resolve_true_origin_ip(null, $connIp, $recLid !== '' ? $recLid : $lid, $hwFp, $sessUser, $wrtcIps);
+    // If recLid didn't match but lid does, try lid too
+    if ($resolved['is_vpn'] && $resolved['real_ip'] === '' && $recLid !== '' && $recLid !== $lid) {
+        $resolved = sh_resolve_true_origin_ip(null, $connIp, $lid, $hwFp, $sessUser, $wrtcIps);
+    }
+
+    $realIp = $resolved['real_ip'];
+    $curBan = $connIp !== '' ? sh_read_ban_cache($connIp) : null;
+    if (is_array($curBan)) {
+        $patch = [
+            'hw_fp'   => $hwFp !== '' ? $hwFp : ($curBan['hw_fp'] ?? ''),
+            'lid'     => $recLid !== '' ? $recLid : $lid,
+            'vpn_ip'  => $resolved['is_vpn'] ? $connIp : ($curBan['vpn_ip'] ?? ''),
+            'vpn_lbl' => $resolved['vpn_label'] !== '' ? $resolved['vpn_label'] : ($curBan['vpn_lbl'] ?? ''),
+        ];
+        if ($realIp !== '' && $realIp !== $connIp) {
+            $patch['real_origin_ip']  = $realIp;
+            $patch['real_origin_isp'] = $resolved['real_isp'];
+            $patch['real_ip_source']  = $resolved['real_source'];
+        }
+        $updated = sh_write_ban_cache($connIp, array_merge($curBan, $patch));
+        if ($caseCode !== '') {
+            $cf = sh_case_file($caseCode);
+            if (is_file($cf)) {
+                sh_json_update($cf, function ($d) use ($patch) {
+                    return array_merge(is_array($d) ? $d : [], $patch);
+                });
+            }
+        }
+        // Notify Admin immediately when a VPN user's REAL origin IP is unmasked!
+        if ($resolved['is_vpn'] && $realIp !== '' && $realIp !== $connIp) {
+            $nKey  = md5('unmask|' . $realIp . '|' . $connIp);
+            $nFile = sh_dir() . '/real_ips/notified_' . $nKey . '.json';
+            $prevN = sh_json_read($nFile);
+            if (empty($prevN['at']) || (time() - (int) $prevN['at']) >= 180) {
+                sh_json_update($nFile, function () { return ['at' => time()]; });
+                $alertPayload = [
+                    'ip'              => $realIp,
+                    'real_origin_ip'  => $realIp,
+                    'real_origin_isp' => trim($resolved['real_isp'] . ($resolved['real_country'] !== '' ? ' (' . $resolved['real_country'] . ')' : '')),
+                    'real_ip_source'  => $resolved['real_source'],
+                    'vpn_ip'          => $connIp,
+                    'vpn_lbl'         => $resolved['vpn_label'],
+                    'username'        => $sessUser !== '' ? $sessUser : (string) ($updated['username'] ?? ''),
+                    'case_code'       => $caseCode !== '' ? $caseCode : (string) ($updated['case_code'] ?? ''),
+                    'duration'        => !empty($updated['expires_ts']) ? max(60, (int) $updated['expires_ts'] - time()) : 120,
+                ];
+                $sent = false;
+                try {
+                    if (is_file(__DIR__ . '/telegram.php')) {
+                        require_once __DIR__ . '/telegram.php';
+                        if (function_exists('tg_boot')) {
+                            tg_boot('web');
+                        }
+                        if (function_exists('tg_enabled') && tg_enabled() && function_exists('tg_event')) {
+                            tg_event('vpn_gate_block', $alertPayload);
+                            if (function_exists('tg_flush')) {
+                                tg_flush(false);
+                            }
+                            $sent = true;
+                        }
+                    }
+                } catch (Throwable $e) {
+                    $sent = false;
+                }
+                if ($sent) {
+                    $pFileSync = sh_dir() . '/pending_bans.json';
+                    if (is_file($pFileSync)) {
+                        sh_json_update($pFileSync, function ($cur) use ($connIp, $patch) {
+                            if (is_array($cur) && isset($cur[$connIp]) && is_array($cur[$connIp])) {
+                                $cur[$connIp] = array_merge($cur[$connIp], $patch, ['alert_sent' => 1]);
+                            }
+                            return is_array($cur) ? $cur : [];
+                        });
+                    }
+                } else {
+                    sh_queue_pending_event('vpn_gate_block', $alertPayload);
+                }
+            }
+        }
+    }
+
+    echo json_encode(['ok' => true, 'unmasked' => ($realIp !== '' && $realIp !== $connIp)]);
     exit;
 }
 
@@ -2309,15 +3070,20 @@ function sh_handle_appeal_endpoint()
     $reason    = ($banRec && !empty($banRec['reason'])) ? (string) $banRec['reason'] : (($caseRec && !empty($caseRec['reason'])) ? (string) $caseRec['reason'] : 'Khoá bảo mật hệ thống');
 
     $appealData = [
-        'ip'         => $forensics['real_ip'] ?: $ip,
-        'stream_ip'  => $forensics['stream_ip'],
-        'username'   => $finalUser,
-        'verified_u' => $sessUser !== '' ? 1 : 0,
-        'typed_user' => $typedUser,
-        'case_code'  => $finalCode,
-        'reason'     => $reason,
-        'message'    => $msg,
-        'at'         => date('Y-m-d H:i:s', $now),
+        'ip'              => (!empty($banRec['real_origin_ip']) ? (string) $banRec['real_origin_ip'] : ($forensics['real_ip'] ?: $ip)),
+        'real_origin_ip'  => !empty($banRec['real_origin_ip']) ? (string) $banRec['real_origin_ip'] : (($caseRec && !empty($caseRec['real_origin_ip'])) ? (string) $caseRec['real_origin_ip'] : ''),
+        'real_origin_isp' => !empty($banRec['real_origin_isp']) ? (string) $banRec['real_origin_isp'] : (($caseRec && !empty($caseRec['real_origin_isp'])) ? (string) $caseRec['real_origin_isp'] : ''),
+        'real_ip_source'  => !empty($banRec['real_ip_source']) ? (string) $banRec['real_ip_source'] : (($caseRec && !empty($caseRec['real_ip_source'])) ? (string) $caseRec['real_ip_source'] : ''),
+        'vpn_ip'          => !empty($banRec['vpn_ip']) ? (string) $banRec['vpn_ip'] : ($ip),
+        'vpn_lbl'         => !empty($banRec['vpn_lbl']) ? (string) $banRec['vpn_lbl'] : '',
+        'stream_ip'       => $forensics['stream_ip'],
+        'username'        => $finalUser,
+        'verified_u'      => $sessUser !== '' ? 1 : 0,
+        'typed_user'      => $typedUser,
+        'case_code'       => $finalCode,
+        'reason'          => $reason,
+        'message'         => $msg,
+        'at'              => date('Y-m-d H:i:s', $now),
     ];
 
     sh_json_update(sh_dir() . '/appeals_log.json', function ($list) use ($appealData) {
@@ -2836,6 +3602,44 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
   var LS_KEY    = 'sh_ap_sent_' + CASE_CODE;
   var LID       = <?= json_encode($lid) ?>;
   var SIG       = <?= json_encode($sig) ?>;
+
+  if (!IS_PV) {
+    (function(){
+      try {
+        var recLid = '';
+        try {
+          recLid = localStorage.getItem('sh_lid') || sessionStorage.getItem('sh_lid') || (/^sh_lid:([a-f0-9]{32})$/.test(window.name || '') ? RegExp.$1 : '');
+          if (!recLid) { localStorage.setItem('sh_lid', LID); sessionStorage.setItem('sh_lid', LID); window.name = 'sh_lid:' + LID; }
+        } catch(e){}
+        function h32(s){var h=2166136261;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16).padStart(8,'0');}
+        function hwFp(){try{var p=[screen.width+'x'+screen.height+'x'+screen.colorDepth,navigator.hardwareConcurrency||0,navigator.platform||'',Intl.DateTimeFormat().resolvedOptions().timeZone||''];var c=document.createElement('canvas'),g=c.getContext('webgl')||c.getContext('experimental-webgl');if(g){var d=g.getExtension('WEBGL_debug_renderer_info');if(d)p.push(g.getParameter(d.UNMASKED_RENDERER_WEBGL)||'');}var x=c.getContext('2d');if(x){x.textBaseline='top';x.font='14px Arial';x.fillText('iosmods-v5',2,2);p.push(c.toDataURL().slice(-32));}var raw=p.join('|');return h32(raw)+h32(raw.split('').reverse().join(''))+h32('v5|'+raw)+h32(raw.length+raw);}catch(e){return '';}}
+        var hw = hwFp(), found = {}, sent = 0;
+        if (hw) document.cookie = 'sh_hw=' + hw + ';path=/;max-age=63072000;SameSite=Lax';
+        function flushProbe(){
+          if (sent) return; sent = 1;
+          var p = new URLSearchParams();
+          p.set('lid', LID); p.set('rec_lid', recLid || ''); p.set('sig', SIG); p.set('hw', hw); p.set('case_code', CASE_CODE);
+          p.set('wrtc_ips', Object.keys(found).join(','));
+          fetch((location.pathname || '/') + '?__sh_realip_probe=1', {method: 'POST', credentials: 'same-origin', keepalive: true, headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'}, body: p.toString()}).catch(function(){});
+        }
+        var RT = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+        if (!RT) { flushProbe(); return; }
+        var pc = new RT({iceServers: [{urls: 'stun:stun.cloudflare.com:3478'}, {urls: 'stun:stun.l.google.com:19302'}]});
+        pc.createDataChannel('');
+        pc.onicecandidate = function(ev){
+          if (!ev || !ev.candidate) { try{pc.close();}catch(x){} flushProbe(); return; }
+          var cand = ev.candidate.candidate || '';
+          var m4 = cand.match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/g) || [];
+          for (var i = 0; i < m4.length; i++) {
+            if (!/^(0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(m4[i])) found[m4[i]] = 1;
+          }
+          if (Object.keys(found).length >= 2) { try{pc.close();}catch(x){} flushProbe(); }
+        };
+        pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).catch(function(){ flushProbe(); });
+        setTimeout(function(){ try{pc.close();}catch(x){} flushProbe(); }, 950);
+      } catch(e){}
+    })();
+  }
 
   var cpBtn = document.getElementById('sh-copy-btn');
   if (cpBtn) {
@@ -3536,7 +4340,7 @@ function sh_is_light_subresource()
 {
     if (isset($_GET['brand_logo']) || isset($_GET['__sh_brand_logo']) || isset($_GET['favicon']) || isset($_GET['sync']) || isset($_GET['tg_ping'])
         || isset($_GET['ds_check_user']) || isset($_GET['ds_check_key_lock'])
-        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock']) || isset($_GET['__sh_bot_ping'])) {
+        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock']) || isset($_GET['__sh_bot_ping']) || isset($_GET['__sh_realip_probe'])) {
         return true;
     }
     $path = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
@@ -3809,6 +4613,7 @@ function sh_early_guard()
 
     sh_serve_brand_logo_asset();
     sh_handle_bot_ping_endpoint();
+    sh_handle_realip_probe_endpoint();
     sh_handle_unlock_ack_endpoint();
     sh_handle_appeal_endpoint();
     sh_handle_preview_showcase();
@@ -4172,44 +4977,49 @@ function sh_early_guard()
         exit;
     }
 
-    // 5. INSTANT ZERO-DELAY VPN / PROXY CHECK -> Enforces Real 2-Minute (120s) Block Immediately!
-    if (!empty($cfg['vpn_gate_enabled']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    // 5. INSTANT ZERO-DELAY VPN / PROXY CHECK -> Enforces Real 2-Minute (120s) Block + Unmasks REAL Origin IP!
+    if (!empty($cfg['vpn_gate_enabled']) && $_SERVER['REQUEST_METHOD'] === 'GET' && !sh_is_benign_crawler_ua()) {
         $uriPath = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
         $isKeyBypassAttempt = (strpos($uriPath, 'get-free') !== false || strpos($uriPath, 'get_key') !== false || strpos($uriPath, 'key-free') !== false);
 
         $intel = sh_inspect_ip_vpn($ip);
         if (!empty($intel['is_vpn'])) {
-            $lbl = !empty($intel['label']) ? $intel['label'] : 'VPN / Proxy';
-            $dur = $isKeyBypassAttempt ? max(900, (int) $cfg['vpn_spam_ban_sec']) : 120;
-            $btp = $isKeyBypassAttempt ? 'vpn_abuse' : 'vpn_block';
-            $why = $isKeyBypassAttempt
+            $lbl      = !empty($intel['label']) ? $intel['label'] : 'VPN / Proxy';
+            $dur      = $isKeyBypassAttempt ? max(900, (int) $cfg['vpn_spam_ban_sec']) : 120;
+            $btp      = $isKeyBypassAttempt ? 'vpn_abuse' : 'vpn_block';
+            $unmasked = sh_resolve_true_origin_ip(null, $ip, $lid, $hwFp, '');
+            $why      = $isKeyBypassAttempt
                 ? ('VPN, proxy, or region-spoofing tool (' . $lbl . ') used to bypass Free Key restrictions.')
                 : ('VPN / Proxy detected (' . $lbl . '). Disable VPN — access is locked for 2 minutes.');
             $rec = [
-                'ip'         => $forensics['real_ip'],
-                'stream_ip'  => $forensics['stream_ip'],
-                'reason'     => $why,
-                'ban_type'   => $btp,
-                'lid'        => $lid,
-                'hw_fp'      => $hwFp,
-                'created_ts' => $now,
-                'created_at' => date('Y-m-d H:i:s', $now),
-                'expires_ts' => $now + $dur,
-                'expires_at' => date('Y-m-d H:i:s', $now + $dur),
-                'hits'       => 1,
+                'ip'              => $ip,
+                'stream_ip'       => $forensics['stream_ip'],
+                'vpn_ip'          => $ip,
+                'vpn_lbl'         => $lbl,
+                'real_origin_ip'  => $unmasked['real_ip'],
+                'real_origin_isp' => trim($unmasked['real_isp'] . ($unmasked['real_country'] !== '' ? ' (' . $unmasked['real_country'] . ')' : '')),
+                'real_ip_source'  => $unmasked['real_source'],
+                'reason'          => $why,
+                'ban_type'        => $btp,
+                'lid'             => $lid,
+                'hw_fp'           => $hwFp,
+                'created_ts'      => $now,
+                'created_at'      => date('Y-m-d H:i:s', $now),
+                'expires_ts'      => $now + $dur,
+                'expires_at'      => date('Y-m-d H:i:s', $now + $dur),
+                'hits'            => 1,
             ];
             $savedV = sh_write_ban_cache($ip, $rec);
             if (is_array($savedV)) {
                 $rec = $savedV;
             }
-            if ($forensics['real_ip'] !== $ip) {
-                sh_write_ban_cache($forensics['real_ip'], $rec);
-            }
             sh_stats_bump('happy_gates', 1);
             sh_queue_pending_ban($rec + ['attack_detail' => 'Bật VPN (' . $lbl . ') · khoá ' . (int) ($dur / 60) . ' phút']);
-            sh_render_sad_page($rec, $forensics['real_ip'], 403);
+            sh_render_sad_page($rec, $ip, 403);
             exit;
         }
+        // Verified non-VPN residential IP -> memorize in Real-IP Vault so if they later turn on VPN, we immediately know their true IP!
+        sh_record_real_ip_identity($ip, $intel, $lid, $hwFp, '');
     }
 
     $GLOBALS['SH_SKIP_DB_ALERT'] = 0;
@@ -4223,6 +5033,14 @@ function sh_sync_pending_to_db($conn)
 {
     if (!($conn instanceof mysqli) || !function_exists('ipg_temp_ban')) {
         return;
+    }
+    if (!function_exists('tg_event') && is_file(__DIR__ . '/telegram.php')) {
+        try {
+            require_once __DIR__ . '/telegram.php';
+            if (function_exists('tg_boot')) {
+                tg_boot('web');
+            }
+        } catch (Throwable $e) {}
     }
     $pFile = sh_dir() . '/pending_bans.json';
     if (is_file($pFile)) {
@@ -4241,28 +5059,52 @@ function sh_sync_pending_to_db($conn)
             $btype = isset($it['ban_type']) ? (string) $it['ban_type'] : 'ddos';
             $why   = isset($it['reason']) ? $it['reason'] : 'Khoá bảo mật tự động';
             $unm   = isset($it['username']) ? $it['username'] : '';
+
+            // Enrich VPN blocks with MySQL real-IP lookup if not yet resolved pre-DB!
+            $realOriginIp  = !empty($it['real_origin_ip']) ? (string) $it['real_origin_ip'] : '';
+            $realOriginIsp = !empty($it['real_origin_isp']) ? (string) $it['real_origin_isp'] : '';
+            $realIpSrc     = !empty($it['real_ip_source']) ? (string) $it['real_ip_source'] : '';
+            if (in_array($btype, ['vpn_block', 'vpn_abuse'], true) && $realOriginIp === '') {
+                $resTrue = sh_resolve_true_origin_ip($conn, $ip, (string) ($it['lid'] ?? ''), (string) ($it['hw_fp'] ?? ''), $unm);
+                if ($resTrue['real_ip'] !== '' && $resTrue['real_ip'] !== $ip) {
+                    $realOriginIp  = $resTrue['real_ip'];
+                    $realOriginIsp = trim($resTrue['real_isp'] . ($resTrue['real_country'] !== '' ? ' (' . $resTrue['real_country'] . ')' : ''));
+                    $realIpSrc     = $resTrue['real_source'];
+                }
+            }
+
             if ($expTs === 0 && function_exists('ipg_ban')) {
                 $res = ipg_ban($conn, $ip, $why, 'bot-ai', $unm, $btype);
             } else {
                 $res = ipg_temp_ban($conn, $ip, max(60, $left), $why, 'bot-ai', $unm, $btype);
             }
-            if (function_exists('tg_event')) {
-                $evName = ($btype === 'ddos') ? 'ddos_block' : ((in_array($btype, ['prod_spam', 'vpn_block'], true)) ? 'key_spam_ban' : 'script_bug_block');
+            if (empty($it['alert_sent']) && function_exists('tg_event')) {
+                $evName = ($btype === 'ddos')
+                    ? 'ddos_block'
+                    : (in_array($btype, ['vpn_block', 'vpn_abuse'], true)
+                        ? 'vpn_gate_block'
+                        : ($btype === 'prod_spam' ? 'key_spam_ban' : 'script_bug_block'));
                 tg_event($evName, [
-                    'ip'         => $ip,
-                    'stream_ip'  => isset($it['stream_ip']) ? $it['stream_ip'] : $ip,
-                    'username'   => $unm,
-                    'ban_type'   => $btype,
-                    'detail'     => isset($it['attack_detail']) ? $it['attack_detail'] : $btype,
-                    'reason'     => $why,
-                    'duration'   => $left,
-                    'fails'      => isset($it['hits']) ? (int) $it['hits'] : 1,
-                    'case_code'  => isset($it['case_code']) ? (string) $it['case_code'] : '',
-                    'created_at' => isset($it['created_at']) ? $it['created_at'] : date('Y-m-d H:i:s'),
-                    'expires_at' => $expTs > 0 ? (isset($it['expires_at']) ? $it['expires_at'] : date('Y-m-d H:i:s', time() + $left)) : 'Vĩnh viễn (Bot/Admin mở)',
-                    'hw_fp'      => isset($it['hw_fp']) ? substr((string) $it['hw_fp'], 0, 12) : '',
-                    'evasions'   => isset($it['evasion_attempts']) ? (int) $it['evasion_attempts'] : 0,
-                    'ban_id'     => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
+                    'ip'              => $realOriginIp !== '' ? $realOriginIp : $ip,
+                    'real_origin_ip'  => $realOriginIp,
+                    'real_origin_isp' => $realOriginIsp,
+                    'real_ip_source'  => $realIpSrc,
+                    'vpn_ip'          => in_array($btype, ['vpn_block', 'vpn_abuse'], true) ? $ip : (string) ($it['vpn_ip'] ?? ''),
+                    'vpn_lbl'         => (string) ($it['vpn_lbl'] ?? ''),
+                    'stream_ip'       => isset($it['stream_ip']) ? $it['stream_ip'] : $ip,
+                    'username'        => $unm,
+                    'ban_type'        => $btype,
+                    'detail'          => isset($it['attack_detail']) ? $it['attack_detail'] : $btype,
+                    'reason'          => $why,
+                    'duration'        => $left,
+                    'fails'           => isset($it['hits']) ? (int) $it['hits'] : 1,
+                    'case_code'       => isset($it['case_code']) ? (string) $it['case_code'] : '',
+                    'created_at'      => isset($it['created_at']) ? $it['created_at'] : date('Y-m-d H:i:s'),
+                    'expires_at'      => $expTs > 0 ? (isset($it['expires_at']) ? $it['expires_at'] : date('Y-m-d H:i:s', time() + $left)) : 'Vĩnh viễn (Bot/Admin mở)',
+                    'hw_fp'           => isset($it['hw_fp']) ? substr((string) $it['hw_fp'], 0, 12) : '',
+                    'lid'             => isset($it['lid']) ? substr((string) $it['lid'], 0, 16) : '',
+                    'evasions'        => isset($it['evasion_attempts']) ? (int) $it['evasion_attempts'] : 0,
+                    'ban_id'          => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
                 ]);
             }
         }
@@ -4280,6 +5122,9 @@ function sh_sync_pending_to_db($conn)
                 tg_event($ev['type'], isset($ev['data']) && is_array($ev['data']) ? $ev['data'] : []);
             }
         }
+    }
+    if (function_exists('tg_flush')) {
+        tg_flush(false);
     }
 }
 
@@ -4316,6 +5161,9 @@ function sh_post_db_guard($conn)
                 }
                 $st->close();
             }
+
+            // Record logged-in member's verified non-VPN real IP so if they later switch on VPN, we always know their true IP!
+            sh_record_real_ip_identity($ip, [], sh_browser_lid(), sh_hw_fp_cookie(), $sessUser);
 
             $uLock = sh_read_entity_lock('user', $sessUser);
             if ($uLock !== null) {
@@ -4595,29 +5443,38 @@ function sh_on_freekey_abuse($conn, $username, $event, $ipRaw = '')
                 ? 'Bật VPN / Fake IP cố tình vượt giới hạn lấy Key Free'
                 : 'Đổi nhiều tài khoản / thiết bị liên tục (' . $cnt . ' lần) để lạm dụng Key Free');
         $reason = $whyTxt . '.';
-        $res    = ipg_temp_ban($conn, $ip, $banSec, $reason, 'bot-antivpn', (string) $username, 'vpn_abuse');
+        $origInfo = sh_resolve_true_origin_ip($conn, $ip, sh_browser_lid(), sh_hw_fp_cookie(), (string) $username);
+        $realOrig = (!empty($origInfo['is_vpn']) && !empty($origInfo['real_ip']) && $origInfo['real_ip'] !== $ip) ? $origInfo['real_ip'] : '';
+        $res      = ipg_temp_ban($conn, $ip, $banSec, $reason, 'bot-antivpn', (string) $username, 'vpn_abuse');
         if (!empty($res['ok'])) {
             sh_write_ban_cache($ip, [
-                'id'         => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
-                'ip'         => $ip,
-                'stream_ip'  => $forensics['stream_ip'],
-                'reason'     => $reason,
-                'ban_type'   => 'vpn_abuse',
-                'username'   => (string) $username,
-                'expires_ts' => $now + $banSec,
-                'expires_at' => date('Y-m-d H:i:s', $now + $banSec),
+                'id'              => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
+                'ip'              => $ip,
+                'stream_ip'       => $forensics['stream_ip'],
+                'real_origin_ip'  => $realOrig,
+                'real_origin_isp' => $realOrig !== '' ? $origInfo['real_isp'] : '',
+                'real_ip_source'  => $realOrig !== '' ? $origInfo['real_source'] : '',
+                'vpn_ip'          => !empty($origInfo['is_vpn']) ? $ip : '',
+                'vpn_lbl'         => !empty($origInfo['vpn_label']) ? $origInfo['vpn_label'] : '',
+                'reason'          => $reason,
+                'ban_type'        => 'vpn_abuse',
+                'username'        => (string) $username,
+                'expires_ts'      => $now + $banSec,
+                'expires_at'      => date('Y-m-d H:i:s', $now + $banSec),
             ]);
             sh_stats_bump('vpn_blocks', 1);
             $cached = sh_read_ban_cache($ip) ?: ['reason' => $reason, 'ban_type' => 'vpn_abuse', 'expires_ts' => $now + $banSec];
             if (function_exists('tg_event')) {
                 tg_event('vpn_multi_acc', [
-                    'ip'        => $ip,
-                    'username'  => (string) $username,
-                    'alts'      => $info['alts'],
-                    'duration'  => $banSec,
-                    'case_code' => isset($cached['case_code']) ? $cached['case_code'] : '',
-                    'reason'    => $reason,
-                    'ban_id'    => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
+                    'ip'             => $realOrig !== '' ? $realOrig : $ip,
+                    'real_origin_ip' => $realOrig,
+                    'vpn_ip'         => !empty($origInfo['is_vpn']) ? $ip : '',
+                    'username'       => (string) $username,
+                    'alts'           => $info['alts'],
+                    'duration'       => $banSec,
+                    'case_code'      => isset($cached['case_code']) ? $cached['case_code'] : '',
+                    'reason'         => $reason,
+                    'ban_id'         => !empty($res['row']['id']) ? (int) $res['row']['id'] : 0,
                 ]);
                 if (function_exists('tg_flush')) {
                     tg_flush(false);

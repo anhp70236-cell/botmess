@@ -2738,6 +2738,11 @@ function screen_ip($ip, $note = '')
         $t .= '📡 Nhà mạng: <b>' . tg_e(trim($intel['isp'] . ($intel['country'] !== '' ? ' · ' . $intel['country'] : ''))) . '</b>'
             . (!empty($intel['is_vpn']) ? ' · ⚠️ <b>' . tg_e($intel['label'] ?: 'VPN/Proxy') . '</b>' : '') . "\n";
     }
+    if (!empty($intel['is_vpn']) && $fastCache && !empty($fastCache['real_origin_ip']) && $fastCache['real_origin_ip'] !== $ip) {
+        $t .= '🎯 <b>IP Thật (Mạng gốc đứng sau VPN):</b> <code>' . tg_e($fastCache['real_origin_ip']) . '</code>'
+            . (!empty($fastCache['real_origin_isp']) ? ' (' . tg_e($fastCache['real_origin_isp']) . ')' : '')
+            . (!empty($fastCache['real_ip_source']) ? ' · <i>' . tg_e($fastCache['real_ip_source']) . '</i>' : '') . "\n";
+    }
     if ($fastCache && !empty($fastCache['reason'])) {
         $t .= '🔎 Nguyên nhân khoá: ' . tg_e($fastCache['reason']) . "\n";
         if (!empty($fastCache['case_code'])) {
@@ -3784,10 +3789,13 @@ function screen_case_lookup($rawCode, $note = '')
         . (!empty($info['attack_detail']) && $info['attack_detail'] !== $info['reason']
             ? '⚡ Chi tiết kỹ thuật: <code>' . tg_e(tg_clip($info['attack_detail'], 110)) . "</code>\n"
             : '')
-        . '🌐 IP thật: <code>' . tg_e($ip) . '</code>'
-        . ($streamIp !== '' ? ' · 🖥 Luồng: <code>' . tg_e($streamIp) . '</code>' : '') . "\n"
-        . '📡 Mạng / ISP: <b>' . tg_e($info['isp']) . ($info['country'] !== '' ? ' (' . tg_e($info['country']) . ')' : '') . '</b>'
-        . (!empty($info['is_vpn']) ? ' · ⚠️ <b>' . tg_e($info['vpn_lbl'] ?: 'VPN/Proxy') . '</b>' : '') . "\n"
+        . (!empty($info['is_vpn'])
+            ? ('🎯 <b>IP Thật (Mạng gốc):</b> ' . (!empty($info['real_origin_ip']) && $info['real_origin_ip'] !== $ip
+                ? ('<code>' . tg_e($info['real_origin_ip']) . '</code>' . (!empty($info['real_origin_isp']) ? ' (' . tg_e($info['real_origin_isp']) . ')' : '') . (!empty($info['real_ip_source']) ? ' · <i>' . tg_e($info['real_ip_source']) . '</i>' : ''))
+                : '<i>Chưa từng truy cập bằng mạng gốc trước khi bật VPN</i>') . "\n"
+              . '🎭 <b>IP Ảo (VPN đang bật):</b> <code>' . tg_e($ip) . '</code> · ⚠️ <b>' . tg_e($info['vpn_lbl'] ?: 'VPN/Proxy') . "</b>\n")
+            : ('🎯 <b>IP Thật (Mạng gốc):</b> <code>' . tg_e($ip) . '</code>' . ($streamIp !== '' ? ' · 🖥 Luồng: <code>' . tg_e($streamIp) . '</code>' : '') . "\n"
+              . '📡 Nhà mạng / ISP: <b>' . tg_e($info['isp']) . ($info['country'] !== '' ? ' (' . tg_e($info['country']) . ')' : '') . "</b>\n"))
         . '📱 Thiết bị: <b>' . tg_e($info['device']) . '</b>'
         . (!empty($info['hw_fp']) ? ' · HW: <code>' . tg_e(substr((string) $info['hw_fp'], 0, 10)) . '</code>' : '') . "\n"
         . '👥 Tài khoản: ' . ($linkedU ? '<code>' . tg_e(implode(', ', $linkedU)) . '</code>' : '<i>Khách chưa đăng nhập</i>')
@@ -4023,35 +4031,106 @@ function pub_rate_allow($tgUid)
 function pub_conv_get($tgUid)
 {
     $s = tg_store_read('pub_conv');
-    if (isset($s[$tgUid]) && is_array($s[$tgUid]) && (int) (isset($s[$tgUid]['at']) ? $s[$tgUid]['at'] : 0) > time() - 1800) {
+    if (isset($s[$tgUid]) && is_array($s[$tgUid]) && (int) (isset($s[$tgUid]['at']) ? $s[$tgUid]['at'] : 0) > time() - 43200) {
         return $s[$tgUid];
     }
-    return null;
+    return [];
 }
 
-function pub_conv_set($tgUid, array $state)
+function pub_conv_set($tgUid, array $patch)
 {
-    $state['at'] = time();
-    tg_store_update('pub_conv', function ($s) use ($tgUid, $state) {
+    tg_store_update('pub_conv', function ($s) use ($tgUid, $patch) {
         if (!is_array($s)) {
             $s = [];
         }
-        if (count($s) > 300) {
-            $s = array_slice($s, -200, null, true);
+        if (count($s) > 400) {
+            $s = array_slice($s, -250, null, true);
         }
-        $s[$tgUid] = $state;
+        $cur = isset($s[$tgUid]) && is_array($s[$tgUid]) ? $s[$tgUid] : [];
+        $s[$tgUid] = array_merge($cur, $patch, ['at' => time()]);
         return $s;
     });
 }
 
 function pub_conv_clear($tgUid)
 {
-    tg_store_update('pub_conv', function ($s) use ($tgUid) {
-        if (is_array($s)) {
-            unset($s[$tgUid]);
+    // Preserve conversation memory (last_code, username, seen_hashes) while only clearing pending step!
+    pub_conv_set($tgUid, ['step' => '']);
+}
+
+/** Picks a natural response variant that has NOT been sent in recent turns for this user (0% robotic repetition!). */
+function pub_pick_fresh($tgUid, array $variants, array &$mem)
+{
+    if (!$variants) {
+        return '';
+    }
+    $seen = isset($mem['seen']) && is_array($mem['seen']) ? $mem['seen'] : [];
+    $chosen = null;
+    foreach ($variants as $v) {
+        $sig = substr(md5($v), 0, 10);
+        if (!in_array($sig, $seen, true)) {
+            $chosen = $v;
+            $seen[] = $sig;
+            break;
         }
-        return is_array($s) ? $s : [];
-    });
+    }
+    if ($chosen === null) {
+        $idx    = ((int) ($mem['turns'] ?? 0)) % count($variants);
+        $chosen = $variants[$idx];
+        $seen   = [substr(md5($chosen), 0, 10)];
+    }
+    $mem['seen']  = array_slice($seen, -10);
+    $mem['turns'] = (int) ($mem['turns'] ?? 0) + 1;
+    pub_conv_set($tgUid, ['seen' => $mem['seen'], 'turns' => $mem['turns']]);
+    return $chosen;
+}
+
+/** Classifies customer message intent naturally across Vietnamese (with/without diacritics) & English. */
+function pub_detect_intent($text)
+{
+    $low = function_exists('mb_strtolower') ? mb_strtolower(trim($text), 'UTF-8') : strtolower(trim($text));
+    $ascii = strtr($low, [
+        'à'=>'a','á'=>'a','ả'=>'a','ã'=>'a','ạ'=>'a','ă'=>'a','ắ'=>'a','ằ'=>'a','ẳ'=>'a','ẵ'=>'a','ặ'=>'a','â'=>'a','ấ'=>'a','ầ'=>'a','ẩ'=>'a','ẫ'=>'a','ậ'=>'a',
+        'è'=>'e','é'=>'e','ẻ'=>'e','ẽ'=>'e','ẹ'=>'e','ê'=>'e','ế'=>'e','ề'=>'e','ể'=>'e','ễ'=>'e','ệ'=>'e',
+        'ì'=>'i','í'=>'i','ỉ'=>'i','ĩ'=>'i','ị'=>'i',
+        'ò'=>'o','ó'=>'o','ỏ'=>'o','õ'=>'o','ọ'=>'o','ô'=>'o','ố'=>'o','ồ'=>'o','ổ'=>'o','ỗ'=>'o','ộ'=>'o','ơ'=>'o','ớ'=>'o','ờ'=>'o','ở'=>'o','ỡ'=>'o','ợ'=>'o',
+        'ù'=>'u','ú'=>'u','ủ'=>'u','ũ'=>'u','ụ'=>'u','ư'=>'u','ứ'=>'u','ừ'=>'u','ử'=>'u','ữ'=>'u','ự'=>'u',
+        'ỳ'=>'y','ý'=>'y','ỷ'=>'y','ỹ'=>'y','ỵ'=>'y','đ'=>'d',
+    ]);
+
+    if (preg_match('/^(cảm ơn|cam on|tks|thanks|thank you|oke|ok|oki|okie|uk|uhm|dạ|da vâng|vâng ạ|hay quá|tốt quá|được rồi|dc roi|vao dc roi|vào được rồi)\b/u', $low) && strlen($ascii) <= 32) {
+        return 'thanks_ok';
+    }
+    if (preg_match('/^(hi|hello|chào|xin chào|alo|ơi|có ai|ad ơi|bot ơi|shop ơi|anh ơi|bạn ơi|help|cứu)\b/u', $low) && strlen($ascii) <= 28) {
+        return 'greeting';
+    }
+    if (preg_match('/\b(tat vpn|tat 1\.1|tat warp|da tat|tắt vpn|tắt 1\.1|tắt warp|tắt proxy|disabled vpn|turned off vpn)\b/u', $low) || preg_match('/\b(tat vpn|tat 1\.1|tat warp)\b/', $ascii)) {
+        return 'vpn_off';
+    }
+    if (preg_match('/\b(van bi|van khoa|chua vao duoc|khong vao duoc|load lai van|got it o dau|bam vao dau|sao van|van hien)\b/', $ascii)) {
+        return 'still_locked';
+    }
+    if (preg_match('/\b(sao bi|tai sao|vi sao|nguyen nhan|lam gi dau|loi gi|why|reason)\b/', $ascii)) {
+        return 'ask_why';
+    }
+    if (preg_match('/\b(mua key|key vip|gia vip|nap|get key|key free|quen mat khau|doi mat khau)\b/', $ascii)) {
+        return 'key_help';
+    }
+    if (preg_match('/\b(mo giup|go giup|mo khoa|go ban|unban|xin loi|lo tay|nham|giam them|mo luon|cuu em|giup minh|giup em|unlock)\b/', $ascii)) {
+        return 'plea_unlock';
+    }
+    return 'general';
+}
+
+function pub_extract_mentioned_username($text)
+{
+    if (preg_match('/(?:tài khoản|tai khoan|nick|acc|user|username)\s*(?:là|la|:|=)?\s*([A-Za-z0-9_.-]{3,32})/iu', $text, $m)) {
+        $cand = $m[1];
+        if (!in_array(strtolower($cand), ['của', 'cua', 'em', 'mình', 'minh', 'tôi', 'toi', 'web', 'website'], true)) {
+            return $cand;
+        }
+    }
+    return '';
 }
 
 function pub_was_recently_forgiven($ip, $tgUid)
@@ -4098,6 +4177,7 @@ function bot_public_appeal_handler(array $m)
     $chatId    = (string) (isset($m['chat']['id']) ? $m['chat']['id'] : '');
     $msgId     = isset($m['message_id']) ? (int) $m['message_id'] : 0;
     $firstName = trim((string) (isset($m['from']['first_name']) ? $m['from']['first_name'] : 'bạn'));
+    $nameSafe  = tg_e($firstName !== '' ? $firstName : 'bạn');
     $text      = isset($m['text']) ? trim((string) $m['text']) : '';
 
     if ($from === '' || $chatId === '' || !pub_rate_allow($from)) {
@@ -4107,17 +4187,16 @@ function bot_public_appeal_handler(array $m)
         return;
     }
 
-    // Handle /start (when user taps Unlock Assistant @devios_bot from the Block screen):
-    // 1) IMMEDIATELY delete the user's /start message so "/start" NEVER shows in chat!
-    // 2) Link their Telegram chat_id <-> IP/LID so future clicks push proactive greetings with ZERO /start!
-    // 3) Send an instant natural greeting right away!
+    $mem = pub_conv_get($from);
+
+    // 1. Handle /start (deletes /start immediately + links Telegram chat <-> IP/LID + immediately inspects live lock!)
     if ($text !== '' && strpos($text, '/start') === 0) {
         if ($msgId > 0) {
             @tg_api_raw('deleteMessage', ['chat_id' => $chatId, 'message_id' => $msgId], 2);
         }
-        $parts   = preg_split('/\s+/', $text, 2);
-        $payload = isset($parts[1]) ? trim((string) $parts[1]) : '';
-        $argCode = sh_extract_case_code($payload);
+        $parts      = preg_split('/\s+/', $text, 2);
+        $payload    = isset($parts[1]) ? trim((string) $parts[1]) : '';
+        $argCode    = sh_extract_case_code($payload);
         $linkedCase = '';
 
         if ($payload !== '' && strpos($payload, 'u_') === 0 && function_exists('sh_resolve_bot_click_token')) {
@@ -4133,15 +4212,40 @@ function bot_public_appeal_handler(array $m)
         }
 
         if ($argCode === '') {
-            pub_conv_set($from, ['step' => 'await_code', 'hint_code' => $linkedCase]);
-            $hintLine = $linkedCase !== ''
-                ? ("\n\n💡 Hệ thống nhận thấy phiên của bạn đang có <b>Mã xác minh</b> <code>" . tg_e($linkedCase) . "</code> — bạn chỉ cần <b>chạm sao chép và gửi mã đó</b> (kèm lý do nếu có) vào đây để mình xử lý ngay nhé!")
-                : '';
+            // Check live ban right now so greeting is already smart and aware of their exact status!
+            $liveNow = function_exists('sh_find_active_ban_for_public_user')
+                ? sh_find_active_ban_for_public_user(bdb(), $chatId, $linkedCase, (string) ($mem['username'] ?? ''))
+                : null;
+            if (is_array($liveNow) && !empty($liveNow['active'])) {
+                $cNow = (string) ($liveNow['code'] ?? $linkedCase);
+                pub_conv_set($from, ['last_code' => $cNow, 'step' => '']);
+                if (!empty($liveNow['is_admin_perm'])) {
+                    pub_send_reply(
+                        $chatId,
+                        'Chào <b>' . $nameSafe . '</b>! Mình vừa nhận diện kết nối của bạn từ <b>iosmods.xyz</b>.' . "\n\n"
+                        . '⛔ Hệ thống ghi nhận địa chỉ truy cập / tài khoản của bạn hiện đang nằm trong danh sách <b>CẤM VĨNH VIỄN trực tiếp bởi Quản trị viên (Admin)</b>'
+                        . (!empty($liveNow['reason']) ? ' với lý do: <i>' . tg_e($liveNow['reason']) . '</i>.' : '.') . "\n\n"
+                        . 'Vì đây là lệnh khoá thủ công của Admin nên mình (trợ lý tự động) không có quyền tự mở. Nếu bạn cho rằng có sự nhầm lẫn, bạn nhắn rõ tên tài khoản hoặc lý do tại đây để mình đính kèm vào hồ sơ trình Admin xem xét nhé.'
+                    );
+                    return;
+                }
+                pub_send_reply(
+                    $chatId,
+                    'Chào <b>' . $nameSafe . '</b>! 👋 Mình vừa nhận được tín hiệu bạn chuyển sang từ màn hình khoá của <b>iosmods.xyz</b>.' . "\n\n"
+                    . ($cNow !== ''
+                        ? ('Mình thấy phiên hiện tại của bạn có mã xác minh <code>' . tg_e($cNow) . '</code> — bạn <b>dán mã đó gửi vào đây</b> (hoặc kể ngắn gọn lúc nãy bạn đang thao tác gì) để mình kiểm tra và xử lý mở khoá ngay cho bạn nhé!')
+                        : 'Bạn hãy sao chép <b>Mã xác minh (IMX-...)</b> đang hiển thị trên màn hình khoá gửi vào đây để mình kiểm tra ngay cho bạn nhé!')
+                );
+                return;
+            }
             pub_send_reply(
                 $chatId,
-                'Chào <b>' . tg_e($firstName !== '' ? $firstName : 'bạn') . '</b>! 👋 Mình là trợ lý hỗ trợ mở khoá tự động 24/7 của <b>iosmods.xyz</b>.' . "\n\n"
-                . 'Bạn hãy gửi <b>Mã xác minh</b> (dạng <code>IMX-XXXXXX-...</code> trên màn hình khoá của web) vào đây để mình kiểm tra nguyên nhân và xét mở khoá ngay cho bạn nhé.'
-                . $hintLine
+                pub_pick_fresh($from, [
+                    'Chào <b>' . $nameSafe . '</b>! 👋 Mình là trợ lý bảo mật thông minh 24/7 của <b>iosmods.xyz</b>.' . "\n\n"
+                    . 'Nếu bạn đang gặp màn hình hạn chế truy cập, hãy sao chép <b>Mã xác minh (IMX-...)</b> trên web gửi vào đây (hoặc nhắn tên tài khoản / vấn đề bạn gặp phải) để mình kiểm tra trực tiếp cho bạn nhé!',
+                    'Xin chào <b>' . $nameSafe . '</b>! Mình trực hỗ trợ mở khoá &amp; kiểm tra kết nối cho <b>iosmods.xyz</b> đây.' . "\n\n"
+                    . 'Bạn đang bị khoá hay cần kiểm tra tài khoản? Gửi cho mình <b>Mã xác minh (IMX-...)</b> trên màn hình chặn hoặc nói rõ tình trạng bạn đang gặp nhé!',
+                ], $mem)
             );
             return;
         }
@@ -4152,96 +4256,204 @@ function bot_public_appeal_handler(array $m)
         return;
     }
 
-    $conv    = pub_conv_get($from);
-    $imxCode = sh_extract_case_code($text);
+    $intent       = pub_detect_intent($text);
+    $mentionedUsr = pub_extract_mentioned_username($text);
+    if ($mentionedUsr !== '') {
+        $mem['username'] = $mentionedUsr;
+        pub_conv_set($from, ['username' => $mentionedUsr]);
+    }
 
-    // If user is currently in 'await_reason' step and sent their explanation without repeating IMX-...
+    $typedImx   = sh_extract_case_code($text);
+    $activeCode = $typedImx !== '' ? $typedImx : (string) ($mem['last_code'] ?? '');
+    if ($typedImx !== '') {
+        $mem['last_code'] = $typedImx;
+        pub_conv_set($from, ['last_code' => $typedImx]);
+    }
+
+    // Extract natural explanation text (if user sent IMX-... + reason in same message, or sent a follow-up message!)
     $reasonInput = '';
-    if ($imxCode === '' && is_array($conv) && ($conv['step'] ?? '') === 'await_reason' && !empty($conv['code'])) {
-        $imxCode     = (string) $conv['code'];
-        $reasonInput = $text;
-    } elseif ($imxCode !== '') {
-        // Extract any extra explanation written alongside the IMX-... code
-        $stripped = trim(preg_replace('/[\s,.;:-]+/', ' ', str_ireplace($imxCode, ' ', $text)));
-        if (strlen($stripped) >= 6) {
+    if ($typedImx !== '') {
+        $stripped = trim(preg_replace('/[\s,.;:-]+/', ' ', str_ireplace($typedImx, ' ', $text)));
+        if (strlen($stripped) >= 5) {
             $reasonInput = $stripped;
         }
-    } else {
-        pub_conv_set($from, ['step' => 'await_code']);
-        pub_send_reply(
-            $chatId,
-            'Mình chưa nhận diện được <b>Mã xác minh</b> trong tin nhắn của bạn.' . "\n"
-            . 'Bạn vui lòng quay lại màn hình khoá trên <b>iosmods.xyz</b>, bấm nút <b>Sao chép</b> ở mục <b>Mã xác minh</b> (bắt đầu bằng <code>IMX-...</code>) rồi dán nguyên mã đó gửi vào đây giúp mình nhé.'
-        );
+    } elseif (!in_array($intent, ['greeting', 'thanks_ok'], true)) {
+        $reasonInput = $text;
+    }
+
+    // 2. ALWAYS check LIVE ban state across ALL layers (IMX dossier + tg_pub_links + elocks + MySQL ip_bans + tg_user_blocks)!
+    $info = function_exists('sh_find_active_ban_for_public_user')
+        ? sh_find_active_ban_for_public_user(bdb(), $chatId, $activeCode, (string) ($mem['username'] ?? ''))
+        : ($activeCode !== '' ? sh_enrich_case_dossier(bdb(), $activeCode) : null);
+
+    // Handle polite thanks / acknowledgement naturally when NOT submitting a new IMX code!
+    if ($typedImx === '' && $intent === 'thanks_ok') {
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Không có gì đâu nha <b>' . $nameSafe . '</b>! Chúc bạn trải nghiệm trên <b>iosmods.xyz</b> mượt mà nhé. Cần gì cứ nhắn mình!',
+            'Oke <b>' . $nameSafe . '</b> nè! 😊 Nhớ tắt VPN và thao tác vừa phải để không bị khiên tự động chặn nhầm nhé.',
+            'Rất vui được hỗ trợ bạn! Nếu lúc nào cần kiểm tra lại kết nối hay tài khoản thì cứ nhắn mình nha.',
+        ], $mem));
         return;
     }
 
-    $info = sh_enrich_case_dossier(bdb(), $imxCode);
-    if (!$info || empty($info['active']) || empty($info['ip'])) {
-        pub_conv_clear($from);
-        pub_send_reply(
-            $chatId,
-            'Mình vừa kiểm tra mã <code>' . tg_e($imxCode) . '</code> thì thấy lệnh khoá của mã này <b>đã được gỡ hoặc đã hết thời gian khoá</b> rồi (mã xác minh sau khi mở sẽ tự huỷ bảo mật).' . "\n\n"
-            . 'Bạn hãy quay lại trang <b>iosmods.xyz</b>, tải lại trang và bấm nút <b>Got it</b> trên màn hình là vào lại web bình thường nhé!'
-        );
+    // Handle questions about buying VIP / getting Free Key
+    if ($typedImx === '' && $intent === 'key_help' && (!$info || empty($info['active']))) {
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Về phần <b>Key trên iosmods.xyz</b>: bạn vào mục <b>Keys</b> trên thanh điều hướng để nhận <b>Key Free</b> (mỗi 8 giờ/lần, lưu ý tắt VPN/1.1.1.1 khi vượt link) hoặc vào mục <b>Shop</b> / liên hệ Admin để mua <b>Key VIP</b> nhiều lượt nhé! Hiện kết nối của bạn không bị khoá bảo mật đâu.',
+            'Hiện tại mạng của bạn không bị chặn trên hệ thống. Để lấy <b>Key Free</b> hoặc kích hoạt <b>Key VIP</b>, bạn đăng nhập trên <b>iosmods.xyz</b> rồi mở tab <b>Keys</b> nhé (nếu cần mua gói VIP hoặc đổi mật khẩu thì nhắn trực tiếp cho Admin nha).',
+        ], $mem));
         return;
     }
 
-    $code       = (string) $info['code'];
-    $ip         = (string) $info['ip'];
-    if (function_exists('sh_pub_tg_link_save')) {
+    // =========================================================================
+    // CASE A: NO ACTIVE BAN FOUND ANYWHERE IN CACHE OR MYSQL!
+    // =========================================================================
+    if (!$info || empty($info['active'])) {
+        if ($typedImx !== '') {
+            // User explicitly pasted an IMX-... code, and we verified BOTH cache AND MySQL ip_bans + tg_user_blocks are 100% clean!
+            pub_conv_set($from, ['step' => '', 'last_verdict' => 'clean_unlocked']);
+            pub_send_reply($chatId, pub_pick_fresh($from, [
+                'Mình vừa đối chiếu trực tiếp mã <code>' . tg_e($typedImx) . '</code> trên cả bộ nhớ khiên và cơ sở dữ liệu thì hiện tại <b>không còn lệnh cấm hay tạm khoá nào đang áp dụng</b> cho mã này (hoặc thời gian tạm khoá đã kết thúc).' . "\n\n"
+                . '👉 Bạn mở lại <b>iosmods.xyz</b>, tải lại trang (F5 / kéo xuống làm mới); nếu thấy thông báo <b>Automatically Unlocked</b> thì bấm nút <b>Got it</b> là vào web bình thường. Nếu trên màn hình của bạn đang hiện một <b>mã IMX-... mới khác</b>, hãy sao chép mã mới nhất đó gửi qua đây cho mình nhé!',
+                'Mã <code>' . tg_e($typedImx) . '</code> này hiện đã hết hiệu lực khoá trên hệ thống rồi <b>' . $nameSafe . '</b> ơi.' . "\n\n"
+                . 'Bạn thử tắt hẳn ứng dụng VPN/1.1.1.1 (nếu có), tải lại trang <b>iosmods.xyz</b> rồi bấm <b>Got it</b> nhé. Trường hợp bạn vẫn thấy khung chặn kèm mã <code>IMX-...</code> mới trên màn hình thì dán mã mới đó vào đây mình kiểm tra lại ngay!',
+            ], $mem));
+            return;
+        }
+
+        if ($intent === 'still_locked') {
+            pub_send_reply($chatId, pub_pick_fresh($from, [
+                'Theo dữ liệu mình vừa quét theo phiên gần nhất thì chưa thấy lệnh khoá đang bật — rất có thể bạn đang dùng một địa chỉ IP khác hoặc trình duyệt vừa bật VPN nên sinh ra mã mới.' . "\n\n"
+                . 'Bạn nhìn trên màn hình khoá hiện tại của <b>iosmods.xyz</b>, bấm nút <b>Copy</b> ở dòng <b>Verification Code (IMX-...)</b> rồi dán vào đây để mình tra đúng phiên đang chặn bạn nhé!',
+                'Để mình bắt chính xác địa chỉ mạng đang chặn bạn lúc này, bạn quay sang tab <b>iosmods.xyz</b> đang bị khoá, chép dòng mã <code>IMX-...</code> mới nhất trên màn hình gửi vào đây giúp mình nha (hoặc cho mình biết tên tài khoản web của bạn)!',
+            ], $mem));
+            return;
+        }
+
+        if ($intent === 'greeting') {
+            pub_send_reply($chatId, pub_pick_fresh($from, [
+                'Chào <b>' . $nameSafe . '</b>! 👋 Bạn đang bị chặn truy cập trên <b>iosmods.xyz</b> hay cần kiểm tra gì thế? Bạn gửi <b>Mã xác minh (IMX-...)</b> trên màn hình khoá (hoặc tên tài khoản web) để mình kiểm tra ngay cho nhé!',
+                'Ơi mình nghe đây <b>' . $nameSafe . '</b>! Nếu web đang hiện bảng hạn chế truy cập, bạn bấm <b>Copy</b> mã <code>IMX-...</code> trên màn hình rồi dán qua đây mình xem nguyên nhân và hỗ trợ mở liền nha.',
+                'Xin chào <b>' . $nameSafe . '</b>! Mình trực hỗ trợ 24/7 cho <b>iosmods.xyz</b> đây. Bạn gửi mã <code>IMX-...</code> trên màn hình chặn hoặc mô tả vấn đề bạn đang gặp phải nhé!',
+            ], $mem));
+            return;
+        }
+
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Mình hiểu ý bạn rồi, nhưng hiện tại mình chưa thấy phiên mạng nào của bạn gắn với mã khoá đang hoạt động.' . "\n\n"
+            . 'Bạn mở màn hình đang bị chặn trên <b>iosmods.xyz</b>, bấm nút <b>Copy</b> ở ô <b>Verification Code</b> (dạng <code>IMX-XXXXXX-...</code>) rồi gửi mã đó kèm tên tài khoản (nếu có) vào đây để mình kiểm tra chính xác 100% nhé!',
+            'Để mình tra đúng hồ sơ chặn của bạn trên máy chủ mà không nhầm với người khác, <b>' . $nameSafe . '</b> sao chép giúp mình dòng mã <code>IMX-...</code> đang hiện trên trang <b>iosmods.xyz</b> gửi vào đây nha!',
+            'Hiện mình cần <b>Mã xác minh (IMX-...)</b> trên màn hình khoá của bạn để đối chiếu nhật ký bảo mật. Bạn bấm nút <b>Copy</b> ngay cạnh mã trên web rồi dán vào khung chat này giúp mình nhé!',
+        ], $mem));
+        return;
+    }
+
+    // =========================================================================
+    // CASE B: ACTIVE BAN CONFIRMED!
+    // =========================================================================
+    $code        = (string) ($info['code'] ?? $activeCode);
+    $ip          = (string) ($info['ip'] ?? '');
+    if ($code !== '') {
+        pub_conv_set($from, ['last_code' => $code]);
+    }
+    if (function_exists('sh_pub_tg_link_save') && $ip !== '') {
         sh_pub_tg_link_save($chatId, $firstName, $ip, isset($info['lid']) ? (string) $info['lid'] : '');
     }
-    $banType    = isset($info['ban_type']) ? (string) $info['ban_type'] : 'temp';
-    $reasonOrig = isset($info['reason']) ? (string) $info['reason'] : 'Vi phạm quy tắc bảo mật hệ thống';
-    $expTs      = isset($info['expires_ts']) ? (int) $info['expires_ts'] : 0;
-    $leftSec    = $expTs > 0 ? max(1, $expTs - time()) : 0;
-    $leftMin    = $leftSec > 0 ? max(1, (int) ceil($leftSec / 60)) : 0;
-    $initDur    = !empty($info['initial_dur']) ? (int) $info['initial_dur'] : $leftSec;
-    $hits       = (int) (isset($info['hits']) ? $info['hits'] : 1);
-    $evasions   = (int) (isset($info['evasion_attempts']) ? $info['evasion_attempts'] : 0);
-    $aiReduced  = !empty($info['ai_reduced']);
-    $device     = isset($info['device']) ? (string) $info['device'] : 'Thiết bị trình duyệt';
-    $isScriptUa = (strpos($device, 'Công cụ Script') === 0);
-    $uname      = !empty($info['username']) ? (string) $info['username'] : '';
 
-    // Check hostile / profane language in user message
-    $isAbusiveMsg = ($reasonInput !== '' && (bool) preg_match('/\b(dm|dmm|vcl|vl|cc|fuck|shit|ngu|địt|đụ|lồn|cặc)\b/iu', $reasonInput));
+    $banType     = isset($info['ban_type']) ? (string) $info['ban_type'] : 'temp';
+    $isAdminPerm = !empty($info['is_admin_perm']) || $banType === 'manual';
+    $reasonOrig  = isset($info['reason']) ? (string) $info['reason'] : 'Vi phạm quy tắc bảo mật hệ thống';
+    $expTs       = isset($info['expires_ts']) ? (int) $info['expires_ts'] : 0;
+    $leftSec     = $expTs > 0 ? max(1, $expTs - time()) : 0;
+    $leftMin     = $leftSec > 0 ? max(1, (int) ceil($leftSec / 60)) : 0;
+    $initDur     = !empty($info['initial_dur']) ? (int) $info['initial_dur'] : $leftSec;
+    $hits        = (int) (isset($info['hits']) ? $info['hits'] : 1);
+    $evasions    = (int) (isset($info['evasion_attempts']) ? (int) $info['evasion_attempts'] : 0);
+    $aiReduced   = !empty($info['ai_reduced']);
+    $device      = isset($info['device']) ? (string) $info['device'] : 'Thiết bị trình duyệt';
+    $isScriptUa  = (strpos($device, 'Công cụ Script') === 0);
+    $uname       = !empty($info['username']) ? (string) $info['username'] : (string) ($mem['username'] ?? '');
+    $isAbusive   = ($reasonInput !== '' && (bool) preg_match('/\b(dm|dmm|vcl|vl|cc|fuck|shit|ngu|địt|đụ|lồn|cặc)\b/iu', $reasonInput));
 
-    // =========================================================================
-    // TIER 3: SEVERE VIOLATION / ATTACK / REPEAT EVASION / PERMANENT ADMIN LOCK
-    // =========================================================================
-    $isSevere = in_array($banType, ['ddos', 'waf', 'bug_buff', 'manual'], true)
+    // -------------------------------------------------------------------------
+    // SUBCASE B1: PERMANENTLY BANNED DIRECTLY BY ADMIN (100% STRICT — NEVER SAY UNLOCKED!)
+    // -------------------------------------------------------------------------
+    if ($isAdminPerm) {
+        pub_conv_set($from, ['step' => '', 'last_verdict' => 'perm_admin']);
+
+        // Forward customer's explanation to Admin ONCE per case so Admin has full context without spam!
+        $forwardedNote = '';
+        if ($reasonInput !== '' && !$isAbusive) {
+            $fwdKey = 'pub_adm_fwd_' . md5($code . '|' . $ip);
+            $notified = tg_store_read('pub_notified');
+            if (empty($notified[$fwdKey])) {
+                tg_store_update('pub_notified', function ($s) use ($fwdKey) {
+                    if (!is_array($s)) $s = [];
+                    $s[$fwdKey] = time();
+                    return count($s) > 200 ? array_slice($s, -150, null, true) : $s;
+                });
+                tg_event('bot_appeal_deny', [
+                    'ip'        => !empty($info['real_origin_ip']) ? (string) $info['real_origin_ip'] : $ip,
+                    'username'  => $uname,
+                    'case_code' => $code,
+                    'reason'    => 'Lệnh cấm vĩnh viễn bởi Admin: ' . $reasonOrig,
+                    'message'   => $reasonInput,
+                    'note'      => 'Đang bị Admin cấm vĩnh viễn — Bot giữ nguyên lệnh cấm',
+                ]);
+                tg_flush(false);
+                $forwardedNote = "\n\n📨 <i>Mình đã ghi nhận lời nhắn của bạn vào hồ sơ để Admin xem xét khi trực máy.</i>";
+            }
+        }
+
+        if ($typedImx === '' && $intent === 'ask_why') {
+            pub_send_reply($chatId, pub_pick_fresh($from, [
+                'Lý do được Quản trị viên ghi nhận trên lệnh cấm vĩnh viễn của bạn là: <b>' . tg_e($reasonOrig) . '</b>.' . "\n\n"
+                . 'Vì đây là quyết định khoá vĩnh viễn trực tiếp từ Admin (không phải khoá tự động tạm thời), hệ thống trợ lý AI tuyệt đối không thể tự gỡ hay giảm giờ. Bạn vui lòng liên hệ trực tiếp Admin để được giải quyết nhé.',
+                'Theo hồ sơ mã <code>' . tg_e($code) . '</code>, Admin đã khoá vĩnh viễn kết nối <code>' . tg_e($ip) . '</code> do: <b>' . tg_e($reasonOrig) . '</b>.' . "\n\n"
+                . 'Quyền hạn của mình không thể can thiệp vào lệnh cấm của Admin — chỉ khi Admin trực tiếp bấm gỡ thì bạn mới vào lại web được nha.',
+            ], $mem) . $forwardedNote);
+            return;
+        }
+
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            '⛔ <b>THÔNG BÁO TRẠNG THÁI: ĐANG BỊ ADMIN CẤM VĨNH VIỄN</b>' . "\n\n"
+            . 'Mình vừa kiểm tra trực tiếp mã <code>' . tg_e($code) . '</code> trên cơ sở dữ liệu: địa chỉ truy cập' . ($uname !== '' ? ' / tài khoản <code>' . tg_e($uname) . '</code>' : '') . ' của bạn <b>đang bị Quản trị viên (Admin) cấm vĩnh viễn</b> (hiện <b>KHÔNG</b> thể truy cập website).' . "\n"
+            . '• Lý do Admin ghi nhận: <b>' . tg_e($reasonOrig) . '</b>' . "\n\n"
+            . 'Đối với lệnh cấm vĩnh viễn từ Admin, mình tuyệt đối không có quyền mở khoá hay giảm thời gian. <b>Vui lòng liên hệ trực tiếp Admin vì điều này tôi không thể mở giúp bạn.</b>',
+            'Mình đã kiểm tra lại cho <b>' . $nameSafe . '</b> rồi: lệnh <b>CẤM VĨNH VIỄN bởi Admin</b> đối với mã <code>' . tg_e($code) . '</code> vẫn đang có hiệu lực 100% (lý do: <b>' . tg_e($reasonOrig) . '</b>).' . "\n\n"
+            . 'Trợ lý tự động chỉ được phép hỗ trợ các ca khoá nhầm nhẹ của hệ thống, hoàn toàn không được phép gỡ lệnh cấm do Admin ban hành. Bạn vui lòng chờ hoặc liên hệ Admin chính thức của website nhé!',
+            'Hiện tại kết nối của bạn đang chịu <b>lệnh khoá vĩnh viễn từ Quản trị viên</b> (mã <code>' . tg_e($code) . '</code> · <i>' . tg_e($reasonOrig) . '</i>), nên chắc chắn chưa thể vào lại <b>iosmods.xyz</b> lúc này.' . "\n\n"
+            . '<b>Vui lòng liên hệ Admin vì điều này tôi không thể mở giúp bạn.</b> Chỉ khi Admin xác nhận và gỡ lệnh cấm thủ công thì thiết bị của bạn mới truy cập lại được.',
+        ], $mem) . $forwardedNote);
+        return;
+    }
+
+    // -------------------------------------------------------------------------
+    // SUBCASE B2: SEVERE SYSTEM LOCK (DDoS / WAF / Script / Inspect / Repeat Evasion)
+    // -------------------------------------------------------------------------
+    $isSevere = in_array($banType, ['ddos', 'waf', 'bug_buff', 'inspect'], true)
         || $expTs === 0
         || $evasions >= 2
         || $isScriptUa
-        || $isAbusiveMsg;
+        || $isAbusive;
 
     if ($isSevere) {
-        pub_conv_clear($from);
+        pub_conv_set($from, ['step' => '', 'last_verdict' => 'severe_attack']);
         if ($banType === 'ddos') {
-            $humanExplain = 'Hệ thống ghi nhận địa chỉ IP <code>' . tg_e($ip) . '</code> đã gửi luồng truy cập dồn dập bất thường vượt ngưỡng an toàn (cơ chế chống tấn công DDoS tự động kích hoạt với ' . $hits . ' yêu cầu bị chặn).';
+            $humanExplain = 'địa chỉ <code>' . tg_e($ip) . '</code> đã bắn luồng truy cập tốc độ cao vượt ngưỡng an toàn (' . $hits . ' yêu cầu dồn dập bị khiên chống DDoS chặn đứng)';
+        } elseif ($banType === 'inspect') {
+            $humanExplain = 'trình duyệt trên <b>' . tg_e($device) . '</b> đã kích hoạt công cụ soi mã nguồn / DevTools hoặc chạy tiện ích can thiệp trang (' . tg_e($reasonOrig) . ')';
         } elseif ($banType === 'waf' || $banType === 'bug_buff' || $isScriptUa) {
-            $humanExplain = 'Hệ thống phát hiện kết nối từ <code>' . tg_e($ip) . '</code> (' . tg_e($device) . ') có hành vi chạy công cụ tự động / Script hoặc gửi tham số can thiệp trực tiếp vào cấu trúc bảo mật của website (' . tg_e($reasonOrig) . ').';
+            $humanExplain = 'phát hiện gói tin chứa tham số tấn công WAF, chạy Script tự động hoặc dò lỗ hổng hệ thống từ <code>' . tg_e($ip) . '</code> (' . tg_e($reasonOrig) . ')';
         } elseif ($evasions >= 2) {
-            $humanExplain = 'Sau khi bị tạm khoá, thiết bị của bạn đã cố tình đổi mạng / đổi IP <b>' . $evasions . ' lần liên tiếp</b> để lách cơ chế bảo mật thay vì chờ hết hạn.';
-        } elseif ($expTs === 0 || $banType === 'manual') {
-            $humanExplain = 'Địa chỉ IP <code>' . tg_e($ip) . '</code> đang nằm trong diện khoá bảo mật trực tiếp bởi Quản trị viên (' . tg_e($reasonOrig) . ').';
+            $humanExplain = 'sau khi bị khoá, thiết bị của bạn đã cố đổi IP / đổi mạng <b>' . $evasions . ' lần liên tiếp</b> để lách khiên bảo mật';
         } else {
-            $humanExplain = 'Nội dung phản hồi hoặc mức độ vi phạm hiện tại (' . tg_e($reasonOrig) . ') không đủ điều kiện để hệ thống tự động gỡ khoá.';
+            $humanExplain = 'mức độ vi phạm hiện tại (' . tg_e($reasonOrig) . ') vượt ngưỡng an toàn tự động';
         }
 
-        pub_send_reply(
-            $chatId,
-            'Mình đã kiểm tra kỹ toàn bộ nhật ký bảo mật của mã <code>' . tg_e($code) . '</code> rồi nhé.' . "\n\n"
-            . '🔎 <b>Nguyên nhân ghi nhận:</b> ' . $humanExplain . "\n\n"
-            . 'Đối với các trường hợp liên quan đến luồng tấn công, can thiệp kỹ thuật hoặc lệnh khoá nghiêm trọng này, quyền hạn của mình không được phép tự ý mở khoá. <b>Vui lòng liên hệ Admin vì điều này tôi không thể mở giúp bạn.</b>' . "\n\n"
-            . '<i>(Mình cũng đã chuyển hồ sơ mã xác minh của bạn sang cho Admin kiểm tra — nếu xác nhận nhầm lẫn, Admin vẫn có thể mở khoá trực tiếp cho bạn).</i>'
-        );
-
-        // Notify Admin once per case so Admin can still override & unban with 1 tap!
         $denyOnceKey = 'pub_deny_' . md5($code);
         $alreadySent = tg_store_read('pub_notified');
+        $justNotifiedAdmin = false;
         if (empty($alreadySent[$denyOnceKey])) {
             tg_store_update('pub_notified', function ($s) use ($denyOnceKey) {
                 if (!is_array($s)) $s = [];
@@ -4249,21 +4461,31 @@ function bot_public_appeal_handler(array $m)
                 return count($s) > 200 ? array_slice($s, -150, null, true) : $s;
             });
             tg_event('bot_appeal_deny', [
-                'ip'        => $ip,
+                'ip'        => !empty($info['real_origin_ip']) ? (string) $info['real_origin_ip'] : $ip,
                 'username'  => $uname,
                 'case_code' => $code,
                 'reason'    => $reasonOrig,
                 'message'   => $reasonInput,
-                'note'      => 'Bot từ chối mở ban (' . $banType . ')',
+                'note'      => 'Bot từ chối mở ban nghiêm trọng (' . $banType . ')',
             ]);
             tg_flush(false);
+            $justNotifiedAdmin = true;
         }
+
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Mình đã rà soát chi tiết nhật ký bảo mật của mã <code>' . tg_e($code) . '</code> rồi nhé.' . "\n\n"
+            . '🔎 <b>Nguyên nhân bị khoá:</b> Hệ thống ghi nhận ' . $humanExplain . '.' . "\n\n"
+            . 'Với các cảnh báo bảo mật cấp cao này, kết nối sẽ giữ nguyên trạng thái khoá và mình không được phép tự mở. <b>Vui lòng liên hệ Admin vì điều này tôi không thể mở giúp bạn.</b>'
+            . ($justNotifiedAdmin ? "\n\n<i>(Mình cũng vừa chuyển hồ sơ mã của bạn lên bảng điều khiển của Admin — nếu bạn thao tác nhầm thật sự, Admin sẽ xem và quyết định gỡ cho bạn).</i>" : ''),
+            'Theo biên bản kỹ thuật của mã <code>' . tg_e($code) . '</code>, kết nối của bạn đang bị phong toả bảo vệ do ' . $humanExplain . '.' . "\n\n"
+            . 'Trường hợp này nằm ngoài phạm vi tự động mở khoá của trợ lý AI. <b>Vui lòng liên hệ Admin vì điều này tôi không thể mở giúp bạn</b> — bạn có thể gửi yêu cầu 1 lần ngay tại nút <b>Request Unlock</b> trên màn hình web hoặc chờ Admin kiểm tra hồ sơ nhé!',
+        ], $mem));
         return;
     }
 
-    // =========================================================================
-    // TIER 1: VERY MINOR FIRST-TIME MISTAKE (<= 6m spam OR 2m VPN already turned off) -> UNBAN 100% IMMEDIATELY!
-    // =========================================================================
+    // -------------------------------------------------------------------------
+    // SUBCASE B3: VERY MINOR FIRST-TIME MISTAKE (<= 6m light spam OR 2m VPN with reason/turned off) -> UNBAN 100%!
+    // -------------------------------------------------------------------------
     $isVeryMinor = (
             in_array($banType, ['prod_spam', 'key_spam'], true)
             && $expTs > 0
@@ -4275,12 +4497,12 @@ function bot_public_appeal_handler(array $m)
             $banType === 'vpn_block'
             && $expTs > 0
             && $evasions === 0
-            && empty($info['is_vpn'])
+            && ($intent === 'vpn_off' || empty($info['is_vpn']))
             && !pub_was_recently_forgiven($ip, $from)
         );
 
     if ($isVeryMinor) {
-        pub_conv_clear($from);
+        pub_conv_set($from, ['step' => '', 'last_verdict' => 'unbanned_tier1']);
         pub_mark_forgiven($ip, $from);
         if (bot_ipg_ready()) {
             ipg_unban(bdb(), $ip, 'devios_bot_ai', true);
@@ -4288,20 +4510,23 @@ function bot_public_appeal_handler(array $m)
             sh_full_clean_slate_unban(bdb(), $ip, $uname, true, true, 'devios_bot_ai');
         }
 
-        $whatDid = ($banType === 'key_spam')
-            ? 'nhập sai mã Key liên tiếp hơi nhanh trong thời gian ngắn'
-            : 'bấm lấy sản phẩm lặp lại liên tục khi tài khoản chưa kích hoạt Key';
+        $whatDid = ($banType === 'vpn_block')
+            ? 'quên tắt ứng dụng VPN / 1.1.1.1 trước khi mở trang'
+            : (($banType === 'key_spam')
+                ? 'nhập sai mã Key liên tiếp hơi nhanh trong thời gian ngắn'
+                : 'bấm lấy sản phẩm liên tục khi tài khoản chưa kích hoạt Key');
 
-        pub_send_reply(
-            $chatId,
-            'Mình vừa xem xét kỹ mã <code>' . tg_e($code) . '</code> của bạn rồi nhé.' . "\n\n"
-            . '🔎 <b>Kết quả kiểm tra:</b> Địa chỉ IP <code>' . tg_e($ip) . '</code> trên <b>' . tg_e($device) . '</b> chỉ vừa ' . $whatDid . ' (vi phạm lần đầu rất nhẹ, không bật công cụ gian lận và không cố lách khoá).' . "\n\n"
-            . '✅ Vì lỗi này rất nhẹ do thao tác tay hơi vội nên <b>mình đã mở khoá hoàn toàn luôn cho bạn rồi nhé</b>, không cần phải chờ giảm giờ đâu!' . "\n\n"
-            . '👉 Bây giờ bạn quay lại <b>iosmods.xyz</b>, màn hình sẽ hiện <b>Đã tự động mở khoá</b> — bạn chỉ cần bấm nút <b>Got it</b> là vào web bình thường. Lần sau nhớ kích hoạt Key hợp lệ trước khi bấm mở sản phẩm giúp mình nha!'
-        );
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Mình vừa kiểm tra hồ sơ mã <code>' . tg_e($code) . '</code> cho <b>' . $nameSafe . '</b> xong!' . "\n\n"
+            . '🔎 <b>Đánh giá:</b> Thiết bị <b>' . tg_e($device) . '</b> chỉ lỡ ' . $whatDid . ' (lần đầu, 0 lần cố lách khoá và không có dấu hiệu phá hoại).' . "\n\n"
+            . '✅ Vì đây chỉ là sơ suất nhỏ nên <b>mình đã mở khoá hoàn toàn luôn cho bạn rồi nhé</b>!' . "\n"
+            . '👉 Bạn quay lại <b>iosmods.xyz</b>, tải lại trang rồi bấm nút <b>Got it</b> trên màn hình <i>Automatically Unlocked</i> là dùng web bình thường nha.',
+            'Đã kiểm tra xong mã <code>' . tg_e($code) . '</code>! Trường hợp của bạn chỉ là ' . $whatDid . ' ở mức rất nhẹ nên <b>mình đã gỡ khoá hoàn toàn luôn cho bạn</b> mà không bắt chờ hết giờ đâu.' . "\n\n"
+            . 'Bạn mở lại <b>iosmods.xyz</b>, nhấn nút <b>Got it</b> xác nhận là vào thẳng trang chủ nhé (nhớ tắt hẳn VPN và nhập Key trước khi mở sản phẩm nha)!',
+        ], $mem));
 
         tg_event('bot_appeal_unban', [
-            'ip'        => $ip,
+            'ip'        => !empty($info['real_origin_ip']) ? (string) $info['real_origin_ip'] : $ip,
             'username'  => $uname,
             'case_code' => $code,
             'reason'    => $reasonOrig,
@@ -4311,52 +4536,66 @@ function bot_public_appeal_handler(array $m)
         return;
     }
 
-    // =========================================================================
-    // TIER 2: NORMAL / MODERATE VIOLATION -> ASK REASON & MODERATELY REDUCE TIME
-    // =========================================================================
-    if ($aiReduced) {
-        pub_conv_clear($from);
-        pub_send_reply(
-            $chatId,
-            'Mã xác minh <code>' . tg_e($code) . '</code> của bạn trước đó <b>đã được mình hỗ trợ giảm thời gian chờ 1 lần rồi</b> (hiện chỉ còn khoảng <b>' . $leftMin . ' phút</b> nữa là hệ thống tự động mở khoá).' . "\n\n"
-            . 'Mỗi phiên tạm khoá mình chỉ được phép giảm thời gian một lần vừa phải để đảm bảo công bằng. Bạn chịu khó đợi nốt ít phút còn lại rồi bấm <b>Got it</b> trên web nhé; nếu thật sự cần mở ngay lập tức, vui lòng liên hệ Admin vì điều này tôi không thể mở giúp bạn thêm nữa.'
-        );
+    // -------------------------------------------------------------------------
+    // SUBCASE B4: 2-MINUTE VPN BLOCK (When VPN is still active / user asks why)
+    // -------------------------------------------------------------------------
+    if ($banType === 'vpn_block' && $leftSec <= 125) {
+        pub_conv_set($from, ['step' => 'await_reason', 'code' => $code, 'last_code' => $code]);
+        $vpnName = !empty($info['vpn_lbl']) ? $info['vpn_lbl'] : 'VPN / 1.1.1.1 WARP';
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Mình thấy kết nối của bạn đang bật <b>' . tg_e($vpnName) . '</b> nên hệ thống tạm khoá tự động <b>2 phút</b> (hiện chỉ còn <b>' . $leftSec . ' giây</b>).' . "\n\n"
+            . '👉 Bạn hãy <b>tắt hẳn VPN / 1.1.1.1</b> trong cài đặt máy trước nhé! Nếu tắt xong rồi bạn nhắn cho mình chữ <i>"đã tắt VPN"</i> (hoặc đợi hết ' . $leftSec . ' giây rồi tải lại web bấm <b>Got it</b>) là vào lại bình thường ngay!',
+            'Nguyên nhân bạn bị chặn mã <code>' . tg_e($code) . '</code> là do trình duyệt đang đi qua mạng ảo <b>' . tg_e($vpnName) . '</b>. Khiên bảo mật của <b>iosmods.xyz</b> yêu cầu dùng mạng gốc (Wi-Fi / 4G/5G thường).' . "\n\n"
+            . 'Bạn tắt ứng dụng VPN/1.1.1.1 đi rồi nhắn báo mình một tiếng (hoặc chờ nốt <b>' . $leftSec . ' giây</b> còn lại) để mở khoá nhé!',
+        ], $mem));
         return;
     }
 
-    if ($reasonInput === '') {
-        pub_conv_set($from, ['step' => 'await_reason', 'code' => $code]);
-        pub_send_reply(
-            $chatId,
-            'Mình đã tra cứu mã <code>' . tg_e($code) . '</code> của bạn:' . "\n"
-            . '• Địa chỉ IP: <code>' . tg_e($ip) . '</code> (' . tg_e($device) . ')' . "\n"
+    // -------------------------------------------------------------------------
+    // SUBCASE B5: MODERATE TEMPORARY LOCK -> CONVERSATIONAL REASON CHECK & ~45% REDUCTION
+    // -------------------------------------------------------------------------
+    if ($aiReduced) {
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Hồ sơ mã <code>' . tg_e($code) . '</code> của bạn vừa được mình giảm giờ 1 lần rồi nha — hiện chỉ còn khoảng <b>' . $leftMin . ' phút</b> nữa (tự mở lúc <b>' . date('H:i', $expTs) . '</b>).' . "\n\n"
+            . 'Theo quy định chống lạm dụng, mỗi lượt tạm khoá mình chỉ giảm được một lần duy nhất. Bạn ráng đợi nốt ' . $leftMin . ' phút rồi tải lại web bấm <b>Got it</b> nhé; nếu cần mở gấp ngay lập tức thì vui lòng liên hệ Admin vì điều này tôi không thể mở thêm giúp bạn.',
+            'Chỉ còn khoảng <b>' . $leftMin . ' phút</b> nữa (đến <b>' . date('H:i', $expTs) . '</b>) là hệ thống tự gỡ khoá cho mã <code>' . tg_e($code) . '</code> rồi <b>' . $nameSafe . '</b> ơi! Lúc nãy mình đã hỗ trợ rút ngắn thời gian hết mức cho phép rồi nên không giảm lần 2 được nữa, bạn đợi thêm xíu nha.',
+        ], $mem));
+        return;
+    }
+
+    if ($reasonInput === '' || in_array($intent, ['ask_why', 'still_locked'], true)) {
+        pub_conv_set($from, ['step' => 'await_reason', 'code' => $code, 'last_code' => $code]);
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Mình vừa tra cứu mã <code>' . tg_e($code) . '</code> của bạn:' . "\n"
+            . '• Thiết bị: <b>' . tg_e($device) . '</b>' . "\n"
             . '• Nguyên nhân tạm khoá: <b>' . tg_e($reasonOrig) . '</b>' . "\n"
-            . '• Thời gian còn lại: <b>' . $leftMin . ' phút</b>' . "\n\n"
-            . 'Bạn nhắn ngắn gọn cho mình biết <b>lúc nãy bạn đang thao tác gì mà bị khoá</b> (ví dụ quên tắt VPN/1.1.1.1, mạng chậm bấm nhầm nhiều lần, hay lỡ chạm phím tắt...) để mình xem xét giảm bớt thời gian chờ giúp bạn nhé!'
-        );
+            . '• Thời gian còn lại: <b>' . $leftMin . ' phút</b> (mở lúc ' . date('H:i', $expTs) . ')' . "\n\n"
+            . 'Bạn kể ngắn gọn cho mình biết <b>lúc nãy bạn thao tác thế nào mà bị khoá</b> (ví dụ quên tắt VPN/1.1.1.1, mạng lag lỡ bấm nhiều lần...) để mình xét giảm bớt thời gian chờ cho bạn nhé!',
+            'Kết nối của bạn (mã <code>' . tg_e($code) . '</code> trên <b>' . tg_e($device) . '</b>) hiện đang tạm khoá còn <b>' . $leftMin . ' phút</b> vì: <b>' . tg_e($reasonOrig) . '</b>.' . "\n\n"
+            . 'Nếu đây là do vô ý, bạn nhắn lại một câu giải thích tình huống lúc nãy để mình kiểm tra và hỗ trợ rút ngắn thời gian khoá ngay cho bạn nha!',
+        ], $mem));
         return;
     }
 
     $cleanLen = function_exists('mb_strlen') ? mb_strlen($reasonInput, 'UTF-8') : strlen($reasonInput);
     if ($cleanLen < 5 || preg_match('/^(.)\1{4,}$/u', $reasonInput)) {
-        pub_conv_set($from, ['step' => 'await_reason', 'code' => $code]);
-        pub_send_reply(
-            $chatId,
-            'Bạn miêu tả rõ hơn bằng một câu bình thường giúp mình nhé (ví dụ lúc nãy bạn đang làm thao tác gì trên web) để mình có cơ sở xét giảm thời gian cho bạn nha.'
-        );
+        pub_conv_set($from, ['step' => 'await_reason', 'code' => $code, 'last_code' => $code]);
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Bạn nói rõ hơn một chút bằng câu bình thường giúp mình nhé (ví dụ lúc nãy bạn đang bấm lấy key hay quên tắt VPN...) để mình có căn cứ giảm thời gian chờ cho bạn nha!',
+            'Tin nhắn hơi ngắn nên mình chưa rõ tình huống lúc nãy của bạn — bạn mô tả ngắn gọn 1 câu việc bạn vừa làm trên web để mình xét giảm giờ khoá liền nhé.',
+        ], $mem));
         return;
     }
 
-    pub_conv_clear($from);
+    pub_conv_set($from, ['step' => '', 'last_verdict' => 'reduced_tier2']);
     if ($leftSec <= 210) {
-        pub_send_reply(
-            $chatId,
-            'Cảm ơn bạn đã phản hồi nhé. Hiện tại lệnh tạm khoá của IP <code>' . tg_e($ip) . '</code> chỉ còn chưa đầy <b>' . $leftMin . ' phút</b> nữa là tự động mở hoàn toàn rồi, bạn đợi thêm đôi chút rồi tải lại trang bấm <b>Got it</b> để vào web bình thường nhé!'
-        );
+        pub_send_reply($chatId, pub_pick_fresh($from, [
+            'Cảm ơn <b>' . $nameSafe . '</b> đã giải thích nhé! Hiện tại thời gian tạm khoá của bạn chỉ còn chưa đầy <b>' . $leftMin . ' phút</b> (' . $leftSec . ' giây) nữa là tự mở hoàn toàn rồi — bạn đợi nốt ít giây rồi tải lại <b>iosmods.xyz</b> bấm <b>Got it</b> là vào được ngay nha!',
+            'Mình ghi nhận rồi nha! Phiên khoá của bạn sắp hết giờ rồi (còn đúng <b>' . $leftSec . ' giây</b>), hết đếm ngược bạn tải lại trang rồi bấm <b>Got it</b> là sử dụng bình thường nhé.',
+        ], $mem));
         return;
     }
 
-    // Moderate reduction (~45% cut, keeping at least 3 minutes = 180s — "giảm vừa phải")
     $newLeftSec = max(180, (int) round($leftSec * 0.55));
     if ($leftSec - $newLeftSec < 90) {
         $newLeftSec = max(180, $leftSec - 120);
@@ -4365,18 +4604,19 @@ function bot_public_appeal_handler(array $m)
     $newMin   = max(1, (int) ceil($newLeftSec / 60));
 
     $remindTip = ($banType === 'vpn_abuse' || !empty($info['is_vpn']))
-        ? 'Trong lúc chờ bạn nhớ tắt hẳn ứng dụng VPN / 1.1.1.1 trước khi vào lại web nhé!'
-        : 'Khi vào lại web bạn nhớ thao tác từ tốn và tuân thủ nội quy để không bị hệ thống khoá lại nhé!';
+        ? 'Trong lúc chờ bạn nhớ tắt hẳn ứng dụng VPN / 1.1.1.1 để khi mở lại không bị chặn tiếp nhé!'
+        : 'Lần tới vào lại web bạn thao tác chậm rãi hơn để hệ thống không nhận nhầm là spam nhé!';
 
-    pub_send_reply(
-        $chatId,
-        'Cảm ơn bạn đã chia sẻ rõ ràng nhé. Mình đã đối chiếu lời giải thích của bạn với nhật ký hệ thống và thấy trường hợp này ở mức độ bình thường, không có mục đích phá hoại.' . "\n\n"
-        . '⏱ Mình vừa hỗ trợ <b>giảm thời gian tạm khoá vừa phải</b> cho IP <code>' . tg_e($ip) . '</code> từ <b>' . $leftMin . ' phút</b> xuống còn <b>' . $newMin . ' phút</b> (tự động mở lúc <b>' . date('H:i', (int) $newExpTs) . '</b>).' . "\n\n"
-        . 'Đợi hết ' . $newMin . ' phút này bạn quay lại <b>iosmods.xyz</b> bấm <b>Got it</b> là sử dụng bình thường nha. ' . $remindTip
-    );
+    pub_send_reply($chatId, pub_pick_fresh($from, [
+        'Cảm ơn <b>' . $nameSafe . '</b> đã chia sẻ rõ ràng! Mình đã đối chiếu với nhật ký máy chủ và xác nhận đây là thao tác vô ý chứ không có dấu hiệu phá hoại.' . "\n\n"
+        . '⏱ Mình vừa hỗ trợ <b>giảm thời gian tạm khoá vừa phải</b> từ <b>' . $leftMin . ' phút</b> xuống chỉ còn <b>' . $newMin . ' phút</b> (tự động mở lúc <b>' . date('H:i', (int) $newExpTs) . '</b>).' . "\n\n"
+        . 'Đợi hết ' . $newMin . ' phút này bạn tải lại <b>iosmods.xyz</b> và bấm <b>Got it</b> là vào web bình thường nha. ' . $remindTip,
+        'Mình đã kiểm tra lời giải thích của bạn và thấy hoàn toàn hợp lý. Mình vừa điều chỉnh <b>giảm thời gian tạm khoá vừa phải</b> cho mã <code>' . tg_e($code) . '</code> từ <b>' . $leftMin . ' phút</b> xuống còn <b>' . $newMin . ' phút</b> (mở khoá lúc <b>' . date('H:i', (int) $newExpTs) . '</b>).' . "\n\n"
+        . $remindTip . ' Hết giờ bạn chỉ cần mở lại web bấm <b>Got it</b> là xong nhé!',
+    ], $mem));
 
     tg_event('bot_appeal_reduce', [
-        'ip'        => $ip,
+        'ip'        => !empty($info['real_origin_ip']) ? (string) $info['real_origin_ip'] : $ip,
         'username'  => $uname,
         'case_code' => $code,
         'reason'    => $reasonOrig,
