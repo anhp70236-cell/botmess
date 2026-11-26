@@ -399,15 +399,24 @@ function ipg_temp_ban($conn, $ip, $seconds, $reason, $by = 'bot-shield', $userna
     $st->close();
     $row = ipg_find($conn, $ip);
     if (function_exists('sh_write_ban_cache')) {
-        sh_write_ban_cache($ip, [
+        $prev = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($ip) : null;
+        $payload = [
             'id'         => $row ? (int) $row['id'] : 0,
             'reason'     => $reason,
             'ban_type'   => $btype,
-            'username'   => (string) $username,
+            'username'   => $username !== '' ? (string) $username : (string) ($prev['username'] ?? ''),
             'banned_by'  => (string) $by,
             'expires_ts' => $expTs,
             'expires_at' => $expStr,
-        ]);
+        ];
+        if (is_array($prev)) {
+            foreach (['lid', 'hw_fp', 'case_code', 'real_origin_ip', 'real_origin_isp', 'real_ip_source', 'vpn_ip', 'vpn_lbl'] as $pk) {
+                if (!empty($prev[$pk]) && empty($payload[$pk])) {
+                    $payload[$pk] = $prev[$pk];
+                }
+            }
+        }
+        sh_write_ban_cache($ip, $payload);
     }
     return ['ok' => true, 'msg' => 'Đã tạm khoá IP (' . ceil($seconds / 60) . ' phút).', 'row' => $row, 'new' => true];
 }
@@ -415,8 +424,9 @@ function ipg_temp_ban($conn, $ip, $seconds, $reason, $by = 'bot-shield', $userna
 /** Unban = active 0 + clear fast cache + clear keyfail strikes + arm Got-it unlock screen so visitor sees unlocked confirmation once. */
 function ipg_unban($conn, $ip, $by, $createUnlockGate = true)
 {
-    $ip  = ipg_norm($ip);
-    $row = ipg_find($conn, $ip);
+    $ip        = ipg_norm($ip);
+    $row       = ipg_find($conn, $ip);
+    $prevCache = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($ip) : null;
     $wasActiveDb = ($row && (int) $row['active'] === 1);
     if ($wasActiveDb) {
         $st = ipg_q($conn, 'UPDATE ip_bans SET active = 0, unbanned_by = ?, unbanned_at = NOW() WHERE ip = ?', 'ss', [(string) $by, $ip]);
@@ -425,19 +435,36 @@ function ipg_unban($conn, $ip, $by, $createUnlockGate = true)
         }
         $st->close();
     }
+    // Also lift paired real_origin_ip / vpn_ip in MySQL if linked to this exact ban
+    if (is_array($prevCache)) {
+        foreach (['real_origin_ip', 'vpn_ip'] as $lk) {
+            if (!empty($prevCache[$lk]) && $prevCache[$lk] !== $ip) {
+                $pairedIp = ipg_norm($prevCache[$lk]);
+                if ($pairedIp !== '') {
+                    $stP = ipg_q($conn, 'UPDATE ip_bans SET active = 0, unbanned_by = ?, unbanned_at = NOW() WHERE ip = ? AND active = 1', 'ss', [(string) $by, $pairedIp]);
+                    if ($stP !== null) {
+                        if ($stP->affected_rows > 0) {
+                            $wasActiveDb = true;
+                        }
+                        $stP->close();
+                    }
+                }
+            }
+        }
+    }
     if (function_exists('sh_full_clean_slate_unban')) {
         sh_full_clean_slate_unban(
             $conn,
             $ip,
-            $row && !empty($row['username']) ? (string) $row['username'] : '',
+            $row && !empty($row['username']) ? (string) $row['username'] : (string) ($prevCache['username'] ?? ''),
             $createUnlockGate,
-            $wasActiveDb,
+            $wasActiveDb || is_array($prevCache),
             (string) $by
         );
     } elseif (function_exists('sh_remove_ban_cache')) {
         sh_remove_ban_cache($ip);
     }
-    if (!$wasActiveDb) {
+    if (!$wasActiveDb && !is_array($prevCache)) {
         return ['ok' => (bool) $row, 'msg' => $row ? 'IP này đã được gỡ chặn.' : 'IP này hiện không bị chặn.', 'row' => $row];
     }
     return ['ok' => true, 'msg' => 'Đã gỡ chặn IP thành công.', 'row' => ipg_find($conn, $ip)];
@@ -485,8 +512,8 @@ function ipg_run($conn)
             return;
         }
         list($safe, ) = ipg_can_ban($ip);
-        if (!$safe) {
-            return; // Safe/Admin/Proxy IP -> never block even if stale DB row existed
+        if (!$safe || (function_exists('sh_is_admin_viewer') && sh_is_admin_viewer())) {
+            return; // Safe/Proxy IP or actively logged-in Admin -> never block
         }
         $ban = ipg_is_banned($conn, $ip);
         if ($ban === null) {

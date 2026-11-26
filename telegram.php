@@ -704,25 +704,43 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
 
     $vault['default_id']  = $orderedIds[0];
     $vault['pool']        = array_slice($pool, 0, 300);
-    $vault['replace_all'] = true;
+    // Only enable blanket fallback replacement when a rich multi-emoji set (>= 10 unique icons) or sticker pack is loaded!
+    $vault['replace_all'] = (count($uniqueIds) >= 10 || count($packList) >= 10);
 
     // Aesthetic Auto-Harmony Engine for 60 or 60+ Emojis:
-    // 1) Exact semantic base-emoji match wins first.
-    // 2) Remaining unique sent emojis (1..60+) fill all 60 core UI slots with zero adjacent duplicates.
-    // 3) Extra sent emojis beyond 60 (61..N) are assigned directly to extended secondary UI icons so EVERY sent emoji shines!
+    // 1) Exact semantic base-emoji match wins first (marked as placed so we maximize distinct icons).
+    // 2) Remaining unique sent emojis (1..60+) fill all 60 core UI slots 1-to-1 with zero duplicate assignments when >=60 unique emojis are sent!
+    // 3) Extra sent emojis beyond 60 (61..N) map directly to extended secondary UI icons!
     $slots     = tg_emoji_slots();
     $sentCount = count($orderedIds);
     $palette   = count($uniqueIds) >= 2 ? $uniqueIds : $orderedIds;
     $palCount  = count($palette);
-    $usedIdx   = 0;
+    $placedIds = [];
+
+    foreach ($slots as $sl) {
+        $u = $sl[0];
+        if (isset($sentByChar[$u])) {
+            $vault['picks'][$u] = $sentByChar[$u];
+            $placedIds[$sentByChar[$u]] = true;
+        }
+    }
+
+    $unusedPalette = [];
+    foreach ($palette as $pid) {
+        if (!isset($placedIds[$pid])) {
+            $unusedPalette[] = $pid;
+        }
+    }
+    $uIdx = 0;
 
     foreach ($slots as $idx => $sl) {
         $u = $sl[0];
         if (isset($sentByChar[$u])) {
-            $vault['picks'][$u] = $sentByChar[$u];
-        } elseif ($palCount > 1 && isset($palette[$usedIdx])) {
-            $vault['picks'][$u] = $palette[$usedIdx];
-            $usedIdx++;
+            continue;
+        }
+        if (isset($unusedPalette[$uIdx])) {
+            $vault['picks'][$u] = $unusedPalette[$uIdx];
+            $uIdx++;
         } elseif ($palCount > 1) {
             $vault['picks'][$u] = isset($packByChar[$u]) ? $packByChar[$u] : $palette[$idx % $palCount];
         } elseif (!isset($vault['picks'][$u])) {
@@ -736,15 +754,15 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         }
     }
 
-    // Map all extended secondary icons: if Admin sent > 60 unique emojis, assign extra emojis (61..N) directly for maximum visual richness!
+    // Map all extended secondary icons: assign remaining unused unique emojis (61..N) first, else harmonize with semantic slot!
     foreach (tg_emoji_extended_aliases() as $extChar => $targetSlotChar) {
         $eNorm = tg_emoji_norm($extChar);
         $tNorm = tg_emoji_norm($targetSlotChar);
         if (isset($sentByChar[$eNorm])) {
             $vault['picks'][$eNorm] = $sentByChar[$eNorm];
-        } elseif ($palCount > count($slots) && isset($palette[$usedIdx])) {
-            $vault['picks'][$eNorm] = $palette[$usedIdx];
-            $usedIdx++;
+        } elseif (isset($unusedPalette[$uIdx])) {
+            $vault['picks'][$eNorm] = $unusedPalette[$uIdx];
+            $uIdx++;
         } elseif (isset($packByChar[$eNorm])) {
             $vault['picks'][$eNorm] = $packByChar[$eNorm];
         } elseif (!empty($vault['picks'][$tNorm])) {
@@ -930,8 +948,17 @@ function tg_emoji_fallback_id($char = '')
         return '';
     }
     $v = tg_emoji_vault_read();
-    if (!empty($v['replace_all']) && !empty($v['default_id']) && preg_match('/^\d{5,}$/', (string) $v['default_id'])) {
-        return (string) $v['default_id'];
+    if (!empty($v['replace_all'])) {
+        $pool = isset($v['pool']) && is_array($v['pool']) ? array_values(array_filter($v['pool'], function ($x) {
+            return is_string($x) && preg_match('/^\d{5,}$/', $x);
+        })) : [];
+        if (count($pool) >= 2 && $char !== '') {
+            $idx = abs((int) crc32(tg_emoji_norm($char))) % count($pool);
+            return (string) $pool[$idx];
+        }
+        if (count($pool) >= 10 && !empty($v['default_id']) && preg_match('/^\d{5,}$/', (string) $v['default_id'])) {
+            return (string) $v['default_id'];
+        }
     }
     return '';
 }
@@ -958,7 +985,7 @@ function tg_ce($key, $fallback)
 function tg_dress_text($html)
 {
     $table      = tg_emoji_table();
-    $fallbackId = tg_emoji_fallback_id();
+    $fallbackId = tg_emoji_fallback_id('⭐');
     if (!$table && $fallbackId === '') {
         return $html;
     }
@@ -996,12 +1023,16 @@ function tg_dress_text($html)
             if (is_array($subParts)) {
                 foreach ($subParts as $si => $sp) {
                     if ($si % 2 === 0 && $sp !== '' && $left > 0) {
-                        $subParts[$si] = preg_replace_callback($anyRe, function ($m) use ($fallbackId, &$left) {
+                        $subParts[$si] = preg_replace_callback($anyRe, function ($m) use (&$left) {
                             if ($left <= 0) {
                                 return $m[0];
                             }
+                            $picked = tg_emoji_fallback_id($m[1]);
+                            if ($picked === '') {
+                                return $m[0];
+                            }
                             $left--;
-                            return '<tg-emoji emoji-id="' . $fallbackId . '">' . $m[0] . '</tg-emoji>';
+                            return '<tg-emoji emoji-id="' . $picked . '">' . $m[0] . '</tg-emoji>';
                         }, $sp);
                     }
                 }
@@ -1020,7 +1051,7 @@ function tg_dress_markup($markup)
         return $markup;
     }
     $table      = tg_emoji_table();
-    $fallbackId = tg_emoji_fallback_id();
+    $fallbackId = tg_emoji_fallback_id('⭐');
     if (!$table && $fallbackId === '') {
         return $markup;
     }
@@ -1042,11 +1073,12 @@ function tg_dress_markup($markup)
                     continue;
                 }
             }
-            if ($anyRe !== null && preg_match($anyRe, $txt)) {
-                $rest = preg_replace($anyRe, '', $txt, 1);
-                if ($rest !== null && trim($rest) !== '') {
+            if ($anyRe !== null && preg_match($anyRe, $txt, $mAny)) {
+                $picked = tg_emoji_fallback_id($mAny[1]);
+                $rest   = preg_replace($anyRe, '', $txt, 1);
+                if ($picked !== '' && $rest !== null && trim($rest) !== '') {
                     $b['text']                 = $rest;
-                    $b['icon_custom_emoji_id'] = $fallbackId;
+                    $b['icon_custom_emoji_id'] = $picked;
                     $markup['inline_keyboard'][$r][$c] = $b;
                 }
             }
@@ -1792,7 +1824,7 @@ function tg_render($type, array $d)
                 'title'    => ($realIp !== '' && $realIp !== $vpnIp)
                     ? '🕵️ <b>PHÁT HIỆN FAKE IP / VPN · ĐÃ TÌM RA IP THẬT</b>'
                     : '🕵️ <b>PHÁT HIỆN BẬT VPN / FAKE IP TRUY CẬP WEB</b>',
-                'throttle' => [$thKey, 120],
+                'throttle' => [$thKey, 300],
                 'rows'     => $vRows,
                 'kb'       => $kbV ? tg_alert_kb($kbV) : null,
             ];
@@ -2212,6 +2244,11 @@ function tg_claim_registration($id, $viaScan)
 function tg_scan_events($force = false)
 {
     if (!tg_enabled()) {
+        return;
+    }
+    // Never dump background web/scanner alerts during interactive Bot button/command turns!
+    if (!$force && isset($GLOBALS['TG_CTX']) && $GLOBALS['TG_CTX'] === 'bot') {
+        tg_autodelete_sweep();
         return;
     }
     $conn = tg_db();

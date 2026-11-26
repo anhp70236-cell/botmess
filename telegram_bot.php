@@ -3048,6 +3048,9 @@ function screen_activity($mode, $arg, $page)
 
 function bot_emoji_gallery($page = 0, $note = '')
 {
+    if (!empty($GLOBALS['CTX']['admin'])) {
+        conv_clear($GLOBALS['CTX']['admin']);
+    }
     $slots = tg_emoji_slots();
     $vault = tg_emoji_vault_read();
     $picks = is_array($vault['picks']) ? $vault['picks'] : [];
@@ -3057,7 +3060,7 @@ function bot_emoji_gallery($page = 0, $note = '')
     $page  = max(0, min((int) $page, $pages - 1));
 
     $cells = [];
-    foreach (array_slice($slots, 0, 18) as $sl) {
+    foreach (array_slice($slots, 0, 24) as $sl) {
         if (!empty($picks[$sl[0]])) {
             $cells[] = '<tg-emoji emoji-id="' . $picks[$sl[0]] . '">' . $sl[0] . '</tg-emoji>';
         }
@@ -3068,17 +3071,18 @@ function bot_emoji_gallery($page = 0, $note = '')
         $t .= $note . "\n";
     }
     $t .= '<blockquote>'
-        . '✨ <b>Cài đặt tự động thông minh (60 Emoji hoặc nhiều hơn không giới hạn):</b> Gửi <b>60, 80, 120+ Emoji Telegram Premium</b> bất kỳ vào đây, Bot sẽ <b>tự lọc hợp lệ 100% theo chuẩn API Telegram, tự phối màu &amp; ý nghĩa đẹp nhất có thể</b> cho toàn bộ giao diện + nút bấm và <b>lưu vĩnh viễn vào MySQL</b>!' . "\n"
-        . '📦 Đã kích hoạt: <b>' . count($picks) . '</b> biểu tượng đồng bộ (Kho lưu: <b>' . count($vault['pool'] ?? []) . '</b> Emoji)'
+        . '✨ <b>Cài đặt tự động thông minh (60 Emoji hoặc nhiều hơn):</b> Bạn chỉ cần <b>gửi thẳng 60, 80, 120+ Emoji Telegram Premium khác nhau</b> vào khung chat (bất cứ lúc nào), Bot sẽ <b>tự phân loại toàn bộ 60+ mẫu khác nhau vào từng mục &amp; nút bấm sao cho gọn đẹp nhất</b> (tuyệt đối không dán trùng 1 icon cho mọi chỗ)!' . "\n"
+        . '📦 Đang phối: <b>' . count($picks) . '</b> vị trí biểu tượng · Kho mẫu: <b>' . count($vault['pool'] ?? []) . '</b> Emoji duy nhất'
         . (!empty($vault['pack_name']) ? ' · Bộ: <code>' . tg_e($vault['pack_name']) . '</code>' : '')
         . '</blockquote>';
     if ($cells) {
         $t .= "\n" . implode(' ', $cells);
     }
 
-    $kbd  = [];
-    $line = [];
-    $end  = min(count($slots), ($page + 1) * $per);
+    $kbd   = [];
+    $kbd[] = [btn('✨ Gửi hàng loạt 60+ Emoji tự phối đẹp toàn bộ', 'ep|bulk', 'primary')];
+    $line  = [];
+    $end   = min(count($slots), ($page + 1) * $per);
     for ($i = $page * $per; $i < $end; $i++) {
         $line[] = btn($slots[$i][0] . "\u{FE0F} " . $slots[$i][1], 'ep|' . $i, '');
         if (count($line) === 3) {
@@ -3102,10 +3106,25 @@ function bot_emoji_gallery($page = 0, $note = '')
 
 function bot_emoji_pick_start($i)
 {
+    if ((string) $i === 'bulk') {
+        conv_clear($GLOBALS['CTX']['admin']);
+        return ui_send(
+            '✨ <b>TỰ ĐỘNG PHỐI 60+ EMOJI TOÀN GIAO DIỆN BOT</b>' . "\n" . hr() . "\n"
+            . 'Hãy chọn và gửi <b>60 Emoji Telegram Premium khác nhau (hoặc 80, 120+ tuỳ ý)</b> trong <b>1 tin nhắn</b> ngay bây giờ:' . "\n"
+            . '• Bot sẽ tự động khớp ngữ nghĩa và phân bổ đều từng Emoji khác nhau cho toàn bộ 60 mục giao diện + hệ thống nút bấm phụ.' . "\n"
+            . '• Lưu vĩnh viễn vào MySQL, gọn gàng và đồng bộ 100%.',
+            kb([[btn('⬅ Quay lại Kho Emoji', 'em|0')]])
+        );
+    }
     $slots = tg_emoji_slots();
     $i     = max(0, min((int) $i, count($slots) - 1));
     conv_set($GLOBALS['CTX']['admin'], 'emoji_pick', ['i' => $i]);
-    ui_send('🎨 <b>ĐỔI RIÊNG ICON</b> ' . $slots[$i][0] . "\u{FE0F} <b>" . tg_e($slots[$i][1]) . "</b>\nGửi 1 Emoji Premium bạn muốn gán cho vị trí này:", kb([[btn('✖ Huỷ', 'em|' . (int) floor($i / 12))]]));
+    ui_send(
+        '🎨 <b>ĐỔI RIÊNG ICON</b> ' . $slots[$i][0] . "\u{FE0F} <b>" . tg_e($slots[$i][1]) . "</b>\n"
+        . '• Gửi <b>1 Emoji Premium</b> để đổi riêng vị trí này.' . "\n"
+        . '• Hoặc gửi <b>nhiều Emoji (60+ cái)</b> nếu muốn Bot tự phối đều cho toàn bộ giao diện!',
+        kb([[btn('✖ Huỷ', 'em|' . (int) floor($i / 12))]])
+    );
 }
 
 function bot_extract_custom_emojis(array $m)
@@ -3176,20 +3195,25 @@ function bot_conv_input(array $conv, $text, array $m)
 
     switch ($mode) {
         case 'emoji_pick':
-            list($ids, ) = bot_extract_custom_emojis($m);
+            list($ids, $hints) = bot_extract_custom_emojis($m);
+            // If Admin sent 2 or more Custom Emojis (e.g. 60 emojis!), auto-harmonize ALL of them across the entire Bot!
+            if (count($ids) >= 2) {
+                return bot_handle_auto_emoji($ids, $hints);
+            }
             $slots = tg_emoji_slots();
             $idx   = isset($d['i']) ? (int) $d['i'] : 0;
             if (!$ids || !isset($slots[$idx])) {
                 conv_set($admin, 'emoji_pick', $d);
-                return ui_send('❌ Hãy gửi <b>Emoji Telegram Premium</b> cho mục này.', kb([[btn('✖ Huỷ', 'em|0')]]));
+                return ui_send('❌ Hãy gửi <b>Emoji Telegram Premium</b> cho mục này (hoặc gửi 60+ Emoji để tự phối toàn bộ).', kb([[btn('✖ Huỷ', 'em|0')]]));
             }
             $vault = tg_emoji_vault_read();
             $vault['picks'][$slots[$idx][0]] = $ids[0];
-            if (empty($vault['default_id'])) {
-                $vault['default_id'] = $ids[0];
+            // Single-slot pick MUST NEVER overwrite all other icons with 1 default emoji!
+            if (count($vault['pool'] ?? []) < 10) {
+                $vault['replace_all'] = false;
             }
             tg_emoji_vault_write($vault);
-            return bot_emoji_gallery((int) floor($idx / 12), '✅ Đã lưu vĩnh viễn Emoji cho <b>' . tg_e($slots[$idx][1]) . '</b>.');
+            return bot_emoji_gallery((int) floor($idx / 12), '✅ Đã lưu vĩnh viễn Emoji riêng cho <b>' . tg_e($slots[$idx][1]) . '</b>.');
 
         case 'maint_notice':
             bot_set_config('maintenance_notice', tg_clip($text, 500));
@@ -4064,7 +4088,7 @@ function pub_pick_fresh($tgUid, array $variants, array &$mem)
     if (!$variants) {
         return '';
     }
-    $seen = isset($mem['seen']) && is_array($mem['seen']) ? $mem['seen'] : [];
+    $seen   = isset($mem['seen']) && is_array($mem['seen']) ? $mem['seen'] : [];
     $chosen = null;
     foreach ($variants as $v) {
         $sig = substr(md5($v), 0, 10);
@@ -4077,19 +4101,18 @@ function pub_pick_fresh($tgUid, array $variants, array &$mem)
     if ($chosen === null) {
         $idx    = ((int) ($mem['turns'] ?? 0)) % count($variants);
         $chosen = $variants[$idx];
-        $seen   = [substr(md5($chosen), 0, 10)];
+        $seen[] = substr(md5($chosen), 0, 10);
     }
-    $mem['seen']  = array_slice($seen, -10);
+    $mem['seen']  = array_slice(array_values(array_unique($seen)), -36);
     $mem['turns'] = (int) ($mem['turns'] ?? 0) + 1;
     pub_conv_set($tgUid, ['seen' => $mem['seen'], 'turns' => $mem['turns']]);
     return $chosen;
 }
 
-/** Classifies customer message intent naturally across Vietnamese (with/without diacritics) & English. */
-function pub_detect_intent($text)
+function pub_fold_ascii($text)
 {
-    $low = function_exists('mb_strtolower') ? mb_strtolower(trim($text), 'UTF-8') : strtolower(trim($text));
-    $ascii = strtr($low, [
+    $low = function_exists('mb_strtolower') ? mb_strtolower(trim((string) $text), 'UTF-8') : strtolower(trim((string) $text));
+    return strtr($low, [
         'à'=>'a','á'=>'a','ả'=>'a','ã'=>'a','ạ'=>'a','ă'=>'a','ắ'=>'a','ằ'=>'a','ẳ'=>'a','ẵ'=>'a','ặ'=>'a','â'=>'a','ấ'=>'a','ầ'=>'a','ẩ'=>'a','ẫ'=>'a','ậ'=>'a',
         'è'=>'e','é'=>'e','ẻ'=>'e','ẽ'=>'e','ẹ'=>'e','ê'=>'e','ế'=>'e','ề'=>'e','ể'=>'e','ễ'=>'e','ệ'=>'e',
         'ì'=>'i','í'=>'i','ỉ'=>'i','ĩ'=>'i','ị'=>'i',
@@ -4097,40 +4120,423 @@ function pub_detect_intent($text)
         'ù'=>'u','ú'=>'u','ủ'=>'u','ũ'=>'u','ụ'=>'u','ư'=>'u','ứ'=>'u','ừ'=>'u','ử'=>'u','ữ'=>'u','ự'=>'u',
         'ỳ'=>'y','ý'=>'y','ỷ'=>'y','ỹ'=>'y','ỵ'=>'y','đ'=>'d',
     ]);
+}
 
-    if (preg_match('/^(cảm ơn|cam on|tks|thanks|thank you|oke|ok|oki|okie|uk|uhm|dạ|da vâng|vâng ạ|hay quá|tốt quá|được rồi|dc roi|vao dc roi|vào được rồi)\b/u', $low) && strlen($ascii) <= 32) {
+/** Reads live product catalog & site maintenance state from MySQL (safe public fields only). */
+function pub_ai_live_catalog()
+{
+    static $cache = null;
+    if ($cache !== null) {
+        return $cache;
+    }
+    $vip   = [];
+    $free  = [];
+    $maint = false;
+    try {
+        $c = bdb();
+        if ($c instanceof mysqli) {
+            $rm = @mysqli_query($c, "SELECT config_value FROM site_config WHERE config_key = 'maintenance_mode' LIMIT 1");
+            if ($rm && ($rw = mysqli_fetch_assoc($rm))) {
+                $maint = ((string) $rw['config_value'] === '1');
+            }
+            $rp = @mysqli_query($c, 'SELECT * FROM products ORDER BY id ASC LIMIT 24');
+            while ($rp && ($p = mysqli_fetch_assoc($rp))) {
+                $nm = trim((string) ($p['name'] ?? ($p['title'] ?? '')));
+                if ($nm === '') {
+                    continue;
+                }
+                $isM = !empty($p['is_maintenance']) || !empty($p['maintenance']);
+                $tag = $nm . ($isM ? ' (đang bảo trì)' : '');
+                $pkg = strtolower((string) ($p['package_type'] ?? ($p['type'] ?? ($p['vip'] ?? ''))));
+                if ($pkg === 'vip' || $pkg === '1' || (!empty($p['is_vip']) && (int) $p['is_vip'] === 1)) {
+                    $vip[] = $tag;
+                } else {
+                    $free[] = $tag;
+                }
+            }
+        }
+    } catch (Throwable $e) {}
+    return $cache = ['vip' => $vip, 'free' => $free, 'maint' => $maint];
+}
+
+/** Safely inspects public status of a website username (exists, locked, active key) — NEVER exposes sensitive fields! */
+function pub_ai_public_user_status($username)
+{
+    $username = trim((string) $username);
+    if ($username === '' || !preg_match('/^[A-Za-z0-9_.-]{3,32}$/', $username)) {
+        return null;
+    }
+    try {
+        $c = bdb();
+        if (!($c instanceof mysqli)) {
+            return null;
+        }
+        $st = @$c->prepare('SELECT username, turns_left, (expiry_date > NOW()) AS exp_ok FROM users WHERE username = ? LIMIT 1');
+        if (!$st) {
+            return null;
+        }
+        $st->bind_param('s', $username);
+        $row = null;
+        if ($st->execute()) {
+            $rs  = $st->get_result();
+            $row = $rs ? $rs->fetch_assoc() : null;
+        }
+        $st->close();
+        if (!$row) {
+            return ['exists' => false, 'username' => $username];
+        }
+        $blocked = false;
+        $bReason = '';
+        $stB = @$c->prepare('SELECT reason FROM tg_user_blocks WHERE username = ? LIMIT 1');
+        if ($stB) {
+            $stB->bind_param('s', $username);
+            if ($stB->execute()) {
+                $rB = $stB->get_result();
+                $rwB = $rB ? $rB->fetch_assoc() : null;
+                if ($rwB) {
+                    $blocked = true;
+                    $bReason = (string) ($rwB['reason'] ?? '');
+                }
+            }
+            $stB->close();
+        }
+        $turns  = isset($row['turns_left']) ? (int) $row['turns_left'] : 0;
+        $hasKey = ((int) ($row['exp_ok'] ?? 0) === 1 && $turns > 0);
+        return [
+            'exists'   => true,
+            'username' => (string) $row['username'],
+            'blocked'  => $blocked,
+            'b_reason' => $bReason,
+            'has_key'  => $hasKey,
+            'turns'    => $turns,
+        ];
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+/** Deep Multi-Topic NLU Classifier across 18+ real customer intents (Vietnamese with/without diacritics + English). */
+function pub_detect_intent($text)
+{
+    $trim  = trim((string) $text);
+    $low   = function_exists('mb_strtolower') ? mb_strtolower($trim, 'UTF-8') : strtolower($trim);
+    $ascii = pub_fold_ascii($trim);
+
+    if ($trim !== '' && $trim[0] === '/' && strpos($low, '/start') !== 0) {
+        return 'unknown_slash';
+    }
+    if (preg_match('/^(cảm ơn|cam on|tks|thanks|thank you|oke|ok|oki|okie|uk|uhm|dạ|da vang|vang a|hay qua|tot qua|duoc roi|dc roi|vao dc roi|xong roi|good|nice|great)\b/u', $ascii) && strlen($ascii) <= 36) {
         return 'thanks_ok';
     }
-    if (preg_match('/^(hi|hello|chào|xin chào|alo|ơi|có ai|ad ơi|bot ơi|shop ơi|anh ơi|bạn ơi|help|cứu)\b/u', $low) && strlen($ascii) <= 28) {
+    if (preg_match('/^(hi|hello|hey|yo|chao|xin chao|alo|oi|co ai|ad oi|bot oi|shop oi|anh oi|ban oi|em oi|hu hu|alo alo)[!?.~\s]*$/', $ascii) || (preg_match('/^(chao|xin chao|hello|hi|alo)\b/', $ascii) && strlen($ascii) <= 24)) {
         return 'greeting';
     }
-    if (preg_match('/\b(tat vpn|tat 1\.1|tat warp|da tat|tắt vpn|tắt 1\.1|tắt warp|tắt proxy|disabled vpn|turned off vpn)\b/u', $low) || preg_match('/\b(tat vpn|tat 1\.1|tat warp)\b/', $ascii)) {
+    if (preg_match('/\b(tat vpn|tat 1\.1|tat warp|da tat vpn|da tat 1\.1|tat proxy|disabled vpn|turned off vpn|off vpn)\b/', $ascii)) {
         return 'vpn_off';
     }
-    if (preg_match('/\b(van bi|van khoa|chua vao duoc|khong vao duoc|load lai van|got it o dau|bam vao dau|sao van|van hien)\b/', $ascii)) {
+    if (preg_match('/\b(may la ai|ban la ai|em la ai|ai tao ra|lap di lap lai|lap lai hoai|tra loi giong|nhu robot|bot ngu|bot ga|thong minh khong|test bot|test ai|noi chuyen khac|doi chu de|biet lam gi|who are you|are you ai|are you a bot)\b/', $ascii)) {
+        return 'meta_ai_chat';
+    }
+    if (preg_match('/\b(may gio|gio la may|hom nay ngay|ngay may|thoi tiet|an com chua|dang lam gi|ngu chua|chuc ngu ngon|buon qua|chan qua|met qua|vui qua|ke chuyen|hat nghe|cuoi len)\b/', $ascii)) {
+        return 'time_mood_chat';
+    }
+    if (preg_match('/^\s*(\d+)\s*([+\-*\/x:])\s*(\d+)\s*(?:[=?]|bang|la|\s)*$/i', str_replace(['may', 'nhieu', 'bao'], '', $ascii)) && !preg_match('/^\d{1,2}\/\d{1,2}$/', trim($ascii))) {
+        return 'quick_math';
+    }
+    if (preg_match('/\b(co tool gi|co nhung gi|co mod gi|co hack gi|danh sach tool|san pham|web co gi|ban gi|game gi|lien quan|pubg|free fire|ff|roblox|ipa|esign|scarlet|trollstore|cert|chung chi|bao tri)\b/', $ascii)) {
+        return 'catalog_tools';
+    }
+    if (preg_match('/\b(mua key|key vip|goi vip|gia bao nhieu|gia vip|bang gia|nap tien|chuyen khoan|mua vip|vip bao nhieu|buy vip|vip key)\b/', $ascii)) {
+        return 'vip_key_buy';
+    }
+    if (preg_match('/\b(key free|lay key|get key|vuot link|link4m|8 tieng|8 gio|khong lay duoc key|nhan key|free key)\b/', $ascii)) {
+        return 'free_key_help';
+    }
+    if (preg_match('/\b(cach dung|dung sao|huong dan|nhap key o dau|kich hoat key|mat luot|tru luot|bam get|khong bam duoc get|how to use)\b/', $ascii)) {
+        return 'how_to_use';
+    }
+    if (preg_match('/\b(quen mat khau|doi mat khau|mat khau|dang ky|tao acc|tao tai khoan|khong dang nhap duoc|sai mat khau|kiem tra acc|kiem tra tai khoan|kiem tra nick|check acc|check nick|reset password)\b/', $ascii)) {
+        return 'account_auth';
+    }
+    if (preg_match('/\b(noi quy|quy dinh|luat web|lam sao khong bi chan|sao hay bi chan|chinh sach|dieu khoan)\b/', $ascii)) {
+        return 'site_rules';
+    }
+    if (preg_match('/\b(gap admin|lien he admin|admin dau|chu web|tele admin|ib admin|nhan admin|contact admin)\b/', $ascii)) {
+        return 'contact_admin';
+    }
+    if (preg_match('/\b(van bi|van khoa|chua vao duoc|khong vao duoc|load lai van|got it|bam vao dau|sao van|van hien|unlocked)\b/', $ascii)) {
         return 'still_locked';
     }
-    if (preg_match('/\b(sao bi|tai sao|vi sao|nguyen nhan|lam gi dau|loi gi|why|reason)\b/', $ascii)) {
+    if (preg_match('/\b(sao bi|tai sao|vi sao|nguyen nhan|lam gi dau|loi gi|o không|oan qua|why blocked|reason)\b/', $ascii)) {
         return 'ask_why';
     }
-    if (preg_match('/\b(mua key|key vip|gia vip|nap|get key|key free|quen mat khau|doi mat khau)\b/', $ascii)) {
-        return 'key_help';
-    }
-    if (preg_match('/\b(mo giup|go giup|mo khoa|go ban|unban|xin loi|lo tay|nham|giam them|mo luon|cuu em|giup minh|giup em|unlock)\b/', $ascii)) {
+    if (preg_match('/\b(mo giup|go giup|mo khoa|go ban|unban|xin loi|lo tay|nham|giam them|mo luon|cuu em|giup minh|giup em|unlock|please unban)\b/', $ascii)) {
         return 'plea_unlock';
     }
-    return 'general';
+    if (preg_match('/\b(please|help me|cannot access|blocked|how can i|what is|thank|hello)\b/', $ascii) && !preg_match('/[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/u', $low)) {
+        return 'english_help';
+    }
+    return 'open_chat';
 }
 
 function pub_extract_mentioned_username($text)
 {
-    if (preg_match('/(?:tài khoản|tai khoan|nick|acc|user|username)\s*(?:là|la|:|=)?\s*([A-Za-z0-9_.-]{3,32})/iu', $text, $m)) {
+    if (preg_match('/(?:tài khoản|tai khoan|nick|acc|user|username)\s*(?:của\s+(?:em|mình|tôi)\s+)?(?:là|la|:|=)?\s*([A-Za-z0-9_.-]{3,32})/iu', $text, $m)) {
         $cand = $m[1];
-        if (!in_array(strtolower($cand), ['của', 'cua', 'em', 'mình', 'minh', 'tôi', 'toi', 'web', 'website'], true)) {
+        if (!in_array(strtolower($cand), ['của', 'cua', 'em', 'mình', 'minh', 'tôi', 'toi', 'web', 'website', 'free', 'vip', 'không', 'khong', 'được', 'duoc', 'bị', 'bi', 'rồi', 'roi'], true)) {
             return $cand;
         }
     }
     return '';
+}
+
+function pub_extract_ip_in_text($text)
+{
+    if (preg_match('/\b((?:\d{1,3}\.){3}\d{1,3})\b/', (string) $text, $m)) {
+        $ip = filter_var($m[1], FILTER_VALIDATE_IP);
+        if ($ip !== false && $ip !== '1.1.1.1' && $ip !== '8.8.8.8') {
+            return $ip;
+        }
+    }
+    if (preg_match('/\b([0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{0,4}){2,7})\b/', (string) $text, $m6)) {
+        $ip6 = filter_var($m6[1], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
+        if ($ip6 !== false) {
+            return strtolower($ip6);
+        }
+    }
+    return '';
+}
+
+/**
+ * Dynamic, non-repetitive conversational responder for open/free-form customer messages when NOT actively locked.
+ * Reflects the user's actual topic naturally and NEVER nags about IMX-... repeatedly!
+ */
+function pub_ai_handle_unlocked_topic($from, $nameSafe, $text, $intent, array &$mem)
+{
+    $ascii        = pub_fold_ascii($text);
+    $cat          = pub_ai_live_catalog();
+    $mentionedUsr = pub_extract_mentioned_username($text);
+    $mentionedIp  = pub_extract_ip_in_text($text);
+    $admLink      = function_exists('sh_contact_url') ? sh_contact_url() : 'https://t.me/iosnea';
+    $admHandle    = (preg_match('~t\.me/([A-Za-z0-9_]+)~', $admLink, $hm)) ? ('@' . $hm[1]) : $admLink;
+
+    // 1. Live IP lookup if customer typed an IP address!
+    if ($mentionedIp !== '') {
+        $bCache = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($mentionedIp) : null;
+        $bDb    = (bot_ipg_ready() && function_exists('ipg_is_banned')) ? ipg_is_banned(bdb(), $mentionedIp) : null;
+        if (($bCache && (empty($bCache['expires_ts']) || (int) $bCache['expires_ts'] > time())) || $bDb) {
+            $whyIp = !empty($bCache['reason']) ? $bCache['reason'] : (!empty($bDb['reason']) ? $bDb['reason'] : 'Đang bị hạn chế bảo mật');
+            $isPerm = ($bDb && ($bDb['ban_type'] ?? '') === 'manual') || (($bCache['ban_type'] ?? '') === 'manual');
+            return pub_pick_fresh($from, [
+                'Mình vừa tra trực tiếp địa chỉ IP <code>' . tg_e($mentionedIp) . '</code> trên máy chủ:' . "\n"
+                . '• Trạng thái: <b>' . ($isPerm ? '⛔ Cấm vĩnh viễn bởi Admin' : '🔒 Đang tạm khoá bảo mật') . '</b>' . "\n"
+                . '• Nguyên nhân: <b>' . tg_e($whyIp) . '</b>' . "\n\n"
+                . ($isPerm
+                    ? ('Vì đây là lệnh cấm trực tiếp từ Admin nên mình không thể tự mở — bạn liên hệ Admin (' . tg_e($admHandle) . ') để được xem xét nhé!')
+                    : 'Bạn hãy sao chép dòng <b>Mã xác minh (IMX-...)</b> đang hiện trên màn hình web của IP đó gửi vào đây để mình xử lý mở/giảm giờ ngay nha!'),
+            ], $mem);
+        }
+        return pub_pick_fresh($from, [
+            'Mình vừa kiểm tra địa chỉ IP <code>' . tg_e($mentionedIp) . '</code> trên cả bộ nhớ khiên và cơ sở dữ liệu: hiện tại IP này <b>hoàn toàn sạch 100%, không hề bị chặn</b> nhé! Bạn có thể truy cập <b>iosmods.xyz</b> bình thường nha.',
+            'Địa chỉ <code>' . tg_e($mentionedIp) . '</code> hiện <b>không có bất kỳ lệnh khoá nào</b> trên hệ thống <b>iosmods.xyz</b> đâu <b>' . $nameSafe . '</b> ơi! Nếu trình duyệt vẫn báo khoá, có thể mạng của bạn đang đi qua một IP khác (như IPv6 hoặc VPN) — bạn chỉ cần tắt VPN rồi tải lại trang nhé.',
+        ], $mem);
+    }
+
+    // 2. Live Username lookup if customer mentioned an account!
+    if ($mentionedUsr !== '') {
+        $uStat = pub_ai_public_user_status($mentionedUsr);
+        if (is_array($uStat)) {
+            if (empty($uStat['exists'])) {
+                return pub_pick_fresh($from, [
+                    'Mình vừa kiểm tra trên hệ thống <b>iosmods.xyz</b> thì chưa thấy tài khoản nào có tên <code>' . tg_e($mentionedUsr) . '</code>. Bạn kiểm tra lại xem có gõ nhầm ký tự nào không, hoặc vào mục <b>Log in → Sign up</b> trên web để đăng ký mới nhé!',
+                    'Tên tài khoản <code>' . tg_e($mentionedUsr) . '</code> hiện chưa tồn tại trong cơ sở dữ liệu của web nha <b>' . $nameSafe . '</b>. Bạn xem lại chính tả tên đăng nhập giúp mình nhé!',
+                ], $mem);
+            }
+            if (!empty($uStat['blocked'])) {
+                return 'Mình vừa tra tài khoản <code>' . tg_e($uStat['username']) . '</code>: hiện tài khoản này <b>đang bị Quản trị viên khoá trực tiếp</b>'
+                    . ($uStat['b_reason'] !== '' ? ' (lý do: <i>' . tg_e($uStat['b_reason']) . '</i>)' : '') . ".\n\n"
+                    . 'Với tài khoản bị Admin khoá thủ công, mình không có quyền mở tự động — bạn nhắn trực tiếp cho Admin (' . tg_e($admHandle) . ') để được hỗ trợ nhé!';
+            }
+            $keyDesc = !empty($uStat['has_key'])
+                ? ('đang có Key hoạt động bình thường (còn <b>' . (int) $uStat['turns'] . ' lượt</b>)')
+                : 'hiện <b>chưa có Key còn lượt</b> (bạn vào mục <b>Keys</b> trên web để nhận Key Free hoặc nhập Key VIP nhé)';
+            return pub_pick_fresh($from, [
+                'Mình vừa kiểm tra trực tiếp tài khoản <code>' . tg_e($uStat['username']) . '</code> cho bạn:' . "\n"
+                . '• Trạng thái tài khoản: <b>🟢 Hoạt động bình thường (không bị khoá)</b>' . "\n"
+                . '• Gói Key hiện tại: ' . $keyDesc . '.',
+                'Tài khoản <code>' . tg_e($uStat['username']) . '</code> trên <b>iosmods.xyz</b> hiện hoàn toàn bình thường, không bị hạn chế gì đâu nha <b>' . $nameSafe . '</b>! Trạng thái Key: ' . $keyDesc . '.',
+            ], $mem);
+        }
+    }
+
+    // 3. Unknown slash command from stranger -> polite natural reply, ZERO command list!
+    if ($intent === 'unknown_slash') {
+        return pub_pick_fresh($from, [
+            'Ở khung chat hỗ trợ này bạn không cần gõ lệnh <code>/</code> đâu nha <b>' . $nameSafe . '</b>! 😊 Bạn cứ nhắn trực tiếp câu hỏi bằng tiếng Việt tự nhiên (ví dụ hỏi về sản phẩm, cách lấy Key, kiểm tra tài khoản, hoặc gửi mã <code>IMX-...</code> nếu bị chặn) là mình trả lời ngay!',
+            'Mình trò chuyện trực tiếp bằng ngôn ngữ tự nhiên nên không dùng các câu lệnh gạch chéo đâu nè. <b>' . $nameSafe . '</b> đang cần mình giúp kiểm tra vấn đề gì trên <b>iosmods.xyz</b> cứ nhắn thẳng cho mình nhé!',
+        ], $mem);
+    }
+
+    // 4. Quick arithmetic / IQ test!
+    if ($intent === 'quick_math' && preg_match('/^\s*(\d+)\s*([+\-*\/x:])\s*(\d+)/i', $ascii, $mm)) {
+        $a = (int) $mm[1];
+        $b = (int) $mm[3];
+        $op = strtolower($mm[2]);
+        $ans = ($op === '+') ? ($a + $b) : (($op === '-') ? ($a - $b) : (($op === '*' || $op === 'x') ? ($a * $b) : ($b !== 0 ? round($a / $b, 4) : 'không chia được cho 0')));
+        return 'Kết quả của <code>' . $a . ' ' . tg_e($mm[2]) . ' ' . $b . '</code> là <b>' . $ans . '</b> nha <b>' . $nameSafe . '</b>! 😄 Đang test độ tỉnh táo của mình đúng không? Cần hỏi gì về <b>iosmods.xyz</b> hay công cụ trên web cứ đố tiếp nhé!';
+    }
+
+    // 5. Meta AI / "Why did you repeat?" / "Who are you?"
+    if ($intent === 'meta_ai_chat') {
+        return pub_pick_fresh($from, [
+            'Mình là trợ lý AI chuyên trách của <b>iosmods.xyz</b> nè <b>' . $nameSafe . '</b>! 🧠 Không chỉ xét duyệt mã mở khoá đâu — bạn hỏi mình về danh sách công cụ đang có trên web, cách lấy Key Free/VIP, kiểm tra trạng thái tài khoản, nội quy bảo mật hay trò chuyện linh tinh mình đều hiểu và trả lời trực tiếp được hết nha!',
+            'Haha mình tỉnh táo 100% đây <b>' . $nameSafe . '</b> ơi! 😄 Bạn cứ đổi chủ đề thoải mái — muốn hỏi trên <b>iosmods.xyz</b> đang có những gói tool nào, cách dùng khỏi bị khiên chặn, kiểm tra nick hay tán gẫu mình đều bắt nhịp theo đúng câu chuyện của bạn luôn!',
+            'Mình nghe và hiểu từng ý bạn nhắn mà! Tại <b>iosmods.xyz</b>, mình vừa kết nối trực tiếp với cơ sở dữ liệu sản phẩm &amp; lá chắn bảo mật 24/7, vừa hỗ trợ giải đáp mọi thắc mắc cho thành viên. Bạn muốn hỏi thử về mục nào trước nè?',
+        ], $mem);
+    }
+
+    // 6. Time / Mood / Smalltalk
+    if ($intent === 'time_mood_chat') {
+        $nowStr = date('H:i') . ' ngày ' . date('d/m/Y');
+        if (strpos($ascii, 'gio') !== false || strpos($ascii, 'ngay') !== false) {
+            return 'Bây giờ theo giờ Việt Nam là <b>' . $nowStr . '</b> nha <b>' . $nameSafe . '</b>! 🕒 Mình vẫn đang trực 24/7 trên <b>iosmods.xyz</b>, bạn cần mình hỗ trợ gì không nè?';
+        }
+        if (strpos($ascii, 'ngu ngon') !== false) {
+            return 'Chúc <b>' . $nameSafe . '</b> ngủ thật ngon và mơ đẹp nhé! 🌙 Khi nào thức dậy cần dùng tool trên <b>iosmods.xyz</b> thì cứ ghé nha, mình canh web xuyên đêm luôn!';
+        }
+        if (strpos($ascii, 'buon') !== false || strpos($ascii, 'met') !== false || strpos($ascii, 'chan') !== false) {
+            return pub_pick_fresh($from, [
+                'Ôi sao thế <b>' . $nameSafe . '</b>? Nghỉ ngơi uống miếng nước cho thư giãn đầu óc xíu đi nè! 💙 Có chuyện gì vướng mắc trên web hay ngoài lề cứ kể mình nghe, giúp được gì là mình hỗ trợ hết mình luôn.',
+                'Đừng buồn hay căng thẳng quá nha <b>' . $nameSafe . '</b>! Làm ván game giải trí hoặc nghỉ mắt một lát cho khỏe nè — còn mọi thứ trên <b>iosmods.xyz</b> cứ để mình lo cho!',
+            ], $mem);
+        }
+        return pub_pick_fresh($from, [
+            'Mình chạy bằng điện máy chủ nên không biết đói, trực xuyên ngày đêm cùng anh em trên <b>iosmods.xyz</b> luôn! 😄 Còn <b>' . $nameSafe . '</b> hôm nay thế nào, trải nghiệm web có mượt không?',
+            'Lúc này (' . date('H:i') . ') mình đang vừa canh khiên chống DDoS cho <b>iosmods.xyz</b> vừa ngồi tám chuyện với <b>' . $nameSafe . '</b> đây! Bạn cần tìm hiểu công cụ nào trên web không?',
+        ], $mem);
+    }
+
+    // 7. Live Product Catalog / Tools / Maintenance status!
+    if ($intent === 'catalog_tools') {
+        $allNames = array_merge($cat['vip'], $cat['free']);
+        $listTxt  = $allNames
+            ? ('Hiện trên <b>iosmods.xyz</b> đang cập nhật trực tiếp <b>' . count($allNames) . ' mục công cụ/gói</b>: <b>' . tg_e(implode(', ', array_slice($allNames, 0, 8))) . '</b>' . (count($allNames) > 8 ? '...' : '') . '.')
+            : 'Hiện trên <b>iosmods.xyz</b> cung cấp đầy đủ các gói công cụ &amp; bản mod hỗ trợ iOS chia theo hai phân mục <b>Free</b> và <b>VIP</b>.';
+        $maintTxt = $cat['maint']
+            ? ' ⚠️ <i>Lưu ý: Hiện hệ thống đang bật chế độ bảo trì nâng cấp tạm thời, bạn chờ Admin mở lại trong ít phút nhé!</i>'
+            : ' 🟢 <i>Tất cả máy chủ hiện đang mở hoạt động bình thường!</i>';
+        return pub_pick_fresh($from, [
+            $listTxt . $maintTxt . "\n\n"
+            . '👉 Bạn chỉ cần đăng nhập trên <b>iosmods.xyz</b>, vào tab <b>Keys</b> kích hoạt Key (Free hoặc VIP) rồi sang tab <b>Home / Tools</b> bấm <b>Get</b> ở sản phẩm tương ứng là mở được ngay nhé!',
+            'Mình vừa xem trực tiếp danh mục trên máy chủ cho <b>' . $nameSafe . '</b> nè:' . "\n"
+            . '• ' . $listTxt . "\n"
+            . '• Trạng thái web:' . $maintTxt . "\n\n"
+            . 'Bạn đang quan tâm bản <b>Free</b> hay gói <b>VIP</b> để mình hướng dẫn chi tiết hơn?',
+        ], $mem);
+    }
+
+    // 8. Buying VIP Key
+    if ($intent === 'vip_key_buy') {
+        return pub_pick_fresh($from, [
+            'Để mua <b>Key VIP</b> (nhiều lượt sử dụng, mở toàn bộ công cụ VIP tốc độ cao, không cần vượt link chờ 8 giờ), bạn nhắn tin trực tiếp cho Quản trị viên chính thức tại <b>' . tg_e($admHandle) . '</b> nhé!' . "\n\n"
+            . 'Sau khi nhận mã Key từ Admin, bạn đăng nhập vào <b>iosmods.xyz</b> → dán mã vào ô <b>Activate Key</b> là tài khoản nhận đủ lượt VIP ngay lập tức.',
+            'Gói <b>Key VIP</b> của <b>iosmods.xyz</b> được cấp trực tiếp qua Admin (<b>' . tg_e($admHandle) . '</b>) để đảm bảo an toàn 100%, tránh giả mạo. Bạn bấm liên hệ <b>' . tg_e($admHandle) . '</b> để xem bảng giá theo ngày/tháng và nhận mã kích hoạt liền tay nha!',
+        ], $mem);
+    }
+
+    // 9. Getting Free Key
+    if ($intent === 'free_key_help') {
+        return pub_pick_fresh($from, [
+            'Hướng dẫn nhận <b>Key Free</b> chuẩn 100% không bị lỗi trên <b>iosmods.xyz</b>:' . "\n"
+            . '1️⃣ <b>Tắt hẳn VPN / 1.1.1.1 WARP / DNS chặn quảng cáo</b> và dùng trình duyệt chính (Safari / Chrome thường, không dùng tab Ẩn danh).' . "\n"
+            . '2️⃣ Đăng nhập tài khoản → mở mục <b>Keys</b> → bấm nhận Key Free và hoàn tất bước vượt link tự nhiên (không dùng script bypass).' . "\n"
+            . '3️⃣ Sao chép mã Key vừa nhận dán vào ô kích hoạt là có lượt dùng ngay (mỗi 8 giờ nhận lại được 1 lần nhé)!',
+            'Về <b>Key Free</b> trên <b>iosmods.xyz</b>: mỗi tài khoản/thiết bị được nhận miễn phí định kỳ mỗi 8 tiếng tại mục <b>Keys</b>. Lưu ý nhỏ là trước khi bấm lấy key, <b>' . $nameSafe . '</b> nhớ tắt ứng dụng <code>1.1.1.1</code> hoặc VPN để hệ thống không khoá bảo vệ 15 phút nha!',
+        ], $mem);
+    }
+
+    // 10. How to use tools / turns
+    if ($intent === 'how_to_use') {
+        return pub_pick_fresh($from, [
+            'Cách sử dụng trên <b>iosmods.xyz</b> rất gọn luôn:' . "\n"
+            . '• <b>Bước 1:</b> Đăng nhập tài khoản của bạn.' . "\n"
+            . '• <b>Bước 2:</b> Vào mục <b>Keys</b> nhận &amp; nhập mã Key (Free hoặc VIP) để nạp lượt.' . "\n"
+            . '• <b>Bước 3:</b> Quay về trang chủ, chọn đúng công cụ phù hợp với gói Key rồi bấm nút <b>Get</b> (mỗi lần mở thành công sẽ trừ 1 lượt; lưu ý đừng bấm nhấp liên tục vào nút Get khi chưa nạp Key kẻo khiên tự khoá 5 phút nhé!).',
+            'Nếu bạn thấy nút <b>Get</b> không bấm được hoặc đẩy sang trang đăng nhập thì thường do 1 trong 3 nguyên nhân: chưa đăng nhập, tài khoản hết lượt/hết hạn Key, hoặc bạn đang dùng Key Free nhưng bấm vào mục dành riêng cho <b>VIP</b>. Bạn nạp đúng loại Key rồi bấm 1 lần là mở mượt ngay!',
+        ], $mem);
+    }
+
+    // 11. Account / Password / Login help
+    if ($intent === 'account_auth') {
+        return pub_pick_fresh($from, [
+            'Về tài khoản &amp; mật khẩu trên <b>iosmods.xyz</b>:' . "\n"
+            . '• Nếu bạn muốn mình kiểm tra xem nick có đang hoạt động tốt hay còn lượt Key không, cứ nhắn <i>"kiểm tra tài khoản tên_nick"</i> vào đây mình tra liền!' . "\n"
+            . '• Nếu bạn <b>quên mật khẩu</b> cần cấp lại, hãy nhắn tên tài khoản trực tiếp cho Admin tại <b>' . tg_e($admHandle) . '</b> để Admin đặt lại mật khẩu mới an toàn cho bạn nhé.',
+            'Nếu bạn không đăng nhập được trên <b>iosmods.xyz</b>, hãy kiểm tra kỹ chữ hoa/thường trong tên tài khoản và tắt bộ gõ tiếng Việt khi nhập mật khẩu nha. Trường hợp quên mật khẩu thì chỉ Admin (<b>' . tg_e($admHandle) . '</b>) mới có quyền cấp lại cho bạn, còn nếu muốn kiểm tra tình trạng nick thì nhắn tên nick cho mình xem giúp ngay!',
+        ], $mem);
+    }
+
+    // 12. Website Security Rules
+    if ($intent === 'site_rules') {
+        return pub_pick_fresh($from, [
+            '📌 <b>4 quy tắc vàng để dùng iosmods.xyz mượt 100% không bao giờ bị chặn:</b>' . "\n"
+            . '1. Không bật <b>VPN, Proxy, 1.1.1.1 WARP</b> khi vào web hoặc lấy Key Free.' . "\n"
+            . '2. Không dùng tiện ích chèn Script (Tampermonkey/Userscript) hay mở F12/DevTools soi trang trên máy tính.' . "\n"
+            . '3. Nạp Key trước khi bấm <b>Get</b> — không bấm nhấp dồn dập vào nút Get hoặc nút nhập Key nhiều lần liên tiếp.' . "\n"
+            . '4. Không tạo nhiều tài khoản phụ trên cùng máy để lách giới hạn 8 giờ của Key Free.',
+            'Lá chắn của <b>iosmods.xyz</b> chỉ chặn tự động khi phát hiện bật VPN/1.1.1.1, chạy công cụ tự động/Userscript, hoặc bấm spam dồn dập vào nút Get/nhập sai Key nhiều lần thôi <b>' . $nameSafe . '</b> ạ. Chỉ cần dùng mạng Wi-Fi/4G gốc và thao tác bình thường là 100% không bao giờ bị chặn nhầm!',
+        ], $mem);
+    }
+
+    // 13. Contact Admin
+    if ($intent === 'contact_admin') {
+        return pub_pick_fresh($from, [
+            'Bạn có thể nhắn tin trực tiếp cho Quản trị viên chính thức của <b>iosmods.xyz</b> tại Telegram: <b>' . tg_e($admHandle) . '</b> nhé! Nếu đang có vấn đề về kết nối hay cần kiểm tra trước hồ sơ thì cứ nói mình tra giúp luôn cho nhanh nha.',
+            'Telegram chính thức duy nhất của Admin quản lý <b>iosmods.xyz</b> là <b>' . tg_e($admHandle) . '</b> nha <b>' . $nameSafe . '</b>! Bạn cẩn thận tránh các tài khoản giả mạo khác nhé.',
+        ], $mem);
+    }
+
+    // 14. English Support
+    if ($intent === 'english_help') {
+        return pub_pick_fresh($from, [
+            'Hello <b>' . $nameSafe . '</b>! 👋 Your current session is not showing an active lock in my database. If you see a restriction screen on <b>iosmods.xyz</b>, please copy the <b>Verification Code (IMX-...)</b> and paste it here so I can check and unlock it for you — or ask me anything about Free/VIP keys and tools!',
+            'Hi <b>' . $nameSafe . '</b>! I am the 24/7 AI Assistant for <b>iosmods.xyz</b>. How can I help you today — checking an <code>IMX-...</code> verification code, getting a Free/VIP key, or checking your website account?',
+        ], $mem);
+    }
+
+    // 15. VPN off / Still locked / Ask why / Plea when NO active ban was matched to this chat yet
+    if (in_array($intent, ['vpn_off', 'still_locked', 'ask_why', 'plea_unlock'], true)) {
+        $mem['asked_imx'] = (int) ($mem['asked_imx'] ?? 0) + 1;
+        pub_conv_set($from, ['asked_imx' => $mem['asked_imx']]);
+        if ($intent === 'vpn_off') {
+            return pub_pick_fresh($from, [
+                'Tốt quá! Nếu bạn đã tắt hẳn VPN / 1.1.1.1 rồi thì giờ mở lại tab <b>iosmods.xyz</b> và tải lại trang nhé — nếu hiện màn hình <b>Automatically Unlocked</b> thì bấm <b>Got it</b> là vào thẳng web, còn nếu vẫn còn đếm ngược kèm mã <code>IMX-...</code> thì chép mã đó gửi qua đây mình gỡ nốt cho!',
+                'Sau khi tắt VPN, địa chỉ IP của bạn đã quay về mạng gốc rồi đó! Bạn tải lại trang <b>iosmods.xyz</b> (nếu thấy nút <b>Got it</b> thì bấm xác nhận). Trường hợp màn hình vẫn khoá thì gửi mã <code>IMX-...</code> hoặc địa chỉ IP hiện tại vào đây mình mở ngay nhé!',
+            ], $mem);
+        }
+        return pub_pick_fresh($from, [
+            'Hiện tại mình quét theo tài khoản Telegram này thì chưa thấy lệnh khoá nào đang gắn sẵn (có thể bạn vừa đổi mạng hoặc chưa gửi mã phiên).' . "\n\n"
+            . '👉 Bạn mở trang <b>iosmods.xyz</b> đang bị chặn, bấm <b>Copy</b> dòng mã <code>IMX-...</code> (hoặc nhắn tên tài khoản web / địa chỉ IP của bạn) vào đây để mình bắt đúng hồ sơ và xử lý liền nhé!',
+            'Để mình tra đúng phiên đang khoá của <b>' . $nameSafe . '</b> mà không nhầm sang người khác, bạn gửi giúp mình dòng mã <code>IMX-...</code> trên màn hình chặn (hoặc cho mình biết tên tài khoản website của bạn) nha!',
+        ], $mem);
+    }
+
+    // 16. Open-Topic Intelligent Conversational Synthesis (NEVER loops the same canned IMX prompt!)
+    $snippet = tg_e(tg_clip($text, 48));
+    $alreadyHintedImx = !empty($mem['asked_imx']);
+    if (!$alreadyHintedImx) {
+        $mem['asked_imx'] = 1;
+        pub_conv_set($from, ['asked_imx' => 1]);
+    }
+
+    $openPool = [
+        'Mình nghe rõ ý của <b>' . $nameSafe . '</b> về <i>"' . $snippet . '"</i> rồi! 😊 Mình có thể tra cứu trực tiếp cho bạn mọi thứ trên <b>iosmods.xyz</b> như: danh sách công cụ Free/VIP đang mở, kiểm tra tình trạng nick web, hướng dẫn lấy Key, hoặc xét mở khoá bảo mật — bạn muốn mình xem phần nào cụ thể hơn nè?',
+        'Về chuyện <i>"' . $snippet . '"</i> bạn vừa nhắn: hiện tại kết nối của bạn bên mình không ghi nhận lệnh cấm nào cả. Nếu bạn đang cần tìm hiểu công cụ iOS trên <b>iosmods.xyz</b>, hỏi cách nạp Key hay kiểm tra một tài khoản cụ thể thì cứ nói rõ tên mục hoặc tên nick cho mình nhé!',
+        'Câu của <b>' . $nameSafe . '</b> thú vị đấy! 😄 Mình trực ở đây 24/7 cho <b>iosmods.xyz</b> nên ngoài việc gỡ khoá tự động, bạn hỏi về gói sản phẩm, bảo trì, quy định dùng web hay tâm sự giải khuây mình đều tiếp chuyện nhiệt tình luôn. Bạn đang quan tâm mục nào nhất trên web?',
+        'Mình vẫn đang theo dõi cuộc trò chuyện với <b>' . $nameSafe . '</b> nè! Nếu ý bạn liên quan đến thao tác trên <b>iosmods.xyz</b> (như lỗi nút Get, lấy Key Free 8h, nâng cấp VIP hay kiểm tra tài khoản), bạn nói thêm 1 chi tiết nhỏ nữa là mình chỉ cách xử lý gọn ngay!',
+        'Oke <b>' . $nameSafe . '</b> ơi, mình hiểu câu <i>"' . $snippet . '"</i> của bạn rồi! Cần mình kiểm tra nhanh tài khoản website, tra cứu địa chỉ IP hay xem danh sách tool đang hoạt động trên <b>iosmods.xyz</b> lúc này không?',
+    ];
+    return pub_pick_fresh($from, $openPool, $mem);
 }
 
 function pub_was_recently_forgiven($ip, $tgUid)
@@ -4289,19 +4695,16 @@ function bot_public_appeal_handler(array $m)
     // Handle polite thanks / acknowledgement naturally when NOT submitting a new IMX code!
     if ($typedImx === '' && $intent === 'thanks_ok') {
         pub_send_reply($chatId, pub_pick_fresh($from, [
-            'Không có gì đâu nha <b>' . $nameSafe . '</b>! Chúc bạn trải nghiệm trên <b>iosmods.xyz</b> mượt mà nhé. Cần gì cứ nhắn mình!',
-            'Oke <b>' . $nameSafe . '</b> nè! 😊 Nhớ tắt VPN và thao tác vừa phải để không bị khiên tự động chặn nhầm nhé.',
-            'Rất vui được hỗ trợ bạn! Nếu lúc nào cần kiểm tra lại kết nối hay tài khoản thì cứ nhắn mình nha.',
+            'Không có gì đâu nha <b>' . $nameSafe . '</b>! Chúc bạn trải nghiệm trên <b>iosmods.xyz</b> mượt mà nhé. Cần hỏi thêm bất cứ điều gì cứ nhắn mình!',
+            'Oke <b>' . $nameSafe . '</b> nè! 😊 Nhớ tắt VPN và thao tác vừa phải để dùng web êm ru nhé.',
+            'Rất vui được hỗ trợ bạn! Khi nào cần kiểm tra tài khoản, hỏi về công cụ hay kết nối thì cứ gọi mình nha.',
         ], $mem));
         return;
     }
 
-    // Handle questions about buying VIP / getting Free Key
-    if ($typedImx === '' && $intent === 'key_help' && (!$info || empty($info['active']))) {
-        pub_send_reply($chatId, pub_pick_fresh($from, [
-            'Về phần <b>Key trên iosmods.xyz</b>: bạn vào mục <b>Keys</b> trên thanh điều hướng để nhận <b>Key Free</b> (mỗi 8 giờ/lần, lưu ý tắt VPN/1.1.1.1 khi vượt link) hoặc vào mục <b>Shop</b> / liên hệ Admin để mua <b>Key VIP</b> nhiều lượt nhé! Hiện kết nối của bạn không bị khoá bảo mật đâu.',
-            'Hiện tại mạng của bạn không bị chặn trên hệ thống. Để lấy <b>Key Free</b> hoặc kích hoạt <b>Key VIP</b>, bạn đăng nhập trên <b>iosmods.xyz</b> rồi mở tab <b>Keys</b> nhé (nếu cần mua gói VIP hoặc đổi mật khẩu thì nhắn trực tiếp cho Admin nha).',
-        ], $mem));
+    // Even if an active lock exists in memory, if the user explicitly asks an unrelated question (catalog, VIP/Free key, rules, math, meta AI, mood/time, contact admin), answer THAT topic smartly instead of ignoring their question!
+    if ($typedImx === '' && in_array($intent, ['unknown_slash', 'quick_math', 'meta_ai_chat', 'time_mood_chat', 'catalog_tools', 'vip_key_buy', 'free_key_help', 'how_to_use', 'site_rules', 'contact_admin'], true)) {
+        pub_send_reply($chatId, pub_ai_handle_unlocked_topic($from, $nameSafe, $text, $intent, $mem));
         return;
     }
 
@@ -4314,37 +4717,23 @@ function bot_public_appeal_handler(array $m)
             pub_conv_set($from, ['step' => '', 'last_verdict' => 'clean_unlocked']);
             pub_send_reply($chatId, pub_pick_fresh($from, [
                 'Mình vừa đối chiếu trực tiếp mã <code>' . tg_e($typedImx) . '</code> trên cả bộ nhớ khiên và cơ sở dữ liệu thì hiện tại <b>không còn lệnh cấm hay tạm khoá nào đang áp dụng</b> cho mã này (hoặc thời gian tạm khoá đã kết thúc).' . "\n\n"
-                . '👉 Bạn mở lại <b>iosmods.xyz</b>, tải lại trang (F5 / kéo xuống làm mới); nếu thấy thông báo <b>Automatically Unlocked</b> thì bấm nút <b>Got it</b> là vào web bình thường. Nếu trên màn hình của bạn đang hiện một <b>mã IMX-... mới khác</b>, hãy sao chép mã mới nhất đó gửi qua đây cho mình nhé!',
+                . '👉 Bạn tắt hẳn VPN/1.1.1.1 (nếu đang bật), mở lại <b>iosmods.xyz</b> và tải lại trang; khi màn hình hiện <b>Automatically Unlocked</b> thì bấm nút <b>Got it</b> là vào thẳng web bình thường. Nếu trên màn hình của bạn đang hiện một <b>mã IMX-... mới khác</b>, hãy sao chép mã mới nhất đó gửi qua đây cho mình nhé!',
                 'Mã <code>' . tg_e($typedImx) . '</code> này hiện đã hết hiệu lực khoá trên hệ thống rồi <b>' . $nameSafe . '</b> ơi.' . "\n\n"
-                . 'Bạn thử tắt hẳn ứng dụng VPN/1.1.1.1 (nếu có), tải lại trang <b>iosmods.xyz</b> rồi bấm <b>Got it</b> nhé. Trường hợp bạn vẫn thấy khung chặn kèm mã <code>IMX-...</code> mới trên màn hình thì dán mã mới đó vào đây mình kiểm tra lại ngay!',
-            ], $mem));
-            return;
-        }
-
-        if ($intent === 'still_locked') {
-            pub_send_reply($chatId, pub_pick_fresh($from, [
-                'Theo dữ liệu mình vừa quét theo phiên gần nhất thì chưa thấy lệnh khoá đang bật — rất có thể bạn đang dùng một địa chỉ IP khác hoặc trình duyệt vừa bật VPN nên sinh ra mã mới.' . "\n\n"
-                . 'Bạn nhìn trên màn hình khoá hiện tại của <b>iosmods.xyz</b>, bấm nút <b>Copy</b> ở dòng <b>Verification Code (IMX-...)</b> rồi dán vào đây để mình tra đúng phiên đang chặn bạn nhé!',
-                'Để mình bắt chính xác địa chỉ mạng đang chặn bạn lúc này, bạn quay sang tab <b>iosmods.xyz</b> đang bị khoá, chép dòng mã <code>IMX-...</code> mới nhất trên màn hình gửi vào đây giúp mình nha (hoặc cho mình biết tên tài khoản web của bạn)!',
+                . 'Bạn thử tắt hẳn ứng dụng VPN/1.1.1.1 (nếu có), tải lại trang <b>iosmods.xyz</b> rồi bấm <b>Got it</b> xác nhận nhé. Trường hợp bạn vẫn thấy khung chặn kèm mã <code>IMX-...</code> mới trên màn hình thì dán mã mới đó vào đây mình kiểm tra lại ngay!',
             ], $mem));
             return;
         }
 
         if ($intent === 'greeting') {
             pub_send_reply($chatId, pub_pick_fresh($from, [
-                'Chào <b>' . $nameSafe . '</b>! 👋 Bạn đang bị chặn truy cập trên <b>iosmods.xyz</b> hay cần kiểm tra gì thế? Bạn gửi <b>Mã xác minh (IMX-...)</b> trên màn hình khoá (hoặc tên tài khoản web) để mình kiểm tra ngay cho nhé!',
-                'Ơi mình nghe đây <b>' . $nameSafe . '</b>! Nếu web đang hiện bảng hạn chế truy cập, bạn bấm <b>Copy</b> mã <code>IMX-...</code> trên màn hình rồi dán qua đây mình xem nguyên nhân và hỗ trợ mở liền nha.',
-                'Xin chào <b>' . $nameSafe . '</b>! Mình trực hỗ trợ 24/7 cho <b>iosmods.xyz</b> đây. Bạn gửi mã <code>IMX-...</code> trên màn hình chặn hoặc mô tả vấn đề bạn đang gặp phải nhé!',
+                'Chào <b>' . $nameSafe . '</b>! 👋 Mình là trợ lý AI 24/7 của <b>iosmods.xyz</b>. Bạn đang cần hỗ trợ mở khoá (gửi mã <code>IMX-...</code>), kiểm tra tài khoản, hay tìm hiểu về công cụ &amp; Key trên web cứ nhắn tự nhiên cho mình nhé!',
+                'Ơi mình nghe đây <b>' . $nameSafe . '</b>! 😊 Bạn đang gặp màn hình khoá hay muốn hỏi về sản phẩm, Key Free/VIP trên <b>iosmods.xyz</b> thế? Cứ nói rõ mình giải đáp liền nha!',
+                'Xin chào <b>' . $nameSafe . '</b>! Mình trực hỗ trợ 24/7 cho <b>iosmods.xyz</b> đây. Bạn muốn tra mã <code>IMX-...</code>, kiểm tra nick web hay hỏi cách sử dụng công cụ cứ nhắn mình nhé!',
             ], $mem));
             return;
         }
 
-        pub_send_reply($chatId, pub_pick_fresh($from, [
-            'Mình hiểu ý bạn rồi, nhưng hiện tại mình chưa thấy phiên mạng nào của bạn gắn với mã khoá đang hoạt động.' . "\n\n"
-            . 'Bạn mở màn hình đang bị chặn trên <b>iosmods.xyz</b>, bấm nút <b>Copy</b> ở ô <b>Verification Code</b> (dạng <code>IMX-XXXXXX-...</code>) rồi gửi mã đó kèm tên tài khoản (nếu có) vào đây để mình kiểm tra chính xác 100% nhé!',
-            'Để mình tra đúng hồ sơ chặn của bạn trên máy chủ mà không nhầm với người khác, <b>' . $nameSafe . '</b> sao chép giúp mình dòng mã <code>IMX-...</code> đang hiện trên trang <b>iosmods.xyz</b> gửi vào đây nha!',
-            'Hiện mình cần <b>Mã xác minh (IMX-...)</b> trên màn hình khoá của bạn để đối chiếu nhật ký bảo mật. Bạn bấm nút <b>Copy</b> ngay cạnh mã trên web rồi dán vào khung chat này giúp mình nhé!',
-        ], $mem));
+        pub_send_reply($chatId, pub_ai_handle_unlocked_topic($from, $nameSafe, $text, $intent, $mem));
         return;
     }
 
@@ -4662,9 +5051,10 @@ function bot_on_message(array $m)
         tg_autodelete_register($chatId, $msgId);
     }
 
-    // Check if Admin sent Telegram Custom Emoji(s) -> auto-ingest & replace 100% of bot icons!
+    // Check if Admin sent Telegram Custom Emoji(s) -> if >=2 emojis, ALWAYS auto-harmonize all 60+ slots (even inside emoji_pick)!
     list($ceIds, $ceHints) = bot_extract_custom_emojis($m);
-    if ($ceIds && (!$convNow || $convNow['mode'] !== 'emoji_pick') && ($text === '' || $text[0] !== '/')) {
+    if ($ceIds && (count($ceIds) >= 2 || !$convNow || $convNow['mode'] !== 'emoji_pick') && ($text === '' || $text[0] !== '/')) {
+        conv_clear($from);
         return bot_handle_auto_emoji($ceIds, $ceHints);
     }
 
@@ -5009,7 +5399,7 @@ function bot_route($data, array $origMessage = [])
         case 'em':
             return bot_emoji_gallery((int) $a);
         case 'ep':
-            return bot_emoji_pick_start((int) $a);
+            return bot_emoji_pick_start($a === 'bulk' ? 'bulk' : (int) $a);
         case 'eo':
             tg_store_update('settings', function ($s) {
                 $s['emoji_off'] = empty($s['emoji_off']);
@@ -5097,23 +5487,13 @@ function bot_self_url()
     return bot_site_base_url() . $path;
 }
 
-function bot_setup()
+/**
+ * Strictly hides ALL `/` commands from strangers (`default`, `all_private_chats`, `all_group_chats` -> EMPTY)
+ * and binds the Admin command menu EXCLUSIVELY to verified Admin Telegram chat IDs!
+ */
+function bot_sync_command_scopes()
 {
-    $lines   = [];
-    $me      = tg_api_raw('getMe');
-    $lines[] = (!empty($me['ok']) ? '✅' : '❌') . ' Bot: ' . (!empty($me['ok']) ? '@' . $me['result']['username'] : 'Lỗi token');
-
-    $url = bot_self_url();
-    $wh  = tg_api_raw('setWebhook', [
-        'url'             => $url,
-        'secret_token'    => (string) tg_cfg('webhook_secret', ''),
-        'allowed_updates' => ['message', 'callback_query'],
-        'max_connections' => 20,
-    ]);
-    $lines[] = (!empty($wh['ok']) ? '✅' : '❌') . ' Webhook: ' . $url;
-
-    $cmds = [
-        ['command' => 'start',   'description' => 'Hỗ trợ mở khoá tự động / Mở bảng Quản trị'],
+    $admCmds = [
         ['command' => 'menu',    'description' => 'Mở bảng điều khiển trung tâm (Admin)'],
         ['command' => 'tuyet',   'description' => 'Bật / Tắt hiệu ứng tuyết rơi giao diện chính'],
         ['command' => 'logo',    'description' => 'Đổi Logo toàn website iosmods.xyz & độ lấp loá'],
@@ -5133,9 +5513,52 @@ function bot_setup()
         ['command' => 'health',  'description' => 'Kiểm tra sức khoẻ hệ thống'],
         ['command' => 'cancel',  'description' => 'Huỷ thao tác đang nhập'],
     ];
-    tg_api_raw('setMyCommands', ['commands' => $cmds]);
-    tg_api_raw('setMyShortDescription', ['short_description' => 'Trợ lý Mở Khoá Bảo Mật Tự Động 24/7 · iosmods.xyz']);
-    tg_api_raw('setMyDescription', ['description' => "👋 Chào mừng bạn đến với Trợ lý Bảo mật 24/7 của iosmods.xyz!\n\nNếu bạn vừa bấm sang từ màn hình khoá, hãy dán Mã xác minh (IMX-...) gửi vào đây để hệ thống kiểm tra và hỗ trợ mở khoá ngay lập tức."]);
+
+    foreach (['default', 'all_private_chats', 'all_group_chats', 'all_chat_administrators'] as $pubScope) {
+        tg_api_raw('deleteMyCommands', ['scope' => ['type' => $pubScope]], 4);
+        foreach (['vi', 'en'] as $lc) {
+            tg_api_raw('deleteMyCommands', ['scope' => ['type' => $pubScope], 'language_code' => $lc], 4);
+        }
+    }
+    tg_api_raw('setChatMenuButton', ['menu_button' => ['type' => 'default']], 4);
+
+    foreach (tg_admin_ids() as $admId) {
+        $cid = (int) $admId;
+        if ($cid > 0) {
+            tg_api_raw('setMyCommands', [
+                'commands' => $admCmds,
+                'scope'    => ['type' => 'chat', 'chat_id' => $cid],
+            ], 4);
+            tg_api_raw('setChatMenuButton', [
+                'chat_id'     => $cid,
+                'menu_button' => ['type' => 'commands'],
+            ], 4);
+        }
+    }
+    tg_store_update('cmd_scope_v13', function () {
+        return ['synced_at' => time()];
+    });
+}
+
+function bot_setup()
+{
+    $lines   = [];
+    $me      = tg_api_raw('getMe');
+    $lines[] = (!empty($me['ok']) ? '✅' : '❌') . ' Bot: ' . (!empty($me['ok']) ? '@' . $me['result']['username'] : 'Lỗi token');
+
+    $url = bot_self_url();
+    $wh  = tg_api_raw('setWebhook', [
+        'url'             => $url,
+        'secret_token'    => (string) tg_cfg('webhook_secret', ''),
+        'allowed_updates' => ['message', 'callback_query'],
+        'max_connections' => 20,
+    ]);
+    $lines[] = (!empty($wh['ok']) ? '✅' : '❌') . ' Webhook: ' . $url;
+
+    bot_sync_command_scopes();
+    $lines[] = '✅ Đã ẩn 100% lệnh đối với người lạ (chỉ Admin thấy menu lệnh)';
+    tg_api_raw('setMyShortDescription', ['short_description' => 'Trợ lý AI Bảo Mật & Hỗ Trợ 24/7 · iosmods.xyz']);
+    tg_api_raw('setMyDescription', ['description' => "👋 Chào mừng bạn đến với Trợ lý AI 24/7 của iosmods.xyz!\n\nHãy nhắn trực tiếp vấn đề bạn cần hỗ trợ hoặc dán Mã xác minh (IMX-...) từ màn hình khoá để hệ thống kiểm tra và mở khoá ngay lập tức."]);
 
     while (ob_get_level() > 0) {
         @ob_end_clean();
@@ -5201,6 +5624,9 @@ if ($duplicate) {
 }
 
 try {
+    if (empty(tg_store_read('cmd_scope_v13')['synced_at'])) {
+        bot_sync_command_scopes();
+    }
     tg_autodelete_sweep();
     if (isset($update['callback_query']) && is_array($update['callback_query'])) {
         bot_on_callback($update['callback_query']);
