@@ -553,18 +553,21 @@ function tg_emoji_unicode_map()
     ];
 }
 
-/** Semantic aliases so EVERY secondary icon across alerts, /logo, /tuyet, /cauhinh, /dangbi, /check, & Case Dossier gets a fitting custom emoji! */
+/** Semantic aliases so EVERY secondary icon across alerts, /logo, /tuyet, /cauhinh, /dangbi, /check, Support & Case Dossier gets a fitting custom emoji! */
 function tg_emoji_extended_aliases()
 {
     return [
         '📩' => '📨', '📋' => '📜', '🔎' => '🔍', '💬' => '📝', '🖥' => '🌐', '📡' => '🌐',
         '📊' => '📈', '💡' => '🧠', '👋' => '👑', '🆔' => '🔐', '↩' => '⬅', '♻' => '🔄',
-        '🔁' => '🔄', '🔀' => '⚙', 'ℹ' => '🔔', '⚪' => '🟡', '⏸' => '🔴', '▶' => '🟢',
+        '🔁' => '🔄', '🔀' => '⚙', 'ℹ' => '🔔', '⚪' => '🟡', '⏸' => '🔴', '▶' => '🟢', '◀' => '⬅',
         '✔' => '✅', '☑' => '✅', '🔥' => '⚡', '✨' => '⭐', '🌟' => '⭐', '💰' => '💎',
         '❄' => '⭐', '🌤' => '🟢', '🖼' => '🎨', '🏞' => '🎨', '🔖' => '🏷', '🤖' => '🧠',
         '📌' => '📍', '💾' => '🗄', '✏' => '✍', '📂' => '📦', '🧭' => '🌐', '😊' => '🟢',
         '🚀' => '⚡', '💳' => '💎', '📢' => '🔔', '⚖' => '📜', '🛑' => '⛔', '⌛' => '⏳',
         '⭕' => '🟢', '🧩' => '⚙', '☀' => '⭐', '🌑' => '🔐', '🔵' => '💎', '🔘' => '🟢',
+        '🎯' => '📍', '🎭' => '🕵', '🛰' => '🧠', '💻' => '🌐', '🎉' => '✅', '🙏' => '📨',
+        '📥' => '📨', '📤' => '📨', '🧾' => '📄', '🪪' => '👤', '🔑' => '🔑', '🔒' => '🔒',
+        '1️⃣' => '⭐', '2️⃣' => '⚡', '3️⃣' => '💎', '4️⃣' => '👑', '5️⃣' => '✅', '6️⃣' => '🔥',
     ];
 }
 
@@ -669,7 +672,16 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         }
     }
 
-    if (!is_array($vault['picks'])) {
+    // Fresh clean-slate setup when Admin sends a full palette (>= 10 unique custom emojis, e.g. 60 emojis!)
+    // so zero stale old picks ever pollute the new cohesive 60-emoji theme!
+    if (count($uniqueIds) >= 10) {
+        $vault['picks'] = [];
+        tg_store_update('settings', function ($s) {
+            unset($s['emoji_pick']);
+            $s['emoji_off'] = false;
+            return $s;
+        });
+    } elseif (!is_array($vault['picks'])) {
         $vault['picks'] = [];
     }
 
@@ -981,7 +993,7 @@ function tg_ce($key, $fallback)
     return $id === '' ? $fallback : '<tg-emoji emoji-id="' . $id . '">' . $fallback . '</tg-emoji>';
 }
 
-/** Replaces normal emojis in HTML text with <tg-emoji> (skips tags, <code>, <pre>). */
+/** Replaces 100% of normal Unicode emojis (including keycaps, ZWJ sequences & symbols) in HTML text with <tg-emoji> (skips tags, <code>, <pre>). */
 function tg_dress_text($html)
 {
     $table      = tg_emoji_table();
@@ -990,13 +1002,15 @@ function tg_dress_text($html)
         return $html;
     }
     $re    = $table ? tg_emoji_regex($table, false) : null;
-    $anyRe = $fallbackId !== '' ? '~([\x{2139}\x{2194}-\x{21AA}\x{231A}-\x{23FA}\x{25AA}-\x{27BF}\x{2B05}-\x{2B55}\x{1F170}-\x{1FAFF}])[\x{FE0E}\x{FE0F}]?~u' : null;
+    $anyRe = $fallbackId !== ''
+        ? '~((?:[0-9#*]\x{FE0F}?\x{20E3})|(?:[\x{203C}-\x{2139}\x{2194}-\x{21AA}\x{231A}-\x{23FA}\x{25AA}-\x{27BF}\x{2934}-\x{2B55}\x{3030}\x{303D}\x{3297}\x{3299}\x{1F000}-\x{1FAFF}][\x{FE0E}\x{FE0F}]?(?:\x{200D}[\x{203C}-\x{3299}\x{1F000}-\x{1FAFF}][\x{FE0E}\x{FE0F}]?)*))~u'
+        : null;
     $parts = preg_split('~(<tg-emoji\b.*?</tg-emoji>|<[^>]+>)~s', (string) $html, -1, PREG_SPLIT_DELIM_CAPTURE);
     if ($parts === false) {
         return $html;
     }
     $code = 0;
-    $left = 90;
+    $left = 95;
     foreach ($parts as $i => $part) {
         if ($i % 2 === 1) {
             if (preg_match('~^<(code|pre)\b~i', $part)) {
@@ -1044,7 +1058,7 @@ function tg_dress_text($html)
     return implode('', $parts);
 }
 
-/** Replaces leading normal emojis on inline keyboard buttons with icon_custom_emoji_id. */
+/** Replaces leading normal emojis on inline keyboard buttons with icon_custom_emoji_id and cleans stray inline emojis when full palette is active. */
 function tg_dress_markup($markup)
 {
     if (!is_array($markup) || empty($markup['inline_keyboard']) || !is_array($markup['inline_keyboard'])) {
@@ -1056,31 +1070,54 @@ function tg_dress_markup($markup)
         return $markup;
     }
     $re    = $table ? tg_emoji_regex($table, true) : null;
-    $anyRe = $fallbackId !== '' ? '~^([\x{2139}\x{2194}-\x{21AA}\x{231A}-\x{23FA}\x{25AA}-\x{27BF}\x{2B05}-\x{2B55}\x{1F170}-\x{1FAFF}])[\x{FE0E}\x{FE0F}]?\s*~u' : null;
+    $anyRe = $fallbackId !== ''
+        ? '~^((?:[0-9#*]\x{FE0F}?\x{20E3})|(?:[\x{203C}-\x{2139}\x{2194}-\x{21AA}\x{231A}-\x{23FA}\x{25AA}-\x{27BF}\x{2934}-\x{2B55}\x{3030}\x{303D}\x{3297}\x{3299}\x{1F000}-\x{1FAFF}][\x{FE0E}\x{FE0F}]?(?:\x{200D}[\x{203C}-\x{3299}\x{1F000}-\x{1FAFF}][\x{FE0E}\x{FE0F}]?)*))\s*~u'
+        : null;
+    $midStripRe = $fallbackId !== ''
+        ? '~\s*(?:(?:[0-9#*]\x{FE0F}?\x{20E3})|(?:[\x{203C}-\x{2139}\x{2194}-\x{21AA}\x{231A}-\x{23FA}\x{25AA}-\x{27BF}\x{2934}-\x{2B55}\x{3030}\x{303D}\x{3297}\x{3299}\x{1F000}-\x{1FAFF}][\x{FE0E}\x{FE0F}]?(?:\x{200D}[\x{203C}-\x{3299}\x{1F000}-\x{1FAFF}][\x{FE0E}\x{FE0F}]?)*))\s*~u'
+        : null;
 
     foreach ($markup['inline_keyboard'] as $r => $row) {
         foreach ((array) $row as $c => $b) {
             if (!is_array($b) || !isset($b['text']) || isset($b['icon_custom_emoji_id'])) {
                 continue;
             }
-            $txt = (string) $b['text'];
+            $txt      = (string) $b['text'];
+            $matched  = '';
+            $rest     = $txt;
             if ($re !== null && preg_match($re, $txt, $m)) {
-                $rest = preg_replace($re, '', $txt, 1);
-                if ($rest !== null && trim($rest) !== '') {
-                    $b['text']                 = $rest;
-                    $b['icon_custom_emoji_id'] = $table[$m[1]];
-                    $markup['inline_keyboard'][$r][$c] = $b;
-                    continue;
+                $rTmp = preg_replace($re, '', $txt, 1);
+                if ($rTmp !== null && trim($rTmp) !== '') {
+                    $matched = $table[$m[1]];
+                    $rest    = $rTmp;
                 }
             }
-            if ($anyRe !== null && preg_match($anyRe, $txt, $mAny)) {
+            if ($matched === '' && $anyRe !== null && preg_match($anyRe, $txt, $mAny)) {
                 $picked = tg_emoji_fallback_id($mAny[1]);
-                $rest   = preg_replace($anyRe, '', $txt, 1);
-                if ($picked !== '' && $rest !== null && trim($rest) !== '') {
-                    $b['text']                 = $rest;
-                    $b['icon_custom_emoji_id'] = $picked;
-                    $markup['inline_keyboard'][$r][$c] = $b;
+                $rTmp   = preg_replace($anyRe, '', $txt, 1);
+                if ($picked !== '' && $rTmp !== null && trim($rTmp) !== '') {
+                    $matched = $picked;
+                    $rest    = $rTmp;
                 }
+            }
+            // Even if a button has no leading emoji (e.g. "Tiếp ▶"), still assign a harmonious custom icon when full 60-emoji mode is on!
+            if ($matched === '' && $anyRe !== null && preg_match('~((?:[\x{2194}-\x{21AA}\x{25B6}\x{25C0}\x{2700}-\x{27BF}\x{1F000}-\x{1FAFF}]))~u', $txt, $mEnd)) {
+                $picked = isset($table[tg_emoji_norm($mEnd[1])]) ? $table[tg_emoji_norm($mEnd[1])] : tg_emoji_fallback_id($mEnd[1]);
+                if ($picked !== '') {
+                    $matched = $picked;
+                }
+            }
+            if ($matched !== '') {
+                if ($midStripRe !== null) {
+                    $cleaned = trim((string) preg_replace($midStripRe, ' ', $rest));
+                    $cleaned = (string) preg_replace('/\s{2,}/', ' ', $cleaned);
+                    if ($cleaned !== '') {
+                        $rest = $cleaned;
+                    }
+                }
+                $b['text']                 = $rest;
+                $b['icon_custom_emoji_id'] = $matched;
+                $markup['inline_keyboard'][$r][$c] = $b;
             }
         }
     }
@@ -1105,7 +1142,7 @@ function tg_strip_button_extras($markup)
 
 function tg_dress_params($method, array $params)
 {
-    if ($method !== 'sendMessage' && $method !== 'editMessageText') {
+    if (!in_array($method, ['sendMessage', 'editMessageText', 'editMessageReplyMarkup'], true)) {
         return $params;
     }
     if (isset($params['text']) && isset($params['parse_mode']) && $params['parse_mode'] === 'HTML') {
@@ -1882,15 +1919,23 @@ function tg_render($type, array $d)
                     ['text' => '🔓 Gỡ chặn ngay', 'callback_data' => 'qa|unban|' . $unbanIp],
                     ['text' => '✍ Gỡ kèm lý do', 'callback_data' => 'qa|unban_why|' . $unbanIp],
                 ];
-                $row2 = [];
+                $kbRows[] = [
+                    ['text' => '❌ Từ chối mở', 'callback_data' => 'qa|deny|' . $unbanIp],
+                    ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $permBanIp],
+                ];
+                $row3 = [];
                 if ($user !== '' && strlen($user) <= 36) {
-                    $row2[] = ['text' => '🎁 Gỡ + Mở Get Key', 'callback_data' => 'qa|unban_fk|' . $unbanIp . ':' . $user];
+                    $row3[] = ['text' => '🎁 Gỡ + Mở Get Key', 'callback_data' => 'qa|unban_fk|' . $unbanIp . ':' . $user];
                 }
                 if ($cc !== '' && strlen($cc) <= 40) {
-                    $row2[] = ['text' => '🔍 Xem hồ sơ mã', 'callback_data' => 'qa|case|' . $cc];
+                    $row3[] = ['text' => '🔍 Xem hồ sơ mã', 'callback_data' => 'qa|case|' . $cc];
                 }
-                $row2[]   = ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $permBanIp];
-                $kbRows[] = $row2;
+                if (!empty($d['tg_uid']) && preg_match('/^\d{5,20}$/', (string) $d['tg_uid'])) {
+                    $row3[] = ['text' => '💬 Phản hồi khách', 'callback_data' => 'qa|reply|' . (string) $d['tg_uid']];
+                }
+                if ($row3) {
+                    $kbRows[] = $row3;
+                }
             }
             $aRows = [
                 '👤 Tài khoản web: ' . $uDisp,
@@ -1951,32 +1996,81 @@ function tg_render($type, array $d)
             ];
 
         case 'bot_appeal_deny':
-            $cc  = !empty($d['case_code']) ? (string) $d['case_code'] : '';
-            $msg = isset($d['message']) ? (string) $d['message'] : '';
-            $kbD = [];
+            $cc    = !empty($d['case_code']) ? (string) $d['case_code'] : '';
+            $msg   = isset($d['message']) ? (string) $d['message'] : '';
+            $tgUid = !empty($d['tg_uid']) && preg_match('/^\d{5,20}$/', (string) $d['tg_uid']) ? (string) $d['tg_uid'] : '';
+            $kbD   = [];
             if ($ip !== '' && strlen($ip) <= 42) {
-                $r1 = [['text' => '🔓 Admin mở khoá ngay', 'callback_data' => 'qa|unban|' . $ip]];
+                $kbD[] = [
+                    ['text' => '🔓 Gỡ khoá ngay', 'callback_data' => 'qa|unban|' . $ip],
+                    ['text' => '✍ Gỡ kèm lý do', 'callback_data' => 'qa|unban_why|' . $ip],
+                ];
+                $kbD[] = [
+                    ['text' => '❌ Từ chối mở', 'callback_data' => 'qa|deny|' . $ip . ($tgUid !== '' ? ':' . $tgUid : '')],
+                    ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+                ];
+                $r3 = [];
+                if ($tgUid !== '') {
+                    $r3[] = ['text' => '💬 Phản hồi khách', 'callback_data' => 'qa|reply|' . $tgUid];
+                }
                 if ($user !== '' && strlen($user) <= 36) {
-                    $r1[] = ['text' => '🎁 Mở + Cấp Get Key', 'callback_data' => 'qa|unban_fk|' . $ip . ':' . $user];
+                    $r3[] = ['text' => '🎁 Mở + Get Key', 'callback_data' => 'qa|unban_fk|' . $ip . ':' . $user];
                 }
-                $kbD[] = $r1;
                 if ($cc !== '' && strlen($cc) <= 40) {
-                    $kbD[] = [['text' => '🔍 Xem hồ sơ mã IMX', 'callback_data' => 'qa|case|' . $cc]];
+                    $r3[] = ['text' => '🔍 Hồ sơ mã', 'callback_data' => 'qa|case|' . $cc];
                 }
+                if ($r3) {
+                    $kbD[] = $r3;
+                }
+            } elseif ($tgUid !== '') {
+                $kbD[] = [['text' => '💬 Phản hồi khách', 'callback_data' => 'qa|reply|' . $tgUid]];
             }
             $dRows = [
-                '👤 Tài khoản: ' . $uTag . ' · 🌐 IP: ' . $ipTag,
-                '🛑 Vi phạm: <b>' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 150)) . '</b>',
+                '👤 Tài khoản: ' . $uTag . ($tgUid !== '' ? ' · 🆔 TG ' . tg_c($tgUid) : '') . ' · 🌐 IP: ' . $ipTag,
+                '🛑 Lệnh khoá hiện tại: <b>' . tg_e(tg_clip(isset($d['reason']) ? $d['reason'] : '', 150)) . '</b>',
             ];
             if ($msg !== '') {
-                $dRows[] = '💬 Khách nhắn: <i>' . tg_e(tg_clip($msg, 180)) . '</i>';
+                $dRows[] = '💬 Khách giải trình: <b>' . tg_e(tg_clip($msg, 280)) . '</b>';
             }
-            $dRows[] = '🤖 Bot đã từ chối mở &amp; hướng dẫn khách liên hệ Admin (Admin vẫn có thể bấm nút bên dưới để mở).';
+            $dRows[] = '🤖 Admin chọn hành động bên dưới — Bot sẽ tự nhắn kết quả lại cho khách trên Telegram.';
             return [
                 'cat'   => 'ban',
-                'title' => '🛡 <b>BOT AI TỪ CHỐI MỞ BAN · CHUYỂN ADMIN XỬ LÝ</b>',
+                'title' => '📩 <b>KHÁCH GỬI GIẢI TRÌNH XIN ADMIN XEM XÉT</b>',
                 'rows'  => $dRows,
                 'kb'    => $kbD ? tg_alert_kb($kbD) : null,
+            ];
+
+        case 'user_support_ticket':
+            $tgUid  = !empty($d['tg_uid']) && preg_match('/^\d{5,20}$/', (string) $d['tg_uid']) ? (string) $d['tg_uid'] : '';
+            $tgName = !empty($d['tg_name']) ? (string) $d['tg_name'] : 'Khách';
+            $tgUsr  = !empty($d['tg_user']) ? ('@' . ltrim((string) $d['tg_user'], '@')) : '';
+            $msg    = isset($d['message']) ? (string) $d['message'] : '';
+            $sRows  = [
+                '👤 Khách Telegram: <b>' . tg_e($tgName) . '</b>' . ($tgUsr !== '' ? ' (' . tg_e($tgUsr) . ')' : '') . ($tgUid !== '' ? ' · 🆔 ' . tg_c($tgUid) : ''),
+            ];
+            if ($user !== '' || $ip !== '') {
+                $sRows[] = ($user !== '' ? ('👤 Tài khoản web: ' . tg_c($user)) : '') . ($user !== '' && $ip !== '' ? ' · ' : '') . ($ip !== '' ? ('🌐 IP: ' . $ipTag) : '');
+            }
+            $sRows[] = '💬 <b>Lời nhắn gửi Admin:</b> ' . tg_e(tg_clip($msg, 420));
+            $kbS = [];
+            if ($tgUid !== '') {
+                $kbS[] = [['text' => '💬 Phản hồi khách ngay', 'callback_data' => 'qa|reply|' . $tgUid]];
+            }
+            if ($ip !== '' && strlen($ip) <= 42) {
+                $kbS[] = [
+                    ['text' => '🔓 Gỡ khoá IP', 'callback_data' => 'qa|unban|' . $ip],
+                    ['text' => '✍ Gỡ kèm lý do', 'callback_data' => 'qa|unban_why|' . $ip],
+                ];
+                $kbS[] = [
+                    ['text' => '❌ Từ chối mở', 'callback_data' => 'qa|deny|' . $ip . ($tgUid !== '' ? ':' . $tgUid : '')],
+                    ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
+                ];
+            }
+            return [
+                'cat'   => 'ban',
+                'title' => '📨 <b>YÊU CẦU HỖ TRỢ TỪ KHÁCH HÀNG · IOSMODS.XYZ</b>',
+                'rows'  => $sRows,
+                'kb'    => $kbS ? tg_alert_kb($kbS) : null,
             ];
 
         case 'ip_auto_unban':

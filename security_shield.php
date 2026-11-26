@@ -2136,9 +2136,70 @@ function sh_current_dev_sig()
     return md5($ua . '|' . substr($lang, 0, 48));
 }
 
+function sh_real_ip_cookie_read()
+{
+    if (empty($_COOKIE['sh_rip']) || !is_string($_COOKIE['sh_rip'])) {
+        return '';
+    }
+    $p = explode('|', $_COOKIE['sh_rip']);
+    if (count($p) !== 3) {
+        return '';
+    }
+    $ip = sh_norm_ip($p[0]);
+    $ts = (int) $p[1];
+    if ($ip === '' || $ts < time() - 30 * 86400 || $ts > time() + 300) {
+        return '';
+    }
+    $sig = substr(hash_hmac('sha256', 'shrip15|' . $ip . '|' . $ts, sh_secret()), 0, 24);
+    return hash_equals($sig, (string) $p[2]) ? $ip : '';
+}
+
+function sh_real_ip_cookie_issue($ip)
+{
+    $ip = sh_norm_ip($ip);
+    if ($ip === '' || headers_sent() || PHP_SAPI === 'cli') {
+        return;
+    }
+    if (sh_real_ip_cookie_read() === $ip) {
+        return;
+    }
+    $ts    = time();
+    $val   = $ip . '|' . $ts . '|' . substr(hash_hmac('sha256', 'shrip15|' . $ip . '|' . $ts, sh_secret()), 0, 24);
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || strtolower((string) (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) ? $_SERVER['HTTP_X_FORWARDED_PROTO'] : '')) === 'https';
+    if (PHP_VERSION_ID >= 70300) {
+        @setcookie('sh_rip', $val, ['expires' => $ts + 30 * 86400, 'path' => '/', 'secure' => $https, 'httponly' => true, 'samesite' => 'Lax']);
+    } else {
+        @setcookie('sh_rip', $val, $ts + 30 * 86400, '/; samesite=Lax', '', $https, true);
+    }
+    $_COOKIE['sh_rip'] = $val;
+}
+
+function sh_detect_device_env($ua = '', $gpu = '', $emuFlag = '')
+{
+    $ua  = $ua !== '' ? (string) $ua : (string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '');
+    $all = strtolower($ua . ' ' . $gpu . ' ' . $emuFlag);
+    if (preg_match('/(bluestacks|ldplayer|nox|memu|genymotion|andyos|mumu|gameloop|android sdk built for x86)/i', $all)) {
+        return 'Giả lập Android / PC Emulator';
+    }
+    if (preg_match('/(swiftshader|llvmpipe|virtualbox|vmware|qemu|xen|hyper-v|microsoft basic render|headless|cloud_vm)/i', $all)) {
+        return 'Máy ảo / Cloud VM / Trình duyệt ẩn';
+    }
+    if (stripos($ua, 'iPhone') !== false || stripos($ua, 'iPad') !== false) {
+        return 'iPhone / iPad (iOS)';
+    }
+    if (stripos($ua, 'Android') !== false) {
+        return 'Android Mobile';
+    }
+    if (stripos($ua, 'Windows') !== false || stripos($ua, 'Macintosh') !== false || stripos($ua, 'Linux') !== false) {
+        return 'Máy tính (PC / Mac)';
+    }
+    return 'Thiết bị trình duyệt';
+}
+
 /**
- * Records a verified non-VPN residential/mobile IP across Hardware FP, Browser LID, Username & Device Sig
- * so the instant the user enables 1.1.1.1 / VPN / Proxy, their REAL origin IP is immediately known!
+ * Records a verified non-VPN residential/mobile IP across HMAC Cookie (sh_rip), Session, Hardware FP, Browser LID, Username
+ * so the instant the user enables 1.1.1.1 / VPN / Proxy / Emulator / Cloud relay, their REAL origin IP is immediately known!
  */
 function sh_record_real_ip_identity($ip, array $intel = [], $lid = '', $hwFp = '', $username = '')
 {
@@ -2151,6 +2212,12 @@ function sh_record_real_ip_identity($ip, array $intel = [], $lid = '', $hwFp = '
     }
     if (!empty($intel['is_vpn'])) {
         return; // NEVER overwrite real-IP vault with a virtual VPN/Proxy IP!
+    }
+    if (PHP_SAPI !== 'cli' && sh_client_ip() === $ip) {
+        sh_real_ip_cookie_issue($ip);
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION['sh_real_ip'] = $ip;
+        }
     }
     $lid  = $lid !== '' ? strtolower($lid) : sh_browser_lid();
     $hwFp = $hwFp !== '' ? strtolower($hwFp) : sh_hw_fp_cookie();
@@ -2259,6 +2326,25 @@ function sh_resolve_true_origin_ip($conn, $connIp, $lid = '', $hwFp = '', $usern
                 'real_isp'     => $hit['isp'],
                 'real_country' => $hit['country'],
                 'real_source'  => 'Header luồng Proxy gốc',
+            ];
+        }
+    }
+
+    // Layer 2B: Tamper-Proof HMAC Residential Cookie (sh_rip) & Active PHP Session Real IP
+    $cookieReal = sh_real_ip_cookie_read();
+    $sessReal   = (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['sh_real_ip'])) ? sh_norm_ip((string) $_SESSION['sh_real_ip']) : '';
+    foreach (array_unique(array_filter([$cookieReal, $sessReal])) as $cReal) {
+        $hitC = $checkReal($cReal);
+        if ($hitC !== null) {
+            return [
+                'is_vpn'       => true,
+                'vpn_ip'       => $connIp,
+                'vpn_label'    => $vpnLabel,
+                'vpn_isp'      => (string) ($intel['isp'] ?? ''),
+                'real_ip'      => $hitC['ip'],
+                'real_isp'     => $hitC['isp'],
+                'real_country' => $hitC['country'],
+                'real_source'  => 'Chữ ký IP mạng gốc trước khi bật VPN',
             ];
         }
     }
@@ -3515,13 +3601,20 @@ body{padding-top:var(--hd);padding-left:var(--ds-sbw);padding-bottom:24px}
 @keyframes sh-eye-blink{0%,44%,48%,92%,96%,100%{transform:scaleY(1)}46%,94%{transform:scaleY(.14)}}
 @keyframes sh-mouth-sigh{0%,100%{transform:translateY(0)}50%{transform:translateY(.8px)}}
 @keyframes sh-happy-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
-@keyframes sh-shackle-open{0%{transform:translateY(0) rotate(0deg)}45%{transform:translateY(-4.2px) rotate(0deg)}100%{transform:translateY(-4.2px) rotate(15deg)}}
+@keyframes sh-lock-body{0%,16%{transform:translateY(0) scale(1)}22%{transform:translateY(1.2px) scale(.96)}34%{transform:translateY(-2.4px) scale(1.06)}46%,78%{transform:translateY(0) scale(1)}90%,100%{transform:translateY(0) scale(1)}}
+@keyframes sh-shackle-open{0%,16%{transform:translateY(0) rotate(0deg)}24%{transform:translateY(1px) rotate(0deg)}38%{transform:translateY(-4.4px) rotate(-22deg)}52%,78%{transform:translateY(-4.4px) rotate(-20deg)}92%,100%{transform:translateY(0) rotate(0deg)}}
+@keyframes sh-lock-halo{0%,18%{opacity:0;transform:scale(.76)}36%{opacity:.95;transform:scale(1.1)}65%{opacity:.4;transform:scale(1.18)}85%,100%{opacity:0;transform:scale(1.22)}}
+@keyframes sh-keyhole-glow{0%,24%{opacity:.55;transform:scale(.9)}38%,78%{opacity:1;transform:scale(1.18)}92%,100%{opacity:.55;transform:scale(.9)}}
+.anim-icon--unlock{position:relative;width:58px;height:58px;border-radius:50%;background:rgba(48,209,88,.11);color:#30d158}
+.anim-icon--unlock::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.8px solid rgba(48,209,88,.48);animation:sh-lock-halo 3.2s cubic-bezier(.22,1,.36,1) infinite;pointer-events:none}
 .svg-sad{animation:sh-sad-head 4.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
 .svg-eye{animation:sh-eye-blink 4.8s infinite;transform-box:fill-box;transform-origin:center}
 .svg-frown{animation:sh-mouth-sigh 4.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
 .svg-happy{animation:sh-happy-bob 3s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
-.svg-shackle{animation:sh-shackle-open 1.1s cubic-bezier(.22,1,.36,1) forwards;transform-box:fill-box;transform-origin:100% 100%}
-@media (prefers-reduced-motion:reduce){.ds-sw,.ds-swi,.svg-sad,.svg-eye,.svg-frown,.svg-happy,.svg-shackle,.site-footer__heart{animation:none}.ios-ok-ring,.ios-ok-tick{animation:none;stroke-dashoffset:0}}
+.svg-lock-grp{animation:sh-lock-body 3.2s cubic-bezier(.22,1,.36,1) infinite;transform-box:fill-box;transform-origin:50% 62%}
+.svg-shackle{animation:sh-shackle-open 3.2s cubic-bezier(.22,1,.36,1) infinite;transform-box:fill-box;transform-origin:10% 100%}
+.svg-keyhole{animation:sh-keyhole-glow 3.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@media (prefers-reduced-motion:reduce){.ds-sw,.ds-swi,.svg-sad,.svg-eye,.svg-frown,.svg-happy,.svg-lock-grp,.svg-shackle,.svg-keyhole,.anim-icon--unlock::after,.site-footer__heart{animation:none}.ios-ok-ring,.ios-ok-tick{animation:none;stroke-dashoffset:0}}
 CSS;
 }
 
@@ -3609,14 +3702,18 @@ function sh_render_happy_gate(array $detect, $ip, $previewBarHtml = '')
  * - 100% English, compact, ZERO verification code (IMX-...), ZERO countdown, ZERO appeal form.
  * - Persists across refreshes & clicks until the user taps "Got it", then enters iosmods.xyz normally!
  */
-function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
+function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '', $returnHtml = false)
 {
-    while (ob_get_level() > 0) {
-        @ob_end_clean();
+    if ($returnHtml) {
+        ob_start();
+    } else {
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
+        }
     }
     $GLOBALS['dsx_hash_on'] = 1;
     $isPreview = !empty($ack['is_preview']);
-    if (!headers_sent()) {
+    if (!$returnHtml && !headers_sent()) {
         http_response_code(200);
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
         header('Pragma: no-cache');
@@ -3624,15 +3721,17 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
         header('X-Frame-Options: SAMEORIGIN');
         header('X-Content-Type-Options: nosniff');
     }
-    if (sh_wants_json() && !$isPreview) {
+    if (!$returnHtml && sh_wants_json() && !$isPreview) {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(['result' => 'unlocked_ack_needed', 'message' => 'Automatically unlocked. Reload the page and tap Got it to continue.'], JSON_UNESCAPED_UNICODE);
-        return;
+        return '';
     }
 
     $lid    = sh_ensure_browser_lid();
     $ackTok = sh_unlock_ack_token($ip, $lid);
-    header('Content-Type: text/html; charset=utf-8');
+    if (!$returnHtml && !headers_sent()) {
+        header('Content-Type: text/html; charset=utf-8');
+    }
     $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); };
     ?><!DOCTYPE html>
 <html lang="en">
@@ -3650,11 +3749,14 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
 <div class="sh-wrap">
   <main class="stage">
     <section class="panel" role="dialog" aria-labelledby="sh-unlk-title">
-      <div class="anim-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="5" y="11" width="14" height="10" rx="2.4"/>
-          <path class="svg-shackle" d="M8 11V7a4 4 0 0 1 8 0v2"/>
-          <circle cx="12" cy="16" r="1.15" fill="currentColor" stroke="none"/>
+      <div class="anim-icon anim-icon--unlock" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <g class="svg-lock-grp">
+            <path class="svg-shackle" d="M8.5 11V7.4a3.5 3.5 0 0 1 7 0V11"/>
+            <rect x="5" y="11" width="14" height="10" rx="2.6"/>
+            <circle class="svg-keyhole" cx="12" cy="15.7" r="1.3" fill="currentColor" stroke="none"/>
+            <path class="svg-keyhole" d="M12 16.9v1.7" stroke-width="1.8"/>
+          </g>
         </svg>
       </div>
       <h1 class="panel-title" id="sh-unlk-title">Automatically Unlocked</h1>
@@ -3706,15 +3808,22 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
 </body>
 </html>
 <?php
+    if ($returnHtml) {
+        return (string) ob_get_clean();
+    }
 }
 
 /**
  * COMPACT 100% ENGLISH LOCK SCREEN + EXACT iosmods.xyz KEY-BOX INLINE UNLOCK FORM + STARTLESS @devios_bot PING!
  */
-function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = '')
+function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = '', $returnHtml = false)
 {
-    while (ob_get_level() > 0) {
-        @ob_end_clean();
+    if ($returnHtml) {
+        ob_start();
+    } else {
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
+        }
     }
     $GLOBALS['dsx_hash_on'] = 1;
 
@@ -3736,7 +3845,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     $isPreview = !empty($ban['is_preview']);
     $code      = $isPreview ? 200 : ($httpCode === 429 ? 429 : 403);
 
-    if (!headers_sent()) {
+    if (!$returnHtml && !headers_sent()) {
         http_response_code($code);
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
         header('Pragma: no-cache');
@@ -3753,7 +3862,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     $caseCode  = !empty($ban['case_code']) ? (string) $ban['case_code'] : sh_issue_case_code($ip, $ban);
     $streamIp  = !empty($ban['stream_ip']) && $ban['stream_ip'] !== $ip ? (string) $ban['stream_ip'] : '';
 
-    if (sh_wants_json() && !$isPreview) {
+    if (!$returnHtml && sh_wants_json() && !$isPreview) {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'result'      => 'ip_blocked',
@@ -3762,7 +3871,7 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
             'reason'      => $reasonEn,
             'message'     => $reasonEn,
         ], JSON_UNESCAPED_UNICODE);
-        return;
+        return '';
     }
 
     $lid      = sh_ensure_browser_lid();
@@ -3774,7 +3883,9 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     }
     $botUrl = sh_bot_appeal_url($ip, $caseCode, $lid);
 
-    header('Content-Type: text/html; charset=utf-8');
+    if (!$returnHtml && !headers_sent()) {
+        header('Content-Type: text/html; charset=utf-8');
+    }
     $e       = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); };
     $heading = $isVpn ? 'VPN / Proxy Blocked' : ($isSpam ? 'Temporarily Locked' : 'Access Restricted');
     ?><!DOCTYPE html>
@@ -4079,6 +4190,32 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     });
   }
 
+  function showUnlockAndReload(unlockHtml){
+    if (unlockHtml && unlockHtml.indexOf('<html') !== -1) {
+      try { document.open(); document.write(unlockHtml); document.close(); return; } catch(e){}
+    }
+    var ic = document.getElementById('sh-icon-box'), tt = document.getElementById('sh-title'), cs = document.getElementById('sh-cause');
+    if (ic) {
+      ic.classList.add('anim-icon--unlock');
+      ic.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><g class="svg-lock-grp"><path class="svg-shackle" d="M8.5 11V7.4a3.5 3.5 0 0 1 7 0V11"/><rect x="5" y="11" width="14" height="10" rx="2.6"/><circle class="svg-keyhole" cx="12" cy="15.7" r="1.3" fill="currentColor" stroke="none"/><path class="svg-keyhole" d="M12 16.9v1.7" stroke-width="1.8"/></g></svg>';
+    }
+    if (tt) tt.textContent = 'Automatically Unlocked';
+    if (cs) cs.innerHTML = 'Security restriction lifted. Opening confirmation...';
+    if (!IS_PV) setTimeout(function(){ window.location.reload(); }, 950);
+  }
+  if (!IS_PV && window.fetch) {
+    var wBusy = false;
+    setInterval(function(){
+      if (document.hidden || wBusy) return;
+      wBusy = true;
+      fetch((location.pathname || '/') + '?__sh_watch=1', {credentials:'same-origin', cache:'no-store', headers:{'X-Requested-With':'XMLHttpRequest'}})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if (j && j.state === 'unlocked') showUnlockAndReload(j.html || '');
+          else if (j && j.state === 'ok') window.location.reload();
+        }).catch(function(){}).finally(function(){ wBusy = false; });
+    }, 3200);
+  }
   var el = document.getElementById('sh-cd');
   if (!el) return;
   var left = parseInt(el.getAttribute('data-left') || '0', 10);
@@ -4087,21 +4224,12 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
     var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
     return h > 0 ? (pad(h) + ':' + pad(m) + ':' + pad(sec)) : (pad(m) + ':' + pad(sec));
   }
-  function showUnlockAndReload(){
-    var ic = document.getElementById('sh-icon-box'), tt = document.getElementById('sh-title'), cs = document.getElementById('sh-cause');
-    if (ic) {
-      ic.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2.4"/><path class="svg-shackle" d="M8 11V7a4 4 0 0 1 8 0v2"/><circle cx="12" cy="16" r="1.15" fill="currentColor" stroke="none"/></svg>';
-    }
-    if (tt) tt.textContent = 'Automatically Unlocked';
-    if (cs) cs.innerHTML = 'Security check completed. Reloading...';
-    if (!IS_PV) setTimeout(function(){ window.location.reload(); }, 950);
-  }
   var iv = setInterval(function(){
     left--;
     if (left <= 0) {
       clearInterval(iv);
       el.textContent = '00:00';
-      showUnlockAndReload();
+      showUnlockAndReload('');
       return;
     }
     el.textContent = fmt(left);
@@ -4111,6 +4239,9 @@ function sh_render_sad_page(array $ban, $ip, $httpCode = 403, $previewBarHtml = 
 </body>
 </html>
 <?php
+    if ($returnHtml) {
+        return (string) ob_get_clean();
+    }
 }
 
 /* ------------------------------------------------------------------
@@ -4399,6 +4530,86 @@ function sh_client_sig($lid)
 
 function sh_handle_client_endpoints()
 {
+    // 0. Ultra-Fast Pre-DB Live Watchdog (?__sh_watch=1) -> pushes Block / Animated Unlocked screen INSTANTLY with ZERO page reload!
+    if (isset($_GET['__sh_watch'])) {
+        while (ob_get_level() > 0) {
+            @ob_end_clean();
+        }
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
+        $forensics = sh_trace_forensics();
+        $ip        = $forensics['real_ip'] ?: sh_client_ip();
+        $lid       = sh_browser_lid();
+        $hwFp      = sh_hw_fp_cookie();
+        $now       = time();
+
+        if ($ip === '' || sh_is_admin_viewer() || sh_is_private_or_local($ip) || sh_is_trusted_proxy($ip) || $ip === '161.248.4.251') {
+            echo json_encode(['state' => 'ok']);
+            exit;
+        }
+        list($safeW, ) = sh_is_safe_ip($ip);
+        if ($safeW) {
+            echo json_encode(['state' => 'ok']);
+            exit;
+        }
+
+        // Check active IP ban or Entity Lock first
+        $banNow = sh_read_ban_cache($ip);
+        if ($banNow === null && $forensics['real_ip'] !== '' && $forensics['real_ip'] !== $ip) {
+            $banNow = sh_read_ban_cache($forensics['real_ip']);
+        }
+        if ($banNow !== null) {
+            $expTs = isset($banNow['expires_ts']) ? (int) $banNow['expires_ts'] : 0;
+            if ($expTs > 0 && $expTs <= $now) {
+                $stillV = false;
+                if (in_array((string) ($banNow['ban_type'] ?? ''), ['vpn_block', 'vpn_abuse'], true)) {
+                    $rv = sh_inspect_ip_vpn($ip);
+                    if (!empty($rv['is_vpn'])) {
+                        $stillV = true;
+                        $banNow['expires_ts'] = $now + 120;
+                        $banNow['expires_at'] = date('Y-m-d H:i:s', $now + 120);
+                        sh_write_ban_cache($ip, $banNow);
+                    }
+                }
+                if (!$stillV) {
+                    sh_full_clean_slate_unban(null, $ip, (string) ($banNow['username'] ?? ''), true, true, 'auto-timer');
+                    $banNow = null;
+                }
+            }
+        }
+        if ($banNow === null) {
+            $net64 = sh_ip_network_key($ip);
+            $eLock = ($hwFp !== '' ? sh_read_entity_lock('hw', $hwFp) : null)
+                ?: ($lid !== '' ? sh_read_entity_lock('lid', $lid) : null)
+                ?: (strpos($net64, '/64') !== false ? sh_read_entity_lock('net64', $net64) : null);
+            if ($eLock !== null) {
+                $eExp = isset($eLock['expires_ts']) ? (int) $eLock['expires_ts'] : 0;
+                if ($eExp === 0 || $eExp > $now) {
+                    $banNow = $eLock;
+                }
+            }
+        }
+        if ($banNow !== null) {
+            $htmlB = sh_render_sad_page($banNow, $ip, 403, '', true);
+            echo json_encode(['state' => 'blocked', 'html' => $htmlB], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // Check Post-Unban Animated Unlock "Got it" confirmation
+        $uAck = sh_read_unlock_ack($ip, $lid, $hwFp);
+        if ($uAck === null && $forensics['real_ip'] !== $ip) {
+            $uAck = sh_read_unlock_ack($forensics['real_ip'], $lid, $hwFp);
+        }
+        if ($uAck !== null) {
+            $htmlU = sh_render_unlocked_gate($uAck, $forensics['real_ip'] ?: $ip, '', true);
+            echo json_encode(['state' => 'unlocked', 'html' => $htmlU], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        echo json_encode(['state' => 'ok']);
+        exit;
+    }
+
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         return;
     }
@@ -4418,7 +4629,18 @@ function sh_handle_client_endpoints()
     $sig     = isset($_POST['sig']) ? (string) $_POST['sig'] : '';
     $hwFp    = isset($_POST['hw']) && preg_match('/^[a-f0-9]{16,64}$/i', (string) $_POST['hw']) ? strtolower((string) $_POST['hw']) : sh_hw_fp_cookie();
     $tz      = isset($_POST['tz']) ? trim(substr((string) $_POST['tz'], 0, 60)) : '';
-    $wrtcIp  = isset($_POST['wrtc']) ? sh_norm_ip($_POST['wrtc']) : '';
+    $wrtcRaw = isset($_POST['wrtc']) ? trim((string) $_POST['wrtc']) : '';
+    $wrtcAll = [];
+    foreach (preg_split('/[\s,;]+/', $wrtcRaw, -1, PREG_SPLIT_NO_EMPTY) as $wCand) {
+        $wn = sh_norm_ip($wCand);
+        if ($wn !== '' && !sh_is_private_or_local($wn) && !sh_is_trusted_proxy($wn)) {
+            $wrtcAll[] = $wn;
+        }
+    }
+    $wrtcIp  = $wrtcAll ? $wrtcAll[0] : '';
+    $gpuStr  = isset($_POST['gpu']) ? trim(substr((string) $_POST['gpu'], 0, 120)) : '';
+    $emuStr  = isset($_POST['emu']) ? trim(substr((string) $_POST['emu'], 0, 80)) : '';
+    $devEnv  = sh_detect_device_env($forensics['ua'], $gpuStr, $emuStr);
     $passive = isset($_POST['passive_script']) ? trim(substr((string) $_POST['passive_script'], 0, 120)) : '';
     $violate = isset($_POST['violation']) ? trim(substr((string) $_POST['violation'], 0, 180)) : '';
 
@@ -4433,7 +4655,7 @@ function sh_handle_client_endpoints()
         $_COOKIE['sh_hw'] = $hwFp;
     }
 
-    // ALWAYS memorize verified non-VPN residential IP + HW + LID (even for Admin!) so later VPN/Incognito tests unmask Real IP 100%!
+    // ALWAYS memorize verified non-VPN residential IP + HW + LID (even for Admin!) so later VPN/Incognito/Emulator tests unmask Real IP 100%!
     if ($ip !== '' && !sh_is_private_or_local($ip) && !sh_is_trusted_proxy($ip)) {
         $preVpn = sh_inspect_ip_vpn($ip);
         if (empty($preVpn['is_vpn'])) {
@@ -4445,7 +4667,8 @@ function sh_handle_client_endpoints()
     if (!isset($_GET['adm_rip']) && !sh_is_private_or_local($ip) && !sh_is_trusted_proxy($ip)) {
         $uAck = sh_read_unlock_ack($ip, $lid, $hwFp);
         if ($uAck !== null) {
-            echo json_encode(['ok' => true, 'action' => 'reload_unlock']);
+            $htmlU = sh_render_unlocked_gate($uAck, $ip, '', true);
+            echo json_encode(['ok' => true, 'action' => 'render_unlock', 'html' => $htmlU], JSON_UNESCAPED_UNICODE);
             exit;
         }
     }
@@ -4467,7 +4690,8 @@ function sh_handle_client_endpoints()
         $isVpnOnlyLock = (($elock['ban_type'] ?? '') === 'vpn_block' && !empty($elock['expires_ts']) && (int) $elock['expires_ts'] > time());
         if ($isVpnOnlyLock) {
             // Keep original 2-minute VPN cooldown intact without escalating or writing VPN ban onto residential IP!
-            echo json_encode(['ok' => true, 'action' => 'reload_block']);
+            $htmlV = sh_render_sad_page($elock, $ip, 403, '', true);
+            echo json_encode(['ok' => true, 'action' => 'render_block', 'html' => $htmlV], JSON_UNESCAPED_UNICODE);
             exit;
         }
         $evCnt                     = (int) (isset($elock['evasion_attempts']) ? $elock['evasion_attempts'] : 0) + 1;
@@ -4480,11 +4704,12 @@ function sh_handle_client_endpoints()
         $elock['evasion_attempts'] = $evCnt;
         sh_write_ban_cache($ip, $elock);
         sh_queue_pending_ban($elock + ['attack_detail' => 'Đổi IP/Thiết bị lách khoá (lần #' . $evCnt . ')']);
-        echo json_encode(['ok' => true, 'action' => 'reload_block']);
+        $htmlE = sh_render_sad_page($elock, $ip, 403, '', true);
+        echo json_encode(['ok' => true, 'action' => 'render_block', 'html' => $htmlE], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
-    // 2. Product-Get / Key-Submit / Rapid UI Action Spam Endpoint (__sh_prod_spam)
+    // 2. Product-Get / Key-Submit / Rapid UI Action Spam Endpoint (__sh_prod_spam) -> ZERO-RELOAD INSTANT BLOCK!
     if (isset($_GET['__sh_prod_spam']) && ($sig === '' || hash_equals(sh_client_sig($lid), $sig) || hash_equals(sh_client_sig(sh_browser_lid()), $sig))) {
         $kind     = isset($_POST['kind']) ? (string) $_POST['kind'] : 'product';
         $needsVip = !empty($_POST['need_vip']);
@@ -4528,54 +4753,63 @@ function sh_handle_client_endpoints()
         } else {
             $why = 'Liên tục spam bấm lấy sản phẩm khi ' . ($sessUser !== '' ? ($needsVip ? 'tài khoản chưa có Key VIP hợp lệ' : 'chưa nhập Key hợp lệ') : 'chưa đăng nhập') . ' nhằm dò trang đích.';
         }
-        sh_trigger_progressive_product_spam($ip, $sessUser, $why);
-        echo json_encode(['ok' => true, 'action' => 'reload_block']);
+        $spamRec = sh_trigger_progressive_product_spam($ip, $sessUser, $why);
+        $htmlSp  = is_array($spamRec) ? sh_render_sad_page($spamRec, $ip, 429, '', true) : '';
+        echo json_encode(['ok' => true, 'action' => ($htmlSp !== '' ? 'render_block' : 'reload_block'), 'html' => $htmlSp], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
     if ($wrtcIp !== '' && !sh_is_private_or_local($wrtcIp) && !sh_is_trusted_proxy($wrtcIp)) {
         $forensics['real_ip'] = $wrtcIp;
     }
-    sh_json_update(sh_dir() . '/telemetry/' . substr($lid, 0, 2) . '/' . $lid . '.json', function () use ($ip, $wrtcIp, $hwFp, $tz, $passive) {
+    sh_json_update(sh_dir() . '/telemetry/' . substr($lid, 0, 2) . '/' . $lid . '.json', function () use ($ip, $wrtcIp, $wrtcAll, $hwFp, $tz, $gpuStr, $emuStr, $devEnv, $passive) {
         return [
             'http_ip'        => $ip,
             'webrtc_ip'      => $wrtcIp,
+            'webrtc_all'     => $wrtcAll,
             'hw_fp'          => $hwFp,
             'tz'             => $tz,
+            'gpu'            => $gpuStr,
+            'emu'            => $emuStr,
+            'device_env'     => $devEnv,
             'passive_script' => $passive,
             'at'             => time(),
         ];
     });
 
-    // 3. Active Violation (__sh_report): PC View-Source / DevTools / Automation Script -> Locked Until Bot/Admin Unlocks!
+    // 3. Active Violation (__sh_report): PC View-Source / DevTools / Automation Script -> ZERO-RELOAD INSTANT BLOCK!
     $cfg = sh_cfg();
     if (isset($_GET['__sh_report']) && $violate !== '' && !empty($cfg['inspect_guard']) && hash_equals(sh_client_sig($lid), $sig)) {
         $now    = time();
+        $unmRep = sh_resolve_true_origin_ip(null, $ip, $lid, $hwFp, '', $wrtcAll);
+        $trueR  = !empty($unmRep['real_ip']) ? (string) $unmRep['real_ip'] : ($forensics['real_ip'] ?: $ip);
         $reason = 'Phát hiện hành vi can thiệp bảo mật trực tiếp: ' . $violate . '.';
         $rec    = [
-            'ip'         => $forensics['real_ip'],
-            'stream_ip'  => $forensics['stream_ip'],
-            'reason'     => $reason,
-            'ban_type'   => 'inspect',
-            'lid'        => $lid,
-            'hw_fp'      => $hwFp,
-            'created_ts' => $now,
-            'created_at' => date('Y-m-d H:i:s', $now),
-            'expires_ts' => 0,
-            'expires_at' => null,
-            'hits'       => 1,
+            'ip'             => $trueR,
+            'stream_ip'      => $forensics['stream_ip'],
+            'real_origin_ip' => $trueR,
+            'device_env'     => $devEnv,
+            'reason'         => $reason,
+            'ban_type'       => 'inspect',
+            'lid'            => $lid,
+            'hw_fp'          => $hwFp,
+            'created_ts'     => $now,
+            'created_at'     => date('Y-m-d H:i:s', $now),
+            'expires_ts'     => 0,
+            'expires_at'     => null,
+            'hits'           => 1,
         ];
         $savedRep = sh_write_ban_cache($ip, $rec);
         if (is_array($savedRep)) {
             $rec = $savedRep;
         }
-        if ($forensics['real_ip'] !== $ip) {
-            sh_write_ban_cache($forensics['real_ip'], $rec);
+        if ($trueR !== '' && $trueR !== $ip) {
+            sh_write_ban_cache($trueR, $rec);
         }
         $sentRep = sh_push_live_tg_alert('script_bug_block', [
-            'ip'        => $forensics['real_ip'] ?: $ip,
+            'ip'        => $trueR,
             'stream_ip' => $forensics['stream_ip'],
-            'detail'    => $violate,
+            'detail'    => $violate . ' · ' . $devEnv,
             'reason'    => $reason,
             'case_code' => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
             'hw_fp'     => substr($hwFp, 0, 12),
@@ -4583,35 +4817,43 @@ function sh_handle_client_endpoints()
         ]);
         sh_queue_pending_ban($rec + ['attack_detail' => $violate, 'alert_sent' => $sentRep ? 1 : 0]);
         sh_stats_bump('script_blocks', 1);
-        echo json_encode(['ok' => true, 'action' => 'reload_block']);
+        $htmlRep = sh_render_sad_page($rec, $trueR, 403, '', true);
+        echo json_encode(['ok' => true, 'action' => 'render_block', 'html' => $htmlRep], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
-    // 4. Instant Passive Script / WebRTC Fake-Region / VPN Check -> Real 2-Minute (120s) Block!
+    // 4. Instant Passive Script / WebRTC Fake-Region / VPN Check -> Real 2-Minute (120s) Block + Dual-IP Real-IP Binding!
     if (!empty($cfg['vpn_gate_enabled'])) {
         $now = time();
         if ($passive !== '') {
+            $unmPs = sh_resolve_true_origin_ip(null, $ip, $lid, $hwFp, '', $wrtcAll);
+            $trueP = !empty($unmPs['real_ip']) ? (string) $unmPs['real_ip'] : ($forensics['real_ip'] ?: $ip);
             $rec = [
-                'ip'         => $forensics['real_ip'],
-                'stream_ip'  => $forensics['stream_ip'],
-                'reason'     => 'Browser userscript or injection extension detected (' . $passive . ') — locked for 2 minutes.',
-                'ban_type'   => 'vpn_block',
-                'lid'        => $lid,
-                'hw_fp'      => $hwFp,
-                'created_ts' => $now,
-                'created_at' => date('Y-m-d H:i:s', $now),
-                'expires_ts' => $now + 120,
-                'expires_at' => date('Y-m-d H:i:s', $now + 120),
-                'hits'       => 1,
+                'ip'             => $trueP,
+                'stream_ip'      => $forensics['stream_ip'],
+                'real_origin_ip' => $trueP,
+                'device_env'     => $devEnv,
+                'reason'         => 'Browser userscript or injection extension detected (' . $passive . ') — locked for 2 minutes.',
+                'ban_type'       => 'vpn_block',
+                'lid'            => $lid,
+                'hw_fp'          => $hwFp,
+                'created_ts'     => $now,
+                'created_at'     => date('Y-m-d H:i:s', $now),
+                'expires_ts'     => $now + 120,
+                'expires_at'     => date('Y-m-d H:i:s', $now + 120),
+                'hits'           => 1,
             ];
             $savedPs = sh_write_ban_cache($ip, $rec);
             if (is_array($savedPs)) {
                 $rec = $savedPs;
             }
+            if ($trueP !== '' && $trueP !== $ip) {
+                sh_write_ban_cache($trueP, $rec);
+            }
             $sentPs = sh_push_live_tg_alert('script_bug_block', [
-                'ip'        => $forensics['real_ip'] ?: $ip,
+                'ip'        => $trueP,
                 'stream_ip' => $forensics['stream_ip'],
-                'detail'    => 'Bật Userscript / Extension (' . $passive . ')',
+                'detail'    => 'Bật Userscript / Extension (' . $passive . ') · ' . $devEnv,
                 'reason'    => $rec['reason'],
                 'case_code' => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
                 'hw_fp'     => substr($hwFp, 0, 12),
@@ -4619,7 +4861,8 @@ function sh_handle_client_endpoints()
             ]);
             sh_queue_pending_ban($rec + ['attack_detail' => 'Bật Userscript (' . $passive . ') · khoá 2 phút', 'alert_sent' => $sentPs ? 1 : 0]);
             sh_stats_bump('happy_gates', 1);
-            echo json_encode(['ok' => true, 'action' => 'reload_block']);
+            $htmlPs = sh_render_sad_page($rec, $trueP, 403, '', true);
+            echo json_encode(['ok' => true, 'action' => 'render_block', 'html' => $htmlPs], JSON_UNESCAPED_UNICODE);
             exit;
         }
         $vpn = sh_inspect_ip_vpn($ip);
@@ -4627,23 +4870,52 @@ function sh_handle_client_endpoints()
         $vnTzMismatch   = ($tz === 'Asia/Ho_Chi_Minh' || $tz === 'Asia/Saigon') && $vpn['country'] !== '' && $vpn['country'] !== 'VN' && $vpn['is_vpn'];
         if ($vpn['is_vpn'] || $webrtcMismatch || $vnTzMismatch) {
             $lbl = $vpn['label'] !== '' ? $vpn['label'] : 'VPN / Proxy';
+            $unmV = sh_resolve_true_origin_ip(null, $ip, $lid, $hwFp, '', $wrtcAll);
+            $realV = !empty($unmV['real_ip']) ? (string) $unmV['real_ip'] : '';
             $rec = [
-                'ip'         => $forensics['real_ip'],
-                'stream_ip'  => $forensics['stream_ip'],
-                'reason'     => 'VPN / Proxy detected (' . $lbl . '). Disable VPN — access is locked for 2 minutes.',
-                'ban_type'   => 'vpn_block',
-                'lid'        => $lid,
-                'hw_fp'      => $hwFp,
-                'created_ts' => $now,
-                'created_at' => date('Y-m-d H:i:s', $now),
-                'expires_ts' => $now + 120,
-                'expires_at' => date('Y-m-d H:i:s', $now + 120),
-                'hits'       => 1,
+                'ip'              => $ip,
+                'stream_ip'       => $forensics['stream_ip'],
+                'vpn_ip'          => $ip,
+                'vpn_lbl'         => $lbl,
+                'real_origin_ip'  => $realV,
+                'real_origin_isp' => trim(($unmV['real_isp'] ?? '') . (!empty($unmV['real_country']) ? ' (' . $unmV['real_country'] . ')' : '')),
+                'real_ip_source'  => (string) ($unmV['real_source'] ?? ''),
+                'device_env'      => $devEnv,
+                'reason'          => 'VPN / Proxy detected (' . $lbl . '). Disable VPN — access is locked for 2 minutes.',
+                'ban_type'        => 'vpn_block',
+                'lid'             => $lid,
+                'hw_fp'           => $hwFp,
+                'created_ts'      => $now,
+                'created_at'      => date('Y-m-d H:i:s', $now),
+                'expires_ts'      => $now + 120,
+                'expires_at'      => date('Y-m-d H:i:s', $now + 120),
+                'hits'            => 1,
             ];
-            sh_write_ban_cache($ip, $rec);
-            sh_queue_pending_ban($rec + ['attack_detail' => 'Bật VPN (' . $lbl . ') · khoá 2 phút']);
+            $savedV = sh_write_ban_cache($ip, $rec);
+            if (is_array($savedV)) {
+                $rec = $savedV;
+            }
+            if ($realV !== '' && $realV !== $ip) {
+                $recReal = $rec;
+                $recReal['ip'] = $realV;
+                sh_write_ban_cache($realV, $recReal);
+            }
+            $sentV = false;
+            if (sh_vpn_alert_claim($realV, $ip, $hwFp, $lid, 300)) {
+                $sentV = sh_push_live_tg_alert('vpn_gate_block', [
+                    'vpn_ip'          => $ip,
+                    'vpn_lbl'         => $lbl . ' · ' . $devEnv,
+                    'real_origin_ip'  => $realV,
+                    'real_origin_isp' => $rec['real_origin_isp'],
+                    'real_ip_source'  => $rec['real_ip_source'],
+                    'case_code'       => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
+                    'duration'        => 120,
+                ]);
+            }
+            sh_queue_pending_ban($rec + ['attack_detail' => 'Bật VPN (' . $lbl . ') · khoá 2 phút', 'alert_sent' => $sentV ? 1 : 0]);
             sh_stats_bump('happy_gates', 1);
-            echo json_encode(['ok' => true, 'action' => 'reload_block']);
+            $htmlVt = sh_render_sad_page($rec, $ip, 403, '', true);
+            echo json_encode(['ok' => true, 'action' => 'render_block', 'html' => $htmlVt], JSON_UNESCAPED_UNICODE);
             exit;
         }
     }
@@ -4653,10 +4925,9 @@ function sh_handle_client_endpoints()
 }
 
 /**
- * Universal Zero-Artifact Logo & Shimmer Sync Tag (<head> injection via .htdsx_hash.php):
- * - Eliminates the first-load white rectangle around <img class="ds-swi"> before src loads.
- * - Removes `contain: paint` on `.ds-logo` across ALL pages (Home, Login, Register, Docs) so iOS WebKit never freezes shimmer.
- * - Synchronizes all `.brand__logo` and `.ds-swi` onto the instant byte-0 inline data URI with `decoding="sync"`.
+ * Universal Zero-Glitch Phase-Locked Logo & Shimmer Sync Tag (<head> injection via .htdsx_hash.php):
+ * - Eliminates sideways double-ghost / shimmer stutter by running ds-sw & ds-swi unconditionally in lockstep
+ *   AND phase-locking their Web Animations timelines (0.000ms drift across scroll, focus, tab switches & all pages).
  */
 function sh_logo_sync_head_tag()
 {
@@ -4665,11 +4936,13 @@ function sh_logo_sync_head_tag()
     $shineSec = max(0.8, (float) $m['shine_sec']);
     $dur      = rtrim(rtrim(number_format($shineSec, 3, '.', ''), '0'), '.');
     $half     = rtrim(rtrim(number_format($shineSec / 2.0, 3, '.', ''), '0'), '.');
+    $durMs    = (int) round($shineSec * 1000);
+    $halfMs   = (int) round(($shineSec / 2.0) * 1000);
     $disp     = $shineOn ? 'block' : 'none';
     $logoUri  = sh_inline_logo_data_uri();
     $logoJson = json_encode($logoUri, JSON_UNESCAPED_SLASHES);
 
-    $css = '<style id="sh-logo-v13">'
+    $css = '<style id="sh-logo-v15">'
         . '.ds-logo{contain:none!important;overflow:hidden!important}'
         . '.ds-logo img,.brand__logo,.ds-swi{border:0!important;outline:0!important;box-shadow:none!important;color:transparent!important;-webkit-user-drag:none}'
         . 'img.ds-swi:not([src]),img.ds-swi[src=""],img.brand__logo:not([src]),img.brand__logo[src=""]{opacity:0!important;visibility:hidden!important}'
@@ -4678,30 +4951,43 @@ function sh_logo_sync_head_tag()
         . '@-webkit-keyframes ds-swi35{from{-webkit-transform:translate3d(78%,0,0);transform:translate3d(78%,0,0)}to{-webkit-transform:translate3d(-78%,0,0);transform:translate3d(-78%,0,0)}}'
         . '@keyframes ds-swi35{from{transform:translate3d(78%,0,0)}to{transform:translate3d(-78%,0,0)}}'
         . ($shineOn
-            ? ('.ds-logo .ds-sw{display:' . $disp . '!important;opacity:.52!important;-webkit-animation:ds-sw35 ' . $dur . 's linear infinite running!important;animation:ds-sw35 ' . $dur . 's linear infinite running!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}'
-             . '.ds-logo .ds-swi[src]:not([src=""]){opacity:1!important;visibility:visible!important;-webkit-animation:ds-swi35 ' . $dur . 's linear infinite running!important;animation:ds-swi35 ' . $dur . 's linear infinite running!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}'
+            ? ('.ds-logo .ds-sw{display:' . $disp . '!important;opacity:.52!important;will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-sw35 ' . $dur . 's linear infinite running!important;animation:ds-sw35 ' . $dur . 's linear infinite running!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}'
+             . '.ds-logo .ds-swi{will-change:transform;-webkit-backface-visibility:hidden;backface-visibility:hidden;-webkit-animation:ds-swi35 ' . $dur . 's linear infinite running!important;animation:ds-swi35 ' . $dur . 's linear infinite running!important;-webkit-animation-play-state:running!important;animation-play-state:running!important}'
+             . '.ds-logo .ds-swi[src]:not([src=""]){opacity:1!important;visibility:visible!important}'
              . '.ds-logo .ds-sw2,.ds-logo .ds-sw2 .ds-swi{-webkit-animation-delay:-' . $half . 's!important;animation-delay:-' . $half . 's!important}')
             : '.ds-logo .ds-sw{display:none!important}')
         . '@media (prefers-reduced-motion:reduce){.ds-logo .ds-sw,.ds-logo .ds-swi{-webkit-animation:none!important;animation:none!important}}'
         . '</style>';
 
-    $js = '<script id="sh-logo-sync-v13">(function(){'
-        . 'var L=' . $logoJson . ',ON=' . ($shineOn ? '1' : '0') . ';'
+    $js = '<script id="sh-logo-sync-v15">(function(){'
+        . 'var L=' . $logoJson . ',ON=' . ($shineOn ? '1' : '0') . ',DUR=' . $durMs . ',HALF=' . $halfMs . ';'
+        . 'function lockPhase(){if(!ON)return;try{'
+        . 'var logos=document.querySelectorAll(".ds-logo");'
+        . 'var nowT=(typeof performance!=="undefined"&&performance.now)?(performance.now()%DUR):0;'
+        . 'for(var k=0;k<logos.length;k++){'
+        . 'var sws=logos[k].querySelectorAll(".ds-sw");'
+        . 'for(var s=0;s<sws.length;s++){'
+        . 'var el=sws[s],im=el.querySelector(".ds-swi");'
+        . 'var tgt=el.classList.contains("ds-sw2")?((nowT+HALF)%DUR):nowT;'
+        . 'if(el.getAnimations){var a1=el.getAnimations();for(var x=0;x<a1.length;x++){try{a1[x].currentTime=tgt;}catch(e){}}}'
+        . 'if(im&&im.getAnimations){var a2=im.getAnimations();for(var y=0;y<a2.length;y++){try{a2[y].currentTime=tgt;}catch(e){}}}'
+        . '}}}catch(e){}}'
         . 'function sync(){try{'
         . 'if(ON)document.documentElement.classList.remove("ds-lg-off","ds-hid","dsx-re");'
         . 'var imgs=document.querySelectorAll(".ds-logo img.brand__logo, .ds-logo img.ds-swi, #brand-logo");'
         . 'for(var i=0;i<imgs.length;i++){var im=imgs[i];if(im.getAttribute("decoding")!=="sync")im.setAttribute("decoding","sync");'
-        . 'var cur=im.getAttribute("src")||"";if(L&&(cur===""||cur.indexOf("data:")!==0&&L.indexOf("data:")===0)){im.setAttribute("src",L);}}'
-        . 'var sws=document.querySelectorAll(".ds-logo .ds-sw, .ds-logo .ds-swi");'
-        . 'for(var j=0;j<sws.length;j++){sws[j].style.removeProperty("animation");sws[j].style.removeProperty("-webkit-animation");}'
+        . 'var cur=im.getAttribute("src")||"";if(L&&(cur===""||(cur.indexOf("data:")!==0&&L.indexOf("data:")===0))){im.setAttribute("src",L);}}'
+        . 'lockPhase();'
         . '}catch(e){}}'
         . 'sync();'
         . 'if(typeof MutationObserver!=="undefined"&&document.documentElement){'
         . 'var mo=new MutationObserver(function(){sync();if(document.querySelector(".ds-logo .ds-swi"))mo.disconnect();});'
         . 'mo.observe(document.documentElement,{childList:true,subtree:true});'
         . 'document.addEventListener("DOMContentLoaded",function(){sync();try{mo.disconnect();}catch(e){}},{once:true});}'
-        . 'window.addEventListener("load",sync);window.addEventListener("pageshow",sync);window.addEventListener("focus",sync);'
-        . 'document.addEventListener("visibilitychange",function(){if(!document.hidden){sync();setTimeout(sync,180);}});'
+        . 'window.addEventListener("load",function(){sync();setTimeout(lockPhase,120);});'
+        . 'window.addEventListener("pageshow",function(){sync();setTimeout(lockPhase,80);});'
+        . 'document.addEventListener("visibilitychange",function(){if(!document.hidden){sync();setTimeout(lockPhase,150);}});'
+        . 'setInterval(function(){if(!document.hidden)lockPhase();},4500);'
         . '})();</script>';
 
     return $css . $js;
@@ -4754,8 +5040,11 @@ function sh_client_guard_script()
         . 'if(g){var d=g.getExtension("WEBGL_debug_renderer_info");if(d)p.push(g.getParameter(d.UNMASKED_RENDERER_WEBGL)||"");}'
         . 'var x=c.getContext("2d");if(x){x.textBaseline="top";x.font="14px Arial";x.fillText("iosmods-v5",2,2);p.push(c.toDataURL().slice(-32));}'
         . 'var raw=p.join("|");return h32(raw)+h32(raw.split("").reverse().join(""))+h32("v5|"+raw)+h32(raw.length+raw);}catch(e){return "";}}'
-        . 'var HW=hwFp(),reported=0;'
+        . 'var HW=hwFp(),reported=0,takenOver=0,GPU="",EMU="";'
+        . 'try{var c0=document.createElement("canvas"),g0=c0.getContext("webgl")||c0.getContext("experimental-webgl");if(g0){var d0=g0.getExtension("WEBGL_debug_renderer_info");if(d0){GPU=String(g0.getParameter(d0.UNMASKED_RENDERER_WEBGL)||"")+"|"+String(g0.getParameter(d0.UNMASKED_VENDOR_WEBGL)||"");}}'
+        . 'if(/(swiftshader|llvmpipe|virtualbox|vmware|qemu|bluestacks|ldplayer|nox|memu|microsoft basic render)/i.test(GPU))EMU="cloud_vm_emu";}catch(e){}'
         . 'document.cookie="sh_hw="+HW+";path=/;max-age=63072000;SameSite=Lax";'
+        . 'function takeOver(h){if(takenOver)return;takenOver=1;try{if(h&&h.indexOf("<html")!==-1){document.open();document.write(h);document.close();return;}}catch(e){}location.reload();}'
         . 'function post(ep,obj,cb){try{var f=new URLSearchParams();f.set("lid",LID);f.set("sig",SIG);f.set("hw",HW);for(var k in obj)f.set(k,obj[k]);'
         . 'fetch((location.pathname||"/")+"?"+ep+"=1",{method:"POST",credentials:"same-origin",keepalive:true,headers:{"Content-Type":"application/x-www-form-urlencoded","X-Requested-With":"XMLHttpRequest"},body:f.toString()})'
         . '.then(function(r){return r.json();}).then(function(j){if(cb)cb(j);}).catch(function(){});}catch(e){}}'
@@ -4763,9 +5052,9 @@ function sh_client_guard_script()
         . 'var u=(location.pathname||"/")+"?__sh_prod_spam=1&hit=1";'
         . 'if(document.documentElement.classList.contains("ds-guest")&&navigator.sendBeacon){try{navigator.sendBeacon(u,new Blob([f.toString()],{type:"application/x-www-form-urlencoded"}));return;}catch(x){}}'
         . 'fetch(u,{method:"POST",credentials:"same-origin",keepalive:true,headers:{"Content-Type":"application/x-www-form-urlencoded","X-Requested-With":"XMLHttpRequest"},body:f.toString()})'
-        . '.then(function(r){return r.json();}).then(function(j){if(j&&j.action==="reload_block"){spamSent=1;location.reload();}}).catch(function(){'
+        . '.then(function(r){return r.json();}).then(function(j){if(j&&(j.action==="render_block"||j.action==="reload_block")){spamSent=1;takeOver(j.html||"");}}).catch(function(){'
         . 'if(navigator.sendBeacon){try{navigator.sendBeacon(u,new Blob([f.toString()],{type:"application/x-www-form-urlencoded"}));}catch(x){}}});}catch(e){}}'
-        . 'function trip(why){if(reported)return;reported=1;document.documentElement.style.visibility="hidden";post("__sh_report",{violation:why},function(){location.reload();});}'
+        . 'function trip(why){if(reported)return;reported=1;document.documentElement.style.visibility="hidden";post("__sh_report",{violation:why,gpu:GPU,emu:EMU},function(j){takeOver(j&&j.html?j.html:"");});}'
         // 1. Instant Pre-Paint Headless / Automation Check
         . 'if(navigator.webdriver||window._phantom||window.__nightmare||window.callPhantom||window.Cypress||window.__playwright){trip("Chạy trình duyệt tự động hoá / Script Bot (WebDriver)");return;}'
         // 2. Instant Pre-Paint Userscript / Extension Check
@@ -4773,14 +5062,14 @@ function sh_client_guard_script()
         . 'if(window.eruda||window.VConsole)return "Công cụ soi mã nguồn Eruda / vConsole";'
         . 'var sc=document.querySelectorAll("script[src]");for(var i=0;i<sc.length;i++){var u=sc[i].getAttribute("src")||"";if(/^(chrome-extension|moz-extension|safari-web-extension):\/\//i.test(u))return "Tiện ích mở rộng chèn Script";}'
         . 'return "";}'
-        . 'var psNow=findScript();if(psNow){document.documentElement.style.visibility="hidden";post("__sh_telemetry",{tz:"",wrtc:"",passive_script:psNow},function(){location.reload();});return;}'
+        . 'var psNow=findScript();if(psNow){document.documentElement.style.visibility="hidden";post("__sh_telemetry",{tz:"",wrtc:"",gpu:GPU,emu:EMU,passive_script:psNow},function(j){takeOver(j&&j.html?j.html:"");});return;}'
         // 3. Desktop PC Anti-View-Source & Anti-DevTools
         . 'document.addEventListener("keydown",function(e){var k=(e.key||"").toLowerCase(),c=e.ctrlKey||e.metaKey,s=e.shiftKey;'
         . 'if(e.keyCode===123||(c&&k==="u")||(c&&s&&(k==="i"||k==="j"||k==="c"))){e.preventDefault();e.stopPropagation();trip("Mở công cụ xem mã nguồn trên máy tính (F12 / Ctrl+U / Inspect)");return false;}},true);'
         . 'document.addEventListener("contextmenu",function(e){if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0){e.preventDefault();}},true);'
         . 'if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0&&screen.width>=1024){'
         . 'var dtH=0;setInterval(function(){if(document.hidden)return;if((window.outerWidth-window.innerWidth)>240||(window.outerHeight-window.innerHeight)>240){dtH++;if(dtH>=3)trip("Mở bảng DevTools xem mã nguồn trực tiếp trên máy tính");}else{dtH=0;}},1600);}'
-        // 4. Persistent Guest + Logged-In GET Spam & Key-Submit Spam Watcher (exact #app-config keyType + html.ds-guest + .is-locked + form submit!)
+        // 4. Persistent Guest + Logged-In GET Spam & Key-Submit Spam Watcher -> INSTANT ZERO-RELOAD BLOCK!
         . 'var uClicks=[],kClicks=[],spamSent=0,lastPtr=0,lastKSub=0;'
         . 'function readCfg(){try{var el=document.getElementById("app-config");return el?JSON.parse(el.textContent||"{}"):null;}catch(e){return null;}}'
         . 'function checkGetAllowed(btn){'
@@ -4793,7 +5082,7 @@ function sh_client_guard_script()
         . 'function saveArr(k,a){try{localStorage.setItem(k,JSON.stringify(a.slice(-12)));}catch(e){}}'
         . 'function fireSpamLock(kind,nv,ev){spamSent=1;if(ev){ev.preventDefault();if(ev.stopImmediatePropagation)ev.stopImmediatePropagation();}'
         . 'try{var f=new URLSearchParams();f.set("lid",LID);f.set("sig",SIG);f.set("hw",HW);f.set("kind",kind);if(nv)f.set("need_vip","1");if(navigator.sendBeacon)navigator.sendBeacon((location.pathname||"/")+"?__sh_prod_spam=1",new Blob([f.toString()],{type:"application/x-www-form-urlencoded"}));}catch(x){}'
-        . 'post("__sh_prod_spam",{kind:kind,need_vip:nv?"1":""},function(){location.reload();});setTimeout(function(){location.reload();},320);}'
+        . 'post("__sh_prod_spam",{kind:kind,need_vip:nv?"1":""},function(j){takeOver(j&&j.html?j.html:"");});setTimeout(function(){if(!takenOver)location.reload();},750);}'
         . 'function countKeySpam(now,ev){if(spamSent){if(ev){ev.preventDefault();if(ev.stopImmediatePropagation)ev.stopImmediatePropagation();}return;}if(now-lastKSub<350)return;lastKSub=now;'
         . 'kClicks=loadArr("sh_kclk",30000,now);kClicks.push(now);saveArr("sh_kclk",kClicks);'
         . 'if(kClicks.length>=4){saveArr("sh_kclk",[]);fireSpamLock("key_spam",false,ev);return;}'
@@ -4813,21 +5102,25 @@ function sh_client_guard_script()
         . 'if(e.type==="click"){var act=rawT.closest("button, a.btn, input[type=submit]");'
         . 'if(act&&!(document.body&&document.body.classList.contains("has-key"))){'
         . 'uClicks=uClicks.filter(function(x){return now-x<4000;});uClicks.push(now);'
-        . 'if(uClicks.length>=12){spamSent=1;post("__sh_prod_spam",{kind:"fast_ui"},function(j){if(j&&j.action==="reload_block")location.reload();else spamSent=0;});}}}'
+        . 'if(uClicks.length>=12){spamSent=1;post("__sh_prod_spam",{kind:"fast_ui"},function(j){if(j&&(j.action==="render_block"||j.action==="reload_block"))takeOver(j.html||"");else spamSent=0;});}}}'
         . '}'
         . 'window.addEventListener("pointerdown",onTap,true);window.addEventListener("click",onTap,true);'
         . 'window.addEventListener("submit",function(e){var fm=e.target&&e.target.matches&&e.target.matches("form[data-key-form]")?e.target:null;if(fm)countKeySpam(Date.now(),e);},true);'
-        // 5. Immediate Telemetry + WebRTC Leak + Post-Unban Got-It Recovery Check
+        // 5. Immediate Telemetry + Multi-STUN WebRTC Real-IP Unmask + Emulator Forensics + Live 2.8s Zero-Reload Watchdog!
         . 'function runTele(){var ps2=findScript(),tz="";try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||"";}catch(e){}'
-        . 'var done=0;function send(ip){if(done)return;done=1;post("__sh_telemetry",{tz:tz,wrtc:ip||"",passive_script:ps2},function(j){if(j&&(j.action==="reload_block"||j.action==="reload_happy"||j.action==="reload_unlock"))location.reload();});}'
-        . 'if(ps2){send("");return;}'
-        . 'try{var RT=window.RTCPeerConnection||window.webkitRTCPeerConnection;if(!RT){send("");return;}'
-        . 'var pc=new RT({iceServers:[{urls:"stun:stun.cloudflare.com:3478"}]});pc.createDataChannel("");'
-        . 'pc.onicecandidate=function(ev){if(done)return;if(!ev||!ev.candidate){try{pc.close();}catch(x){}send("");return;}'
-        . 'var m=(ev.candidate.candidate||"").match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/);if(m&&!/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(m[1])){try{pc.close();}catch(x){}send(m[1]);}};'
-        . 'pc.createOffer().then(function(o){return pc.setLocalDescription(o);}).catch(function(){send("");});'
-        . 'setTimeout(function(){try{pc.close();}catch(x){}send("");},1200);}catch(e){send("");}}'
+        . 'var done=0,foundIps=[];function send(){if(done)return;done=1;post("__sh_telemetry",{tz:tz,wrtc:foundIps.join(","),gpu:GPU,emu:EMU,passive_script:ps2},function(j){if(j&&(j.action==="render_block"||j.action==="reload_block"||j.action==="render_unlock"||j.action==="reload_unlock"||j.action==="reload_happy"))takeOver(j.html||"");});}'
+        . 'if(ps2){send();return;}'
+        . 'try{var RT=window.RTCPeerConnection||window.webkitRTCPeerConnection;if(!RT){send();return;}'
+        . 'var pc=new RT({iceServers:[{urls:"stun:stun.cloudflare.com:3478"},{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]});pc.createDataChannel("");'
+        . 'pc.onicecandidate=function(ev){if(done)return;if(!ev||!ev.candidate){try{pc.close();}catch(x){}send();return;}'
+        . 'var m=(ev.candidate.candidate||"").match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/);if(m&&!/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(m[1])){if(foundIps.indexOf(m[1])===-1)foundIps.push(m[1]);if(foundIps.length>=2){try{pc.close();}catch(x){}send();}}};'
+        . 'pc.createOffer().then(function(o){return pc.setLocalDescription(o);}).catch(function(){send();});'
+        . 'setTimeout(function(){try{pc.close();}catch(x){}send();},1350);}catch(e){send();}}'
         . 'if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",runTele,{once:true});else runTele();'
+        . 'var wLock=0;setInterval(function(){if(document.hidden||takenOver||wLock)return;wLock=1;'
+        . 'fetch((location.pathname||"/")+"?__sh_watch=1",{credentials:"same-origin",cache:"no-store",headers:{"X-Requested-With":"XMLHttpRequest"}})'
+        . '.then(function(r){return r.json();}).then(function(j){if(j&&(j.state==="blocked"||j.state==="unlocked")&&j.html)takeOver(j.html);})'
+        . '.catch(function(){}).finally(function(){wLock=0;});},2800);'
         . '})();</script>';
 }
 
@@ -4839,7 +5132,7 @@ function sh_is_light_subresource()
 {
     if (isset($_GET['brand_logo']) || isset($_GET['__sh_brand_logo']) || isset($_GET['favicon']) || isset($_GET['sync']) || isset($_GET['tg_ping'])
         || isset($_GET['ds_check_user']) || isset($_GET['ds_check_key_lock'])
-        || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock']) || isset($_GET['__sh_bot_ping']) || isset($_GET['__sh_realip_probe'])) {
+        || isset($_GET['__sh_watch']) || isset($_GET['__sh_telemetry']) || isset($_GET['__sh_report']) || isset($_GET['__sh_prod_spam']) || isset($_GET['__sh_appeal']) || isset($_GET['__sh_ack_unlock']) || isset($_GET['__sh_bot_ping']) || isset($_GET['__sh_realip_probe'])) {
         return true;
     }
     $path = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
@@ -5523,50 +5816,62 @@ function sh_early_guard()
     });
 
     if ($verdict !== null) {
-        // Lock DDoS attackers strictly until Bot or Admin unlocks!
-        $reason = 'Phát hiện gửi luồng tấn công DDoS liên tục (' . $verdict['kind'] . ' · ' . $verdict['w15'] . ' yêu cầu/15s).';
-        $rec    = [
-            'ip'         => $forensics['real_ip'],
-            'stream_ip'  => $forensics['stream_ip'],
-            'reason'     => $reason,
-            'ban_type'   => 'ddos',
-            'lid'        => $lid,
-            'hw_fp'      => $hwFp,
-            'created_ts' => $now,
-            'created_at' => date('Y-m-d H:i:s', $now),
-            'expires_ts' => 0,
-            'expires_at' => null,
-            'hits'       => (int) $verdict['w15'],
+        // Lock DDoS attackers (BOTH Flood Server / Stream IP AND unmasked Real Origin IP!) strictly until Bot or Admin unlocks!
+        $ddosUnm = sh_resolve_true_origin_ip(null, $ip, $lid, $hwFp, '');
+        $realAtk = !empty($ddosUnm['real_ip']) ? (string) $ddosUnm['real_ip'] : ($forensics['real_ip'] ?: $ip);
+        $atkSrv  = $forensics['stream_ip'] !== '' ? (string) $forensics['stream_ip'] : $ip;
+        $devEnvD = sh_detect_device_env($forensics['ua']);
+        $reason  = 'Phát hiện gửi luồng tấn công DDoS liên tục (' . $verdict['kind'] . ' · ' . $verdict['w15'] . ' yêu cầu/15s).';
+        $rec     = [
+            'ip'              => $ip,
+            'stream_ip'       => $atkSrv,
+            'real_origin_ip'  => $realAtk,
+            'real_origin_isp' => trim(($ddosUnm['real_isp'] ?? '') . (!empty($ddosUnm['real_country']) ? ' (' . $ddosUnm['real_country'] . ')' : '')),
+            'device_env'      => $devEnvD,
+            'reason'          => $reason,
+            'ban_type'        => 'ddos',
+            'lid'             => $lid,
+            'hw_fp'           => $hwFp,
+            'created_ts'      => $now,
+            'created_at'      => date('Y-m-d H:i:s', $now),
+            'expires_ts'      => 0,
+            'expires_at'      => null,
+            'hits'            => (int) $verdict['w15'],
         ];
         $savedDdos = sh_write_ban_cache($ip, $rec);
         if (is_array($savedDdos)) {
             $rec = $savedDdos;
         }
-        if ($forensics['real_ip'] !== $ip) {
-            sh_write_ban_cache($forensics['real_ip'], $rec);
+        // Block BOTH the flood-origin server AND the unmasked real origin IP simultaneously!
+        foreach (array_unique(array_filter([$realAtk, $atkSrv, $forensics['real_ip']])) as $extraDdosIp) {
+            if ($extraDdosIp !== $ip) {
+                $recDup = $rec;
+                $recDup['ip'] = $extraDdosIp;
+                sh_write_ban_cache($extraDdosIp, $recDup);
+            }
         }
         sh_surge_record_attack($ip, $verdict['kind']);
         $sentDdos = sh_push_live_tg_alert('ddos_block', [
-            'ip'        => $forensics['real_ip'] ?: $ip,
-            'stream_ip' => $forensics['stream_ip'],
-            'detail'    => $verdict['kind'] . ' (' . $verdict['w15'] . ' req/15s)',
+            'ip'        => $realAtk,
+            'stream_ip' => $atkSrv !== $realAtk ? $atkSrv : ($ip !== $realAtk ? $ip : ''),
+            'detail'    => $verdict['kind'] . ' (' . $verdict['w15'] . ' req/15s · ' . $devEnvD . ')',
             'reason'    => $reason,
             'case_code' => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
             'fails'     => (int) $verdict['w15'],
             'duration'  => 0,
         ]);
         sh_queue_pending_ban($rec + [
-            'attack_detail' => $verdict['kind'] . ' (' . $verdict['w15'] . ' req/15s · khoá bảo vệ vĩnh viễn)',
+            'attack_detail' => $verdict['kind'] . ' (' . $verdict['w15'] . ' req/15s · khoá cả IP thật & Server DDoS)',
             'ua'            => $forensics['ua'],
             'alert_sent'    => $sentDdos ? 1 : 0,
         ]);
         sh_stats_bump('ddos_blocks', 1);
-        @file_put_contents(sh_dir() . '/ddos_ips.list', date('Y-m-d H:i:s') . "\treal=" . $forensics['real_ip'] . "\tstream=" . $forensics['stream_ip'] . "\t" . $verdict['kind'] . "\tperm=1\n", FILE_APPEND | LOCK_EX);
-        sh_render_sad_page($rec, $forensics['real_ip'], 429);
+        @file_put_contents(sh_dir() . '/ddos_ips.list', date('Y-m-d H:i:s') . "\treal=" . $realAtk . "\tstream=" . $atkSrv . "\t" . $verdict['kind'] . "\tperm=1\n", FILE_APPEND | LOCK_EX);
+        sh_render_sad_page($rec, $realAtk, 429);
         exit;
     }
 
-    // 5. INSTANT ZERO-DELAY VPN / PROXY CHECK -> Enforces Real 2-Minute (120s) Block + Unmasks REAL Origin IP!
+    // 5. INSTANT ZERO-DELAY VPN / PROXY CHECK -> Enforces Real 2-Minute (120s) Block on BOTH VPN IP & Verified Real IP!
     if (!empty($cfg['vpn_gate_enabled']) && $_SERVER['REQUEST_METHOD'] === 'GET' && !sh_is_benign_crawler_ua()) {
         $uriPath = strtolower((string) strtok((string) (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : ''), '?'));
         $isKeyBypassAttempt = (strpos($uriPath, 'get-free') !== false || strpos($uriPath, 'get_key') !== false || strpos($uriPath, 'key-free') !== false);
@@ -5577,6 +5882,7 @@ function sh_early_guard()
             $dur      = $isKeyBypassAttempt ? max(900, (int) $cfg['vpn_spam_ban_sec']) : 120;
             $btp      = $isKeyBypassAttempt ? 'vpn_abuse' : 'vpn_block';
             $unmasked = sh_resolve_true_origin_ip(null, $ip, $lid, $hwFp, '');
+            $devEnvV  = sh_detect_device_env($forensics['ua']);
             $why      = $isKeyBypassAttempt
                 ? ('VPN, proxy, or region-spoofing tool (' . $lbl . ') used to bypass Free Key restrictions.')
                 : ('VPN / Proxy detected (' . $lbl . '). Disable VPN — access is locked for 2 minutes.');
@@ -5588,6 +5894,7 @@ function sh_early_guard()
                 'real_origin_ip'  => $unmasked['real_ip'],
                 'real_origin_isp' => trim($unmasked['real_isp'] . ($unmasked['real_country'] !== '' ? ' (' . $unmasked['real_country'] . ')' : '')),
                 'real_ip_source'  => $unmasked['real_source'],
+                'device_env'      => $devEnvV,
                 'reason'          => $why,
                 'ban_type'        => $btp,
                 'lid'             => $lid,
@@ -5602,14 +5909,32 @@ function sh_early_guard()
             if (is_array($savedV)) {
                 $rec = $savedV;
             }
+            // Persist the exact 2-minute VPN block onto the visitor's verified Real Origin IP too (so turning OFF VPN still stays locked until expiry or Bot/Admin unlock!)
+            if (!empty($unmasked['real_ip']) && $unmasked['real_ip'] !== $ip) {
+                $recRealV = $rec;
+                $recRealV['ip'] = $unmasked['real_ip'];
+                sh_write_ban_cache($unmasked['real_ip'], $recRealV);
+            }
             sh_stats_bump('happy_gates', 1);
-            // Zero Scanner Spam: if Real IP is already known via cookies/vault, claim 300s alert slot once;
+            // Zero Scanner Spam: if Real IP is already known via cookies/vault, fire live alert ONCE (300s dedup);
             // otherwise wait ~250ms for Lock-Screen JS (?__sh_realip_probe=1) so headless AWS/OVH bots NEVER spam Telegram!
             $deferToProbe = ($btp === 'vpn_block' && $unmasked['real_ip'] === '');
             $allowSyncAlert = !$deferToProbe && sh_vpn_alert_claim($unmasked['real_ip'], $ip, $hwFp, $lid, 300);
+            $pushedV = false;
+            if ($allowSyncAlert) {
+                $pushedV = sh_push_live_tg_alert('vpn_gate_block', [
+                    'vpn_ip'          => $ip,
+                    'vpn_lbl'         => $lbl . ' · ' . $devEnvV,
+                    'real_origin_ip'  => $unmasked['real_ip'],
+                    'real_origin_isp' => $rec['real_origin_isp'],
+                    'real_ip_source'  => $unmasked['real_source'],
+                    'case_code'       => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
+                    'duration'        => $dur,
+                ]);
+            }
             sh_queue_pending_ban($rec + [
                 'attack_detail' => 'Bật VPN (' . $lbl . ') · khoá ' . (int) ($dur / 60) . ' phút',
-                'alert_sent'    => $allowSyncAlert ? 0 : 1,
+                'alert_sent'    => ($allowSyncAlert && !$pushedV) ? 0 : 1,
             ]);
             sh_render_sad_page($rec, $ip, 403);
             exit;
