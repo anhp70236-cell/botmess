@@ -1509,9 +1509,12 @@ function sh_write_ban_cache($ip, array $record)
     if ($safe) {
         return null;
     }
-    $lid  = !empty($record['lid']) ? (string) $record['lid'] : sh_browser_lid();
-    $hwFp = !empty($record['hw_fp']) ? (string) $record['hw_fp'] : sh_hw_fp_cookie();
-    $net64 = sh_ip_network_key($ip);
+    // CRITICAL ISOLATION: NEVER steal current HTTP visitor's sh_lid / sh_hw when writing a ban for ANOTHER IP
+    // (e.g. syncing a crawler's pending ban during a human visitor's page load or Admin banning from Bot)!
+    $isSelfReq = (PHP_SAPI !== 'cli' && sh_client_ip() === $ip);
+    $lid       = !empty($record['lid']) ? (string) $record['lid'] : ($isSelfReq ? sh_browser_lid() : '');
+    $hwFp      = !empty($record['hw_fp']) ? (string) $record['hw_fp'] : ($isSelfReq ? sh_hw_fp_cookie() : '');
+    $net64     = sh_ip_network_key($ip);
 
     $saved = sh_json_update(sh_ban_cache_path($ip), function ($cur) use ($ip, $record, $lid, $hwFp) {
         $curArr = is_array($cur) ? $cur : [];
@@ -1555,12 +1558,14 @@ function sh_write_ban_cache($ip, array $record)
         return $merged;
     });
 
-    // Bind across all 6 layers (Hardware FP, Browser LID, IPv6 /64 prefix, Username) so zero loopholes exist while banned!
-    if ($hwFp !== '') {
-        sh_bind_entity_lock('hw', $hwFp, $saved);
+    // Bind across device layers ONLY using identifiers that truly belong to this banned record!
+    $effHw  = !empty($saved['hw_fp']) ? (string) $saved['hw_fp'] : '';
+    $effLid = !empty($saved['lid']) ? (string) $saved['lid'] : '';
+    if ($effHw !== '') {
+        sh_bind_entity_lock('hw', $effHw, $saved);
     }
-    if ($lid !== '') {
-        sh_bind_entity_lock('lid', $lid, $saved);
+    if ($effLid !== '') {
+        sh_bind_entity_lock('lid', $effLid, $saved);
     }
     if (strpos($net64, '/64') !== false) {
         sh_bind_entity_lock('net64', $net64, $saved);
@@ -1592,7 +1597,7 @@ function sh_unlock_ack_path($kind, $val)
     return sh_dir() . '/unlock_ack/' . substr($h, 0, 2) . '/' . $h . '.json';
 }
 
-function sh_set_unlock_ack(array $ips, array $lids = [], array $hws = [], $by = 'auto')
+function sh_set_unlock_ack(array $ips, array $lids = [], array $hws = [], $by = 'auto', $note = '')
 {
     $ips  = array_values(array_unique(array_filter(array_map('sh_norm_ip', $ips))));
     $lids = array_values(array_unique(array_filter(array_map('strtolower', $lids))));
@@ -1604,6 +1609,7 @@ function sh_set_unlock_ack(array $ips, array $lids = [], array $hws = [], $by = 
     $rec = [
         'ack_needed' => 1,
         'by'         => (string) $by,
+        'note'       => trim(substr((string) $note, 0, 260)),
         'at'         => $now,
         'exp'        => $now + 7 * 86400,
         'ips'        => $ips,
@@ -1667,7 +1673,15 @@ function sh_clear_unlock_ack($ip, $lid = '', $hw = '')
     if ($hw !== '') {
         $hws[] = strtolower($hw);
     }
-    $existing = sh_read_unlock_ack($ip, $lid, $hw);
+    $curLid = sh_browser_lid();
+    $curHw  = sh_hw_fp_cookie();
+    if ($curLid !== '') {
+        $lids[] = strtolower($curLid);
+    }
+    if ($curHw !== '') {
+        $hws[] = strtolower($curHw);
+    }
+    $existing = sh_read_unlock_ack($ip, $lid ?: $curLid, $hw ?: $curHw);
     if (is_array($existing)) {
         if (!empty($existing['ips']) && is_array($existing['ips'])) {
             $ips = array_merge($ips, $existing['ips']);
@@ -1679,14 +1693,33 @@ function sh_clear_unlock_ack($ip, $lid = '', $hw = '')
             $hws = array_merge($hws, $existing['hws']);
         }
     }
-    foreach (array_unique(array_filter($ips)) as $cip) {
-        @unlink(sh_unlock_ack_path('ip', sh_norm_ip($cip)));
+    $ips  = array_values(array_unique(array_filter(array_map('sh_norm_ip', $ips))));
+    $lids = array_values(array_unique(array_filter(array_map('strtolower', $lids))));
+    $hws  = array_values(array_unique(array_filter(array_map('strtolower', $hws))));
+
+    foreach ($ips as $cip) {
+        @unlink(sh_unlock_ack_path('ip', $cip));
     }
-    foreach (array_unique(array_filter($lids)) as $ld) {
-        @unlink(sh_unlock_ack_path('lid', strtolower($ld)));
+    foreach ($lids as $ld) {
+        @unlink(sh_unlock_ack_path('lid', $ld));
     }
-    foreach (array_unique(array_filter($hws)) as $h) {
-        @unlink(sh_unlock_ack_path('hw', strtolower($h)));
+    foreach ($hws as $h) {
+        @unlink(sh_unlock_ack_path('hw', $h));
+    }
+    // Deep sweep: remove ANY overlapping unlock_ack files across the directory so clicking "Got it" ONCE clears 100% permanently!
+    foreach (glob(sh_dir() . '/unlock_ack/*/*.json') ?: [] as $af) {
+        $ad = sh_json_read($af);
+        if (!is_array($ad)) {
+            continue;
+        }
+        $aIps  = isset($ad['ips']) && is_array($ad['ips']) ? $ad['ips'] : [];
+        $aLids = isset($ad['lids']) && is_array($ad['lids']) ? $ad['lids'] : [];
+        $aHws  = isset($ad['hws']) && is_array($ad['hws']) ? $ad['hws'] : [];
+        if (($ips && array_intersect($ips, $aIps))
+            || ($lids && array_intersect($lids, $aLids))
+            || ($hws && array_intersect($hws, $aHws))) {
+            @unlink($af);
+        }
     }
 }
 
@@ -1696,7 +1729,7 @@ function sh_clear_unlock_ack($ip, $lid = '', $hw = '')
  * encrypted Case Codes, pending queues, AND old rate/fail counters so an unbanned user
  * is NEVER instantly re-banned — and arms the "Đã tự động mở khoá" + "Got it" confirmation screen!
  */
-function sh_full_clean_slate_unban($conn, $ip, $username = '', $createUnlockGate = true, $hadDbBan = false, $unbannedBy = 'auto')
+function sh_full_clean_slate_unban($conn, $ip, $username = '', $createUnlockGate = true, $hadDbBan = false, $unbannedBy = 'auto', $unbanNote = '')
 {
     $ip  = sh_norm_ip($ip);
     $rec = $ip !== '' ? sh_read_ban_cache($ip) : null;
@@ -1926,15 +1959,37 @@ function sh_full_clean_slate_unban($conn, $ip, $username = '', $createUnlockGate
         }
     }
 
-    // Arm the Post-Unban "Đã tự động mở khoá" + "Got it" confirmation screen!
-    if ($createUnlockGate && $hadAnyActiveBan) {
-        sh_set_unlock_ack($ipsToClean, $lidsToClean, $hwsToClean, $unbannedBy);
+    // Arm the Post-Unban "Automatically Unlocked" + "Got it" confirmation screen ONLY for real browser sessions
+    // (NEVER for headless bot/crawler auto-timer expiries that had no LID/HW and weren't manually unbanned!)
+    $isHeadlessAuto = $isAutoTimer && !$lidsToClean && !$hwsToClean && ($rec === null || (empty($rec['lid']) && empty($rec['hw_fp']) && empty($rec['username'])));
+    if ($createUnlockGate && $hadAnyActiveBan && !$isHeadlessAuto) {
+        sh_set_unlock_ack($ipsToClean, $lidsToClean, $hwsToClean, $unbannedBy, $unbanNote);
     }
 }
 
 function sh_remove_ban_cache($ip)
 {
     sh_full_clean_slate_unban(isset($GLOBALS['conn']) && ($GLOBALS['conn'] instanceof mysqli) ? $GLOBALS['conn'] : null, $ip, '');
+}
+
+function sh_push_live_tg_alert($eventName, array $payload)
+{
+    try {
+        if (is_file(__DIR__ . '/telegram.php')) {
+            require_once __DIR__ . '/telegram.php';
+            if (function_exists('tg_boot')) {
+                tg_boot('web');
+            }
+            if (function_exists('tg_enabled') && tg_enabled() && function_exists('tg_event')) {
+                tg_event($eventName, $payload);
+                if (function_exists('tg_flush')) {
+                    tg_flush(false);
+                }
+                return true;
+            }
+        }
+    } catch (Throwable $e) {}
+    return false;
 }
 
 function sh_queue_pending_ban(array $item)
@@ -2055,14 +2110,14 @@ function sh_inspect_ip_vpn($ip)
     return $info;
 }
 
-/** Detects legitimate search engine & link-preview crawlers so they never create fake VPN ban noise. */
+/** Detects legitimate search engine, AI & link-preview crawlers so they never create fake VPN ban noise or cross-contaminate human locks. */
 function sh_is_benign_crawler_ua($ua = null)
 {
     $ua = $ua !== null ? (string) $ua : (string) (isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '');
     if ($ua === '') {
         return false;
     }
-    return (bool) preg_match('~(Googlebot|AdsBot-Google|Mediapartners-Google|Google-InspectionTool|Bingbot|Applebot|TelegramBot|Twitterbot|facebookexternalhit|Facebot|Discordbot|Slackbot|WhatsApp|LinkedInBot|UptimeRobot|Amazonbot|DuckDuckBot|YandexBot|AhrefsBot|SemrushBot|PetalBot)~i', $ua);
+    return (bool) preg_match('~(Googlebot|AdsBot-Google|Mediapartners-Google|Google-InspectionTool|Bingbot|Applebot|TelegramBot|Twitterbot|facebookexternalhit|Facebot|Discordbot|Slackbot|WhatsApp|LinkedInBot|UptimeRobot|Amazonbot|DuckDuckBot|YandexBot|AhrefsBot|SemrushBot|PetalBot|Reflectionbot|SERanking|ClaudeBot|GPTBot|OAI-SearchBot|PerplexityBot|Bytespider|CCBot|Meta-ExternalAgent|DataForSeoBot|BLEXBot|MJ12bot|DotBot|Barkrowler|ImagesiftBot|Slurp|Sogou|Qwantify|Screaming Frog)~i', $ua);
 }
 
 function sh_real_ip_vault_path($kind, $val)
@@ -3609,6 +3664,9 @@ function sh_render_unlocked_gate(array $ack, $ip, $previewBarHtml = '')
         <div class="meta-row"><span>Status</span><span>Unlocked</span></div>
         <div class="meta-row"><span>Access</span><span>Ready to Continue</span></div>
         <div class="meta-row"><span>IP Address</span><span class="mono"><?= $e($ip) ?></span></div>
+        <?php if (!empty($ack['note'])): ?>
+        <div class="meta-row"><span>Admin Note</span><span><?= $e($ack['note']) ?></span></div>
+        <?php endif; ?>
       </div>
 
       <div class="sec-note"><strong>Security Notice:</strong> Normal browsing is restored once confirmed. Please keep VPN, proxy, and browser automation scripts turned off while using iosmods.xyz.</div>
@@ -4260,8 +4318,30 @@ function sh_trigger_progressive_product_spam($ip, $username, $reasonDetail)
     if (is_array($saved)) {
         $rec = $saved;
     }
-    sh_queue_pending_ban($rec + ['attack_detail' => 'Spam Get sản phẩm / Thao tác quá nhanh (' . $mins . 'p)']);
+    sh_queue_pending_ban($rec + ['attack_detail' => 'Spam Get sản phẩm / Nhập Key quá nhanh (' . $mins . 'p)']);
     sh_stats_bump('spam_blocks', 1);
+    // Push immediate real-time Telegram alert to Admin for confirmed spam block!
+    try {
+        if (is_file(__DIR__ . '/telegram.php')) {
+            require_once __DIR__ . '/telegram.php';
+            if (function_exists('tg_boot')) {
+                tg_boot('web');
+            }
+            if (function_exists('tg_enabled') && tg_enabled() && function_exists('tg_event')) {
+                tg_event('key_spam_ban', [
+                    'ip'        => $ip,
+                    'username'  => (string) $username,
+                    'fails'     => 4,
+                    'duration'  => $durSec,
+                    'case_code' => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
+                    'reason'    => $reason,
+                ]);
+                if (function_exists('tg_flush')) {
+                    tg_flush(false);
+                }
+            }
+        }
+    } catch (Throwable $e) {}
     return $rec;
 }
 
@@ -4269,7 +4349,7 @@ function sh_trigger_progressive_product_spam($ip, $username, $reasonDetail)
 function sh_on_unkeyed_tool_attempt($conn, $username = '')
 {
     $ip = sh_client_ip();
-    if ($ip === '' || sh_is_admin_viewer()) {
+    if ($ip === '' || sh_is_admin_viewer() || sh_is_benign_crawler_ua()) {
         return;
     }
     list($safe, ) = sh_is_safe_ip($ip);
@@ -4384,6 +4464,12 @@ function sh_handle_client_endpoints()
     // 1. Cross-Device / Cross-VPN Evasion Check
     $elock = ($hwFp !== '' ? sh_read_entity_lock('hw', $hwFp) : null) ?: sh_read_entity_lock('lid', $lid);
     if ($elock !== null) {
+        $isVpnOnlyLock = (($elock['ban_type'] ?? '') === 'vpn_block' && !empty($elock['expires_ts']) && (int) $elock['expires_ts'] > time());
+        if ($isVpnOnlyLock) {
+            // Keep original 2-minute VPN cooldown intact without escalating or writing VPN ban onto residential IP!
+            echo json_encode(['ok' => true, 'action' => 'reload_block']);
+            exit;
+        }
         $evCnt                     = (int) (isset($elock['evasion_attempts']) ? $elock['evasion_attempts'] : 0) + 1;
         $origExp                   = isset($elock['expires_ts']) ? (int) $elock['expires_ts'] : 0;
         $newExp                    = ($origExp === 0 || $evCnt >= 2) ? 0 : (max($origExp, time() + 600) + 600);
@@ -4407,29 +4493,31 @@ function sh_handle_client_endpoints()
             echo json_encode(['ok' => true, 'action' => 'allow_keyed']);
             exit;
         }
-        // Per-click beacon across /dang-nhap redirects (?__sh_prod_spam=1&hit=1) accumulates server-side hits!
+        // Per-click beacon across /dang-nhap redirects & www/non-www switches (?__sh_prod_spam=1&hit=1) accumulates server-side hits by IP!
         if (isset($_GET['hit'])) {
             $now   = time();
-            $hKey  = md5('pshit|' . $ip . '|' . $lid);
+            $hKey  = md5('pshit14|' . $ip);
             $hFile = sh_dir() . '/prodspam_hits/' . substr($hKey, 0, 2) . '/' . $hKey . '.json';
             $trigHit = false;
-            sh_json_update($hFile, function ($s) use ($now, &$trigHit) {
+            $cntHit  = 0;
+            sh_json_update($hFile, function ($s) use ($now, &$trigHit, &$cntHit) {
                 $arr  = isset($s['t']) && is_array($s['t']) ? $s['t'] : [];
                 $keep = [];
                 foreach ($arr as $ts) {
-                    if ((int) $ts >= $now - 25) {
+                    if ((int) $ts >= $now - 35) {
                         $keep[] = (int) $ts;
                     }
                 }
                 $keep[] = $now;
-                if (count($keep) >= 4) {
+                $cntHit = count($keep);
+                if ($cntHit >= 4) {
                     $trigHit = true;
                     $keep    = [];
                 }
                 return ['t' => $keep];
             });
             if (!$trigHit) {
-                echo json_encode(['ok' => true, 'action' => 'counted']);
+                echo json_encode(['ok' => true, 'action' => 'counted', 'n' => $cntHit]);
                 exit;
             }
         }
@@ -4477,11 +4565,23 @@ function sh_handle_client_endpoints()
             'expires_at' => null,
             'hits'       => 1,
         ];
-        sh_write_ban_cache($ip, $rec);
+        $savedRep = sh_write_ban_cache($ip, $rec);
+        if (is_array($savedRep)) {
+            $rec = $savedRep;
+        }
         if ($forensics['real_ip'] !== $ip) {
             sh_write_ban_cache($forensics['real_ip'], $rec);
         }
-        sh_queue_pending_ban($rec + ['attack_detail' => $violate]);
+        $sentRep = sh_push_live_tg_alert('script_bug_block', [
+            'ip'        => $forensics['real_ip'] ?: $ip,
+            'stream_ip' => $forensics['stream_ip'],
+            'detail'    => $violate,
+            'reason'    => $reason,
+            'case_code' => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
+            'hw_fp'     => substr($hwFp, 0, 12),
+            'duration'  => 0,
+        ]);
+        sh_queue_pending_ban($rec + ['attack_detail' => $violate, 'alert_sent' => $sentRep ? 1 : 0]);
         sh_stats_bump('script_blocks', 1);
         echo json_encode(['ok' => true, 'action' => 'reload_block']);
         exit;
@@ -4504,8 +4604,20 @@ function sh_handle_client_endpoints()
                 'expires_at' => date('Y-m-d H:i:s', $now + 120),
                 'hits'       => 1,
             ];
-            sh_write_ban_cache($ip, $rec);
-            sh_queue_pending_ban($rec + ['attack_detail' => 'Bật Userscript (' . $passive . ') · khoá 2 phút']);
+            $savedPs = sh_write_ban_cache($ip, $rec);
+            if (is_array($savedPs)) {
+                $rec = $savedPs;
+            }
+            $sentPs = sh_push_live_tg_alert('script_bug_block', [
+                'ip'        => $forensics['real_ip'] ?: $ip,
+                'stream_ip' => $forensics['stream_ip'],
+                'detail'    => 'Bật Userscript / Extension (' . $passive . ')',
+                'reason'    => $rec['reason'],
+                'case_code' => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
+                'hw_fp'     => substr($hwFp, 0, 12),
+                'duration'  => 120,
+            ]);
+            sh_queue_pending_ban($rec + ['attack_detail' => 'Bật Userscript (' . $passive . ') · khoá 2 phút', 'alert_sent' => $sentPs ? 1 : 0]);
             sh_stats_bump('happy_gates', 1);
             echo json_encode(['ok' => true, 'action' => 'reload_block']);
             exit;
@@ -4649,8 +4761,10 @@ function sh_client_guard_script()
         . '.then(function(r){return r.json();}).then(function(j){if(cb)cb(j);}).catch(function(){});}catch(e){}}'
         . 'function beaconHit(kind,nv){try{var f=new URLSearchParams();f.set("lid",LID);f.set("sig",SIG);f.set("hw",HW);f.set("kind",kind);if(nv)f.set("need_vip","1");'
         . 'var u=(location.pathname||"/")+"?__sh_prod_spam=1&hit=1";'
-        . 'if(navigator.sendBeacon){var b=new Blob([f.toString()],{type:"application/x-www-form-urlencoded"});navigator.sendBeacon(u,b);}'
-        . 'else{fetch(u,{method:"POST",credentials:"same-origin",keepalive:true,headers:{"Content-Type":"application/x-www-form-urlencoded"},body:f.toString()}).catch(function(){});}}catch(e){}}'
+        . 'if(document.documentElement.classList.contains("ds-guest")&&navigator.sendBeacon){try{navigator.sendBeacon(u,new Blob([f.toString()],{type:"application/x-www-form-urlencoded"}));return;}catch(x){}}'
+        . 'fetch(u,{method:"POST",credentials:"same-origin",keepalive:true,headers:{"Content-Type":"application/x-www-form-urlencoded","X-Requested-With":"XMLHttpRequest"},body:f.toString()})'
+        . '.then(function(r){return r.json();}).then(function(j){if(j&&j.action==="reload_block"){spamSent=1;location.reload();}}).catch(function(){'
+        . 'if(navigator.sendBeacon){try{navigator.sendBeacon(u,new Blob([f.toString()],{type:"application/x-www-form-urlencoded"}));}catch(x){}}});}catch(e){}}'
         . 'function trip(why){if(reported)return;reported=1;document.documentElement.style.visibility="hidden";post("__sh_report",{violation:why},function(){location.reload();});}'
         // 1. Instant Pre-Paint Headless / Automation Check
         . 'if(navigator.webdriver||window._phantom||window.__nightmare||window.callPhantom||window.Cypress||window.__playwright){trip("Chạy trình duyệt tự động hoá / Script Bot (WebDriver)");return;}'
@@ -4666,36 +4780,43 @@ function sh_client_guard_script()
         . 'document.addEventListener("contextmenu",function(e){if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0){e.preventDefault();}},true);'
         . 'if(!("ontouchstart" in window)&&navigator.maxTouchPoints===0&&screen.width>=1024){'
         . 'var dtH=0;setInterval(function(){if(document.hidden)return;if((window.outerWidth-window.innerWidth)>240||(window.outerHeight-window.innerHeight)>240){dtH++;if(dtH>=3)trip("Mở bảng DevTools xem mã nguồn trực tiếp trên máy tính");}else{dtH=0;}},1600);}'
-        // 4. Persistent Guest + Logged-In GET Spam & Key-Submit Spam Watcher (works across /dang-nhap redirects & disabled buttons!)
-        . 'var uClicks=[],kClicks=[],spamSent=0,lastPtr=0;'
+        // 4. Persistent Guest + Logged-In GET Spam & Key-Submit Spam Watcher (exact #app-config keyType + html.ds-guest + .is-locked + form submit!)
+        . 'var uClicks=[],kClicks=[],spamSent=0,lastPtr=0,lastKSub=0;'
         . 'function readCfg(){try{var el=document.getElementById("app-config");return el?JSON.parse(el.textContent||"{}"):null;}catch(e){return null;}}'
         . 'function checkGetAllowed(btn){'
-        . 'var card=btn.closest?btn.closest("[data-pkg],[data-tier],.ds-row,.product-card"):null;'
-        . 'var needVip=!!(btn.getAttribute("data-pkg")==="vip"||btn.classList.contains("is-vip")||(card&&(card.getAttribute("data-pkg")==="vip"||/\\bvip\\b/i.test(card.textContent||"")&&btn.classList.contains("is-mismatch"))));'
-        . 'if(btn.classList.contains("ds-guest")||btn.disabled||btn.hasAttribute("disabled")||btn.classList.contains("is-mismatch"))return {ok:false,vip:needVip};'
-        . 'var cfg=readCfg();if(cfg){if(!cfg.loggedIn||!(Number(cfg.turns)>0))return {ok:false,vip:needVip};if(needVip&&String(cfg.plan||"").toUpperCase()!=="VIP")return {ok:false,vip:true};return {ok:true,vip:false};}'
+        . 'var card=btn.closest?btn.closest("[data-pkg],[data-tier],.ds-det,.ds-row,.product-card"):null;'
+        . 'var needVip=!!(btn.getAttribute("data-pkg")==="vip"||btn.classList.contains("is-vip")||(card&&(card.getAttribute("data-pkg")==="vip"||card.querySelector&&card.querySelector("p.is-vip")||btn.classList.contains("is-mismatch"))));'
+        . 'if(document.documentElement.classList.contains("ds-guest")||btn.classList.contains("ds-guest")||btn.classList.contains("is-locked")||btn.classList.contains("is-mismatch")||btn.disabled||btn.hasAttribute("disabled"))return {ok:false,vip:needVip};'
+        . 'var cfg=readCfg();if(cfg){if(!cfg.loggedIn||!(Number(cfg.turns)>0))return {ok:false,vip:needVip};var kt=String(cfg.keyType||cfg.plan||"").toUpperCase();if(needVip&&kt!=="VIP")return {ok:false,vip:true};if(kt==="NONE"||kt==="")return {ok:false,vip:needVip};return {ok:true,vip:false};}'
         . 'return {ok:document.body&&document.body.classList.contains("has-key"),vip:needVip};}'
         . 'function loadArr(k,winMs,now){try{var r=JSON.parse(localStorage.getItem(k)||"[]");if(!Array.isArray(r))r=[];return r.filter(function(x){return now-Number(x)<winMs;});}catch(e){return [];}}'
         . 'function saveArr(k,a){try{localStorage.setItem(k,JSON.stringify(a.slice(-12)));}catch(e){}}'
-        . 'function onTap(e){if(spamSent)return;var now=Date.now();'
+        . 'function fireSpamLock(kind,nv,ev){spamSent=1;if(ev){ev.preventDefault();if(ev.stopImmediatePropagation)ev.stopImmediatePropagation();}'
+        . 'try{var f=new URLSearchParams();f.set("lid",LID);f.set("sig",SIG);f.set("hw",HW);f.set("kind",kind);if(nv)f.set("need_vip","1");if(navigator.sendBeacon)navigator.sendBeacon((location.pathname||"/")+"?__sh_prod_spam=1",new Blob([f.toString()],{type:"application/x-www-form-urlencoded"}));}catch(x){}'
+        . 'post("__sh_prod_spam",{kind:kind,need_vip:nv?"1":""},function(){location.reload();});setTimeout(function(){location.reload();},320);}'
+        . 'function countKeySpam(now,ev){if(spamSent){if(ev){ev.preventDefault();if(ev.stopImmediatePropagation)ev.stopImmediatePropagation();}return;}if(now-lastKSub<350)return;lastKSub=now;'
+        . 'kClicks=loadArr("sh_kclk",30000,now);kClicks.push(now);saveArr("sh_kclk",kClicks);'
+        . 'if(kClicks.length>=4){saveArr("sh_kclk",[]);fireSpamLock("key_spam",false,ev);return;}'
+        . 'beaconHit("key_spam",false);}'
+        . 'function onTap(e){if(spamSent){e.preventDefault();if(e.stopImmediatePropagation)e.stopImmediatePropagation();return;}var now=Date.now();'
         . 'if(e.type==="click"&&now-lastPtr<380)return;if(e.type==="pointerdown")lastPtr=now;'
         . 'if(e.isTrusted===false){trip("Giả lập sự kiện click tự động bằng Script");return;}'
         . 'var rawT=e.target&&e.target.nodeType===1?e.target:(e.target&&e.target.parentElement?e.target.parentElement:null);'
         . 'if(!rawT||!rawT.closest)return;'
-        . 'var getBtn=rawT.closest(".ds-get, [data-tool-id]");'
+        . 'var getBtn=rawT.closest(".ds-get, [data-tool-id], a.menu__tool");'
         . 'if(getBtn){var st=checkGetAllowed(getBtn);if(!st.ok){'
-        . 'var gArr=loadArr("sh_gclk",25000,now);gArr.push(now);saveArr("sh_gclk",gArr);'
-        . 'if(gArr.length>=4){spamSent=1;saveArr("sh_gclk",[]);e.preventDefault();e.stopImmediatePropagation();post("__sh_prod_spam",{kind:"product",need_vip:st.vip?"1":""},function(){location.reload();});setTimeout(function(){location.reload();},350);return;}'
+        . 'var gArr=loadArr("sh_gclk",35000,now);gArr.push(now);saveArr("sh_gclk",gArr);'
+        . 'if(gArr.length>=4){saveArr("sh_gclk",[]);fireSpamLock("product",st.vip,e);return;}'
         . 'beaconHit("product",st.vip);return;}}'
-        . 'var kBtn=rawT.closest("form[data-key-form] button[type=submit], form[data-key-form] input[type=submit], [data-key-submit], #activate-key-btn");'
-        . 'if(kBtn){kClicks=loadArr("sh_kclk",20000,now);kClicks.push(now);saveArr("sh_kclk",kClicks);'
-        . 'if(kClicks.length>=5){spamSent=1;saveArr("sh_kclk",[]);e.preventDefault();e.stopImmediatePropagation();post("__sh_prod_spam",{kind:"key_spam"},function(){location.reload();});setTimeout(function(){location.reload();},350);return;}}'
+        . 'var kBtn=rawT.closest("form[data-key-form] button[type=submit], form[data-key-form] input[type=submit], button[name=submit_free], button[name=submit_vip], [data-key-submit], #activate-key-btn");'
+        . 'if(kBtn){countKeySpam(now,e);return;}'
         . 'if(e.type==="click"){var act=rawT.closest("button, a.btn, input[type=submit]");'
         . 'if(act&&!(document.body&&document.body.classList.contains("has-key"))){'
         . 'uClicks=uClicks.filter(function(x){return now-x<4000;});uClicks.push(now);'
         . 'if(uClicks.length>=12){spamSent=1;post("__sh_prod_spam",{kind:"fast_ui"},function(j){if(j&&j.action==="reload_block")location.reload();else spamSent=0;});}}}'
         . '}'
         . 'window.addEventListener("pointerdown",onTap,true);window.addEventListener("click",onTap,true);'
+        . 'window.addEventListener("submit",function(e){var fm=e.target&&e.target.matches&&e.target.matches("form[data-key-form]")?e.target:null;if(fm)countKeySpam(Date.now(),e);},true);'
         // 5. Immediate Telemetry + WebRTC Leak + Post-Unban Got-It Recovery Check
         . 'function runTele(){var ps2=findScript(),tz="";try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||"";}catch(e){}'
         . 'var done=0;function send(ip){if(done)return;done=1;post("__sh_telemetry",{tz:tz,wrtc:ip||"",passive_script:ps2},function(j){if(j&&(j.action==="reload_block"||j.action==="reload_happy"||j.action==="reload_unlock"))location.reload();});}'
@@ -5117,6 +5238,13 @@ function sh_early_guard()
                ?: ($lid !== '' ? sh_read_entity_lock('lid', $lid) : null)
                ?: (strpos($net64, '/64') !== false ? sh_read_entity_lock('net64', $net64) : null);
     if ($entityLock !== null) {
+        $isVpnOnlyLock = (($entityLock['ban_type'] ?? '') === 'vpn_block' && !empty($entityLock['expires_ts']) && (int) $entityLock['expires_ts'] > $now);
+        if ($isVpnOnlyLock) {
+            // User already turned OFF VPN and returned to their real IP while the 2-minute VPN cooldown is still counting down:
+            // keep the ORIGINAL 2-minute cooldown intact WITHOUT falsely escalating to 14 minutes or branding their residential IP as "VPN (US)"!
+            sh_render_sad_page($entityLock, $ip, 403);
+            exit;
+        }
         $evCnt                          = (int) (isset($entityLock['evasion_attempts']) ? $entityLock['evasion_attempts'] : 0) + 1;
         $origExp                        = isset($entityLock['expires_ts']) ? (int) $entityLock['expires_ts'] : 0;
         $newExp                         = ($origExp === 0 || $evCnt >= 2) ? 0 : (max($origExp, $now + 600) + 600);
@@ -5152,6 +5280,46 @@ function sh_early_guard()
         return;
     }
 
+    // 2C. Server-Side Repeated Wrong-Key / Too-Many-Attempts Spam Watcher (catches JS quickReload / cleared localStorage!)
+    if (!sh_is_benign_crawler_ua() && isset($_GET['status']) && in_array((string) $_GET['status'], ['too_many_attempts', 'key_wrong'], true)) {
+        $stPath = strtolower((string) strtok((string) ($_SERVER['REQUEST_URI'] ?? ''), '?'));
+        if ($stPath === '' || $stPath === '/' || strpos($stPath, 'home') !== false || strpos($stPath, 'index.php') !== false) {
+            // Only count the final rendered page (not the 302 from '/' when /asadnsrdecsb/home follows < 1s later)
+            $ksKey  = md5('kst14|' . $ip);
+            $ksFile = sh_dir() . '/prodspam_hits/' . substr($ksKey, 0, 2) . '/' . $ksKey . '.json';
+            $ksTrig = false;
+            sh_json_update($ksFile, function ($s) use ($now, &$ksTrig) {
+                $arr  = isset($s['t']) && is_array($s['t']) ? $s['t'] : [];
+                $keep = [];
+                foreach ($arr as $ts) {
+                    if ((int) $ts >= $now - 35) {
+                        $keep[] = (int) $ts;
+                    }
+                }
+                // Collapse < 1s 302->200 double-hit into 1 attempt
+                if (!$keep || ($now - end($keep)) >= 1) {
+                    $keep[] = $now;
+                }
+                if (count($keep) >= 3) {
+                    $ksTrig = true;
+                    $keep   = [];
+                }
+                return ['t' => $keep];
+            });
+            if ($ksTrig) {
+                $sessU = '';
+                if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['username'])) {
+                    $sessU = (string) $_SESSION['username'];
+                }
+                $kRec = sh_trigger_progressive_product_spam($ip, $sessU, 'Liên tục nhập sai mã Key / bấm kích hoạt dồn dập vượt giới hạn bảo vệ.');
+                if (is_array($kRec)) {
+                    sh_render_sad_page($kRec, $ip, 429);
+                    exit;
+                }
+            }
+        }
+    }
+
     // 3. Anti-Bug, Anti-Buff & WAF Check -> Locked Strictly Until Bot or Admin Unlocks!
     if (!empty($cfg['waf_enabled'])) {
         $bugHit = sh_detect_waf_bug_buff($ip);
@@ -5177,7 +5345,16 @@ function sh_early_guard()
             if ($forensics['real_ip'] !== $ip) {
                 sh_write_ban_cache($forensics['real_ip'], $rec);
             }
-            sh_queue_pending_ban($rec + ['attack_detail' => $bugHit['why'], 'ua' => $forensics['ua']]);
+            $sentBug = sh_push_live_tg_alert('script_bug_block', [
+                'ip'        => $forensics['real_ip'] ?: $ip,
+                'stream_ip' => $forensics['stream_ip'],
+                'detail'    => $bugHit['why'],
+                'reason'    => $reason,
+                'case_code' => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
+                'hw_fp'     => substr($hwFp, 0, 12),
+                'duration'  => 0,
+            ]);
+            sh_queue_pending_ban($rec + ['attack_detail' => $bugHit['why'], 'ua' => $forensics['ua'], 'alert_sent' => $sentBug ? 1 : 0]);
             sh_stats_bump('bug_blocks', 1);
             sh_render_sad_page($rec, $forensics['real_ip'], 403);
             exit;
@@ -5369,9 +5546,19 @@ function sh_early_guard()
             sh_write_ban_cache($forensics['real_ip'], $rec);
         }
         sh_surge_record_attack($ip, $verdict['kind']);
+        $sentDdos = sh_push_live_tg_alert('ddos_block', [
+            'ip'        => $forensics['real_ip'] ?: $ip,
+            'stream_ip' => $forensics['stream_ip'],
+            'detail'    => $verdict['kind'] . ' (' . $verdict['w15'] . ' req/15s)',
+            'reason'    => $reason,
+            'case_code' => isset($rec['case_code']) ? (string) $rec['case_code'] : '',
+            'fails'     => (int) $verdict['w15'],
+            'duration'  => 0,
+        ]);
         sh_queue_pending_ban($rec + [
             'attack_detail' => $verdict['kind'] . ' (' . $verdict['w15'] . ' req/15s · khoá bảo vệ vĩnh viễn)',
             'ua'            => $forensics['ua'],
+            'alert_sent'    => $sentDdos ? 1 : 0,
         ]);
         sh_stats_bump('ddos_blocks', 1);
         @file_put_contents(sh_dir() . '/ddos_ips.list', date('Y-m-d H:i:s') . "\treal=" . $forensics['real_ip'] . "\tstream=" . $forensics['stream_ip'] . "\t" . $verdict['kind'] . "\tperm=1\n", FILE_APPEND | LOCK_EX);

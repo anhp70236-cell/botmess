@@ -1717,7 +1717,10 @@ function tg_render($type, array $d)
             $kbRows   = [];
             if ($ip !== '' && strlen($ip) <= 42) {
                 $kbRows[] = [
-                    ['text' => '🔓 Gỡ khoá đa lớp', 'callback_data' => 'qa|unban|' . $ip],
+                    ['text' => '🔓 Gỡ khoá ngay', 'callback_data' => 'qa|unban|' . $ip],
+                    ['text' => '✍ Gỡ kèm lý do', 'callback_data' => 'qa|unban_why|' . $ip],
+                ];
+                $kbRows[] = [
                     ['text' => '🚫 Cấm vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
                 ];
             }
@@ -1758,6 +1761,9 @@ function tg_render($type, array $d)
             if ($ip !== '' && strlen($ip) <= 42) {
                 $kbRows[] = [
                     ['text' => '🔓 Gỡ ban ngay', 'callback_data' => 'qa|unban|' . $ip],
+                    ['text' => '✍ Gỡ kèm lý do', 'callback_data' => 'qa|unban_why|' . $ip],
+                ];
+                $kbRows[] = [
                     ['text' => '🚫 Chặn vĩnh viễn', 'callback_data' => 'qa|permban|' . $ip],
                 ];
             }
@@ -1810,11 +1816,13 @@ function tg_render($type, array $d)
             $targetUnban = $vpnIp !== '' ? $vpnIp : $realIp;
             $targetPerm  = $realIp !== '' ? $realIp : $vpnIp;
             if ($targetUnban !== '' && strlen($targetUnban) <= 42) {
-                $r1 = [['text' => '🔓 Gỡ khoá ngay', 'callback_data' => 'qa|unban|' . $targetUnban]];
+                $kbV[] = [
+                    ['text' => '🔓 Gỡ khoá ngay', 'callback_data' => 'qa|unban|' . $targetUnban],
+                    ['text' => '✍ Gỡ kèm lý do', 'callback_data' => 'qa|unban_why|' . $targetUnban],
+                ];
                 if ($targetPerm !== '' && strlen($targetPerm) <= 42) {
-                    $r1[] = ['text' => ($realIp !== '' ? '🚫 Cấm vĩnh viễn IP Thật' : '🚫 Cấm vĩnh viễn'), 'callback_data' => 'qa|permban|' . $targetPerm];
+                    $kbV[] = [['text' => ($realIp !== '' ? '🚫 Cấm vĩnh viễn IP Thật' : '🚫 Cấm vĩnh viễn'), 'callback_data' => 'qa|permban|' . $targetPerm]];
                 }
-                $kbV[] = $r1;
             }
             if ($cc !== '' && strlen($cc) <= 40) {
                 $kbV[] = [['text' => '🔍 Hồ sơ mã IMX', 'callback_data' => 'qa|case|' . $cc]];
@@ -1870,12 +1878,14 @@ function tg_render($type, array $d)
             $permBanIp = $realIp !== '' ? $realIp : $unbanIp;
             $kbRows    = [];
             if ($unbanIp !== '' && strlen($unbanIp) <= 42) {
-                $row1 = [['text' => '🔓 Gỡ chặn ngay', 'callback_data' => 'qa|unban|' . $unbanIp]];
-                if ($user !== '' && strlen($user) <= 36) {
-                    $row1[] = ['text' => '🎁 Gỡ + Mở Get Key', 'callback_data' => 'qa|unban_fk|' . $unbanIp . ':' . $user];
-                }
-                $kbRows[] = $row1;
+                $kbRows[] = [
+                    ['text' => '🔓 Gỡ chặn ngay', 'callback_data' => 'qa|unban|' . $unbanIp],
+                    ['text' => '✍ Gỡ kèm lý do', 'callback_data' => 'qa|unban_why|' . $unbanIp],
+                ];
                 $row2 = [];
+                if ($user !== '' && strlen($user) <= 36) {
+                    $row2[] = ['text' => '🎁 Gỡ + Mở Get Key', 'callback_data' => 'qa|unban_fk|' . $unbanIp . ':' . $user];
+                }
                 if ($cc !== '' && strlen($cc) <= 40) {
                     $row2[] = ['text' => '🔍 Xem hồ sơ mã', 'callback_data' => 'qa|case|' . $cc];
                 }
@@ -1987,10 +1997,11 @@ function tg_render($type, array $d)
             ];
 
         case 'ip_unban':
+            $uReason = !empty($d['reason']) ? (' · 📝 ' . tg_e(tg_clip((string) $d['reason'], 140))) : '';
             return [
                 'cat'   => 'ban',
                 'title' => '✅ <b>ĐÃ GỠ CHẶN IP</b>',
-                'rows'  => ['🌐 ' . $ipTag . ' · 👮 Admin ' . tg_c(isset($d['by']) ? $d['by'] : '')],
+                'rows'  => ['🌐 ' . $ipTag . ' · 👮 Admin ' . tg_c(isset($d['by']) ? $d['by'] : '') . $uReason],
             ];
 
         case 'user_block':

@@ -422,11 +422,11 @@ function ipg_temp_ban($conn, $ip, $seconds, $reason, $by = 'bot-shield', $userna
 }
 
 /** Unban = active 0 + clear fast cache + clear keyfail strikes + arm Got-it unlock screen so visitor sees unlocked confirmation once. */
-function ipg_unban($conn, $ip, $by, $createUnlockGate = true)
+function ipg_unban($conn, $ip, $by, $createUnlockGate = true, $unbanNote = '')
 {
-    $ip        = ipg_norm($ip);
-    $row       = ipg_find($conn, $ip);
-    $prevCache = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($ip) : null;
+    $ip          = ipg_norm($ip);
+    $row         = ipg_find($conn, $ip);
+    $prevCache   = function_exists('sh_read_ban_cache') ? sh_read_ban_cache($ip) : null;
     $wasActiveDb = ($row && (int) $row['active'] === 1);
     if ($wasActiveDb) {
         $st = ipg_q($conn, 'UPDATE ip_bans SET active = 0, unbanned_by = ?, unbanned_at = NOW() WHERE ip = ?', 'ss', [(string) $by, $ip]);
@@ -436,11 +436,17 @@ function ipg_unban($conn, $ip, $by, $createUnlockGate = true)
         $st->close();
     }
     // Also lift paired real_origin_ip / vpn_ip in MySQL if linked to this exact ban
+    $extraIps  = [];
+    $extraLids = [];
     if (is_array($prevCache)) {
-        foreach (['real_origin_ip', 'vpn_ip'] as $lk) {
+        if (!empty($prevCache['lid'])) {
+            $extraLids[] = (string) $prevCache['lid'];
+        }
+        foreach (['real_origin_ip', 'vpn_ip', 'origin_ip'] as $lk) {
             if (!empty($prevCache[$lk]) && $prevCache[$lk] !== $ip) {
                 $pairedIp = ipg_norm($prevCache[$lk]);
                 if ($pairedIp !== '') {
+                    $extraIps[] = $pairedIp;
                     $stP = ipg_q($conn, 'UPDATE ip_bans SET active = 0, unbanned_by = ?, unbanned_at = NOW() WHERE ip = ? AND active = 1', 'ss', [(string) $by, $pairedIp]);
                     if ($stP !== null) {
                         if ($stP->affected_rows > 0) {
@@ -452,22 +458,30 @@ function ipg_unban($conn, $ip, $by, $createUnlockGate = true)
             }
         }
     }
+    $uname = $row && !empty($row['username']) ? (string) $row['username'] : (string) ($prevCache['username'] ?? '');
     if (function_exists('sh_full_clean_slate_unban')) {
         sh_full_clean_slate_unban(
             $conn,
             $ip,
-            $row && !empty($row['username']) ? (string) $row['username'] : (string) ($prevCache['username'] ?? ''),
+            $uname,
             $createUnlockGate,
             $wasActiveDb || is_array($prevCache),
-            (string) $by
+            (string) $by,
+            (string) $unbanNote
         );
     } elseif (function_exists('sh_remove_ban_cache')) {
         sh_remove_ban_cache($ip);
     }
+    $meta = [
+        'username'   => $uname,
+        'extra_ips'  => array_values(array_unique($extraIps)),
+        'extra_lids' => array_values(array_unique($extraLids)),
+        'case_code'  => is_array($prevCache) && !empty($prevCache['case_code']) ? (string) $prevCache['case_code'] : '',
+    ];
     if (!$wasActiveDb && !is_array($prevCache)) {
-        return ['ok' => (bool) $row, 'msg' => $row ? 'IP này đã được gỡ chặn.' : 'IP này hiện không bị chặn.', 'row' => $row];
+        return ['ok' => (bool) $row, 'msg' => $row ? 'IP này đã được gỡ chặn.' : 'IP này hiện không bị chặn.', 'row' => $row] + $meta;
     }
-    return ['ok' => true, 'msg' => 'Đã gỡ chặn IP thành công.', 'row' => ipg_find($conn, $ip)];
+    return ['ok' => true, 'msg' => 'Đã gỡ chặn IP thành công.', 'row' => ipg_find($conn, $ip)] + $meta;
 }
 
 /* ------------------------------------------------------------------
