@@ -646,7 +646,26 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         }
     }
 
-    $packList = is_array($vault['pack_list']) ? $vault['pack_list'] : [];
+    // Fresh clean-slate setup when Admin sends a full palette (>= 10 unique custom emojis, e.g. 60+ emojis!)
+    // so zero stale old picks OR old sticker-pack icons ever pollute the new cohesive theme!
+    $isBulkPalette = (count($uniqueIds) >= 10);
+    if ($isBulkPalette) {
+        $vault['picks']     = [];
+        $vault['pack_name'] = '';
+        $vault['pack_list'] = [];
+        tg_store_update('settings', function ($s) {
+            unset($s['emoji_pick'], $s['emoji_pack']);
+            $s['emoji_off'] = false;
+            return $s;
+        });
+        tg_store_update('emojidown', function () {
+            return ['until' => 0];
+        });
+    } elseif (!is_array($vault['picks'])) {
+        $vault['picks'] = [];
+    }
+
+    $packList = (!$isBulkPalette && is_array($vault['pack_list'])) ? $vault['pack_list'] : [];
     if ($packName !== '') {
         $pRes = tg_api_raw('getStickerSet', ['name' => $packName], 6);
         if (!empty($pRes['ok']) && isset($pRes['result']['stickers']) && is_array($pRes['result']['stickers'])) {
@@ -670,19 +689,6 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
                 });
             }
         }
-    }
-
-    // Fresh clean-slate setup when Admin sends a full palette (>= 10 unique custom emojis, e.g. 60 emojis!)
-    // so zero stale old picks ever pollute the new cohesive 60-emoji theme!
-    if (count($uniqueIds) >= 10) {
-        $vault['picks'] = [];
-        tg_store_update('settings', function ($s) {
-            unset($s['emoji_pick']);
-            $s['emoji_off'] = false;
-            return $s;
-        });
-    } elseif (!is_array($vault['picks'])) {
-        $vault['picks'] = [];
     }
 
     // Build lookup by base unicode character from the Admin's sent emojis first, then from pack
@@ -787,6 +793,7 @@ function tg_emoji_ingest_custom_ids(array $ids, array $msgUnicodeHints = [])
         return $s;
     });
     tg_emoji_vault_write($vault);
+    tg_emoji_reset();
 
     return [
         'ok'         => true,
@@ -1454,6 +1461,90 @@ function tg_api_raw($method, array $params = [], $timeout = 6)
         $res = ['ok' => false, 'description' => $err !== '' ? $err : 'bad response from Telegram'];
     }
     return $res;
+}
+
+/**
+ * Sends a local image/screenshot file directly to all Admin Telegram chats via multipart /sendPhoto.
+ * Dresses caption & inline buttons with custom emojis when active, with safe plain-text fallback.
+ */
+function tg_send_photo_admin($filePath, $caption = '', $markup = null, $timeout = 12)
+{
+    if (!tg_enabled() || !is_string($filePath) || $filePath === '' || !is_file($filePath) || !function_exists('curl_init') || !class_exists('CURLFile')) {
+        return false;
+    }
+    $admins = tg_admin_ids();
+    if (!$admins) {
+        return false;
+    }
+    $ext  = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+    $mime = ($ext === 'png') ? 'image/png' : (($ext === 'webp') ? 'image/webp' : 'image/jpeg');
+    $url  = rtrim((string) tg_cfg('api_base', 'https://api.telegram.org'), '/') . '/bot' . (string) tg_cfg('bot_token', '') . '/sendPhoto';
+
+    $capPlain   = tg_clip((string) $caption, 980);
+    $capDressed = tg_dress_text($capPlain);
+    $mkDressed  = is_array($markup) ? tg_dress_markup($markup) : null;
+    $mkPlain    = is_array($markup) ? tg_strip_button_extras($markup) : null;
+    $sentAny    = false;
+
+    foreach ($admins as $cid) {
+        $post = [
+            'chat_id'    => $cid,
+            'photo'      => new CURLFile($filePath, $mime, basename($filePath)),
+            'caption'    => $capDressed,
+            'parse_mode' => 'HTML',
+        ];
+        if (is_array($mkDressed)) {
+            $post['reply_markup'] = json_encode($mkDressed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        $ch = @curl_init($url);
+        if (!$ch) {
+            continue;
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $post,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
+            CURLOPT_CONNECTTIMEOUT => 4,
+            CURLOPT_TIMEOUT        => $timeout,
+        ]);
+        $raw = @curl_exec($ch);
+        @curl_close($ch);
+        $res = is_string($raw) ? json_decode($raw, true) : null;
+        if (!empty($res['ok'])) {
+            $sentAny = true;
+            continue;
+        }
+        // Retry once with plain stripped caption/markup if Telegram rejected custom emojis or button style
+        $desc = (string) ($res['description'] ?? '');
+        if ($desc !== '' && preg_match('/emoji|icon_|DOCUMENT_INVALID|BUTTON_TYPE|style|entit|PREMIUM|parse/i', $desc)) {
+            $post['photo']   = new CURLFile($filePath, $mime, basename($filePath));
+            $post['caption'] = tg_strip_ce($capPlain);
+            if (is_array($mkPlain)) {
+                $post['reply_markup'] = json_encode($mkPlain, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            } else {
+                unset($post['reply_markup']);
+            }
+            $ch2 = @curl_init($url);
+            if ($ch2) {
+                curl_setopt_array($ch2, [
+                    CURLOPT_POST           => true,
+                    CURLOPT_POSTFIELDS     => $post,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
+                    CURLOPT_CONNECTTIMEOUT => 4,
+                    CURLOPT_TIMEOUT        => $timeout,
+                ]);
+                $raw2 = @curl_exec($ch2);
+                @curl_close($ch2);
+                $res2 = is_string($raw2) ? json_decode($raw2, true) : null;
+                if (!empty($res2['ok'])) {
+                    $sentAny = true;
+                }
+            }
+        }
+    }
+    return $sentAny;
 }
 
 /* ------------------------------------------------------------------

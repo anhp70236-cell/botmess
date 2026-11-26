@@ -4988,7 +4988,127 @@ function pub_ai_call_llm(array $messages)
     return '';
 }
 
-function pub_ai_respond_smart($from, $chatId, $firstName, $userText, array &$mem, $systemPrompt, $offlineFallbackHtml)
+/**
+ * Downloads a Telegram photo or image document from a public user message,
+ * saves it briefly under sh_dir()/ai_uploads/, and extracts screenshot text via OCR.space.
+ */
+function pub_download_tg_photo(array $m)
+{
+    $fileId = '';
+    $ext    = 'jpg';
+    if (!empty($m['photo']) && is_array($m['photo'])) {
+        // Prefer high-res but <= 1.8MB for crisp OCR & fast upload
+        $picked = end($m['photo']);
+        for ($i = count($m['photo']) - 1; $i >= 0; $i--) {
+            $cand = $m['photo'][$i];
+            if (!empty($cand['file_id']) && ((int) ($cand['file_size'] ?? 0) <= 1800000 || $i === 0)) {
+                $picked = $cand;
+                break;
+            }
+        }
+        $fileId = isset($picked['file_id']) ? (string) $picked['file_id'] : '';
+    } elseif (!empty($m['document']) && is_array($m['document'])) {
+        $mime = strtolower((string) ($m['document']['mime_type'] ?? ''));
+        $sz   = (int) ($m['document']['file_size'] ?? 0);
+        if (strpos($mime, 'image/') === 0 && !empty($m['document']['file_id']) && ($sz === 0 || $sz <= 3200000)) {
+            $fileId = (string) $m['document']['file_id'];
+            if (strpos($mime, 'png') !== false) {
+                $ext = 'png';
+            } elseif (strpos($mime, 'webp') !== false) {
+                $ext = 'webp';
+            }
+        }
+    }
+    if ($fileId === '') {
+        return null;
+    }
+
+    $gf = tg_api_raw('getFile', ['file_id' => $fileId], 6);
+    $fp = (!empty($gf['ok']) && !empty($gf['result']['file_path'])) ? (string) $gf['result']['file_path'] : '';
+    if ($fp === '') {
+        return ['ok' => false, 'path' => '', 'ocr' => '', 'code' => ''];
+    }
+    $pathExt = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
+    if (in_array($pathExt, ['jpg', 'jpeg', 'png', 'webp'], true)) {
+        $ext = ($pathExt === 'jpeg') ? 'jpg' : $pathExt;
+    }
+
+    $fileUrl = rtrim((string) tg_cfg('api_base', 'https://api.telegram.org'), '/') . '/file/bot' . (string) tg_cfg('bot_token', '') . '/' . ltrim($fp, '/');
+    $bytes   = null;
+    if (function_exists('curl_init')) {
+        $ch = @curl_init($fileUrl);
+        if ($ch) {
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
+                CURLOPT_CONNECTTIMEOUT => 4,
+                CURLOPT_TIMEOUT        => 9,
+            ]);
+            $raw  = @curl_exec($ch);
+            $code = (int) @curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            @curl_close($ch);
+            if ($code === 200 && is_string($raw) && strlen($raw) >= 120 && strlen($raw) <= 3500000) {
+                $bytes = $raw;
+            }
+        }
+    }
+    if (!is_string($bytes)) {
+        return ['ok' => false, 'path' => '', 'ocr' => '', 'code' => ''];
+    }
+
+    $baseDir = (function_exists('sh_dir') ? sh_dir() : sys_get_temp_dir()) . '/ai_uploads';
+    if (!is_dir($baseDir)) {
+        @mkdir($baseDir, 0770, true);
+    }
+    // Prune stale uploaded screenshots > 1 hour
+    $old = @glob($baseDir . '/tg_*');
+    if (is_array($old) && count($old) > 40) {
+        $cut = time() - 3600;
+        foreach ($old as $of) {
+            if (@filemtime($of) < $cut) {
+                @unlink($of);
+            }
+        }
+    }
+    $rnd       = function_exists('random_bytes') ? bin2hex(random_bytes(4)) : substr(md5(uniqid('', true)), 0, 8);
+    $localPath = $baseDir . '/tg_' . time() . '_' . $rnd . '.' . $ext;
+    @file_put_contents($localPath, $bytes, LOCK_EX);
+
+    $ocrText = function_exists('sh_ocr_extract_image') ? (string) sh_ocr_extract_image($localPath) : '';
+    $imxCode = ($ocrText !== '' && function_exists('sh_extract_case_code')) ? sh_extract_case_code($ocrText) : '';
+    return [
+        'ok'   => true,
+        'path' => $localPath,
+        'ocr'  => $ocrText,
+        'code' => $imxCode,
+    ];
+}
+
+/**
+ * Deliberate ~7-second review pause for minor auto-unlock cases on live Telegram webhooks.
+ * Shows immediate "⏳ Đang kiểm tra..." status + typing indicator so customers see careful server verification.
+ */
+function pub_wait_7s_deliberate($chatId, $noticeHtml)
+{
+    pub_send_reply($chatId, $noticeHtml);
+    $host   = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
+    $remote = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    $isLocalTest = (PHP_SAPI === 'cli')
+        || strpos($host, '127.0.0.1') === 0
+        || strpos($host, 'localhost') === 0
+        || $remote === '127.0.0.1'
+        || $remote === '::1';
+    if ($isLocalTest) {
+        return;
+    }
+    @tg_api_raw('sendChatAction', ['chat_id' => $chatId, 'action' => 'typing'], 2);
+    @sleep(3);
+    @tg_api_raw('sendChatAction', ['chat_id' => $chatId, 'action' => 'typing'], 2);
+    @sleep(4);
+}
+
+function pub_ai_respond_smart($from, $chatId, $firstName, $userText, array &$mem, $systemPrompt, $offlineFallbackHtml, array $relayCtx = [])
 {
     @tg_api_raw('sendChatAction', ['chat_id' => $chatId, 'action' => 'typing'], 2);
 
@@ -5003,6 +5123,43 @@ function pub_ai_respond_smart($from, $chatId, $firstName, $userText, array &$mem
 
     $llmText = pub_ai_call_llm($msgs);
     if ($llmText !== '') {
+        // SERVER-VERIFIED ADMIN ESCALATION: Intercept [SEND_ADMIN: ...] tag OR any claim of sending to Admin!
+        $relaySummary = '';
+        if (preg_match('/\[(?:SEND_ADMIN|CHUYEN_ADMIN)\s*:\s*([^\]]{3,400})\]/iu', $llmText, $rm)) {
+            $relaySummary = trim((string) $rm[1]);
+            $llmText      = trim((string) preg_replace('/\[(?:SEND_ADMIN|CHUYEN_ADMIN)\s*:[^\]]*\]/iu', '', $llmText));
+        } elseif (empty($relayCtx['already_sent'])
+            && preg_match('/\b(da chuyen|da gui).{0,35}(yeu cau|loi nhan|tin nhan|giai trinh|ho tro).{0,25}(admin|quan tri)/iu', pub_fold_ascii($llmText))) {
+            $relaySummary = tg_clip((string) $userText, 360);
+        }
+
+        if ($relaySummary !== '' && empty($relayCtx['already_sent'])) {
+            $supIp  = (string) ($relayCtx['ip'] ?? ($mem['real_ip'] ?? ($mem['last_ip'] ?? '')));
+            $supUsr = (string) ($relayCtx['username'] ?? ($mem['username'] ?? ''));
+            $tgUsr  = (string) ($relayCtx['tg_user'] ?? '');
+            pub_save_multi_links($chatId, $firstName, [$supIp], '', $supUsr);
+            tg_event('user_support_ticket', [
+                'tg_uid'   => $from,
+                'tg_name'  => $firstName,
+                'tg_user'  => $tgUsr,
+                'ip'       => $supIp,
+                'username' => $supUsr,
+                'message'  => $relaySummary,
+            ]);
+            tg_flush(false);
+            if (!empty($relayCtx['photo_path']) && is_file((string) $relayCtx['photo_path']) && function_exists('tg_send_photo_admin')) {
+                $cap = '🖼 <b>Ảnh khách gửi từ Telegram AI</b>' . "\n"
+                    . '👤 <b>' . tg_e($firstName) . '</b>' . ($tgUsr !== '' ? ' (@' . tg_e(ltrim($tgUsr, '@')) . ')' : '') . ' · 🆔 <code>' . tg_e($from) . '</code>' . "\n"
+                    . ($supUsr !== '' ? ('👤 Tài khoản web: <code>' . tg_e($supUsr) . "</code>\n") : '')
+                    . '💬 ' . tg_e(tg_clip($relaySummary, 320));
+                $mk = ['inline_keyboard' => [[['text' => '💬 Phản hồi khách ngay', 'callback_data' => 'qa|reply|' . $from]]]];
+                @tg_send_photo_admin((string) $relayCtx['photo_path'], $cap, $mk);
+            }
+        }
+
+        if ($llmText === '') {
+            $llmText = '✅ Mình đã chuyển yêu cầu hỗ trợ của bạn trực tiếp tới Quản trị viên iosmods.xyz rồi nhé! Ngay khi Admin phản hồi, mình sẽ nhắn báo lại ngay tại đây cho bạn nha 💬✨';
+        }
         $hist[] = ['role' => 'user', 'content' => tg_clip((string) $userText, 500)];
         $hist[] = ['role' => 'assistant', 'content' => tg_clip($llmText, 700)];
         $mem['hist'] = array_slice($hist, -14);
@@ -5167,7 +5324,29 @@ function pub_is_support_request($text, $intent)
         return true;
     }
     $ascii = pub_fold_ascii($text);
-    return (bool) preg_match('/\b(gui admin|nhan admin|bao admin|chuyen admin|can ho tro|yeu cau ho tro|ho tro toi|ho tro minh|ho tro em|giup toi|giup minh|giup em|quen mat khau|cap lai mat khau|mua vip|mua key vip|bao loi web|khieu nai|giai trinh)\b/', $ascii);
+    if (preg_match('/\b(gui|chuyen|bao|nhan|lien he|gap|nho).{0,42}\b(admin|quan tri|chu web|ad)\b/', $ascii)) {
+        return true;
+    }
+    if (preg_match('/\b(yeu cau|can|nho|mong|xin|muon).{0,30}\b(admin|ho tro|mo khoa key|mo key|cap key|gia han key|giai quyet)\b/', $ascii)) {
+        return true;
+    }
+    return (bool) preg_match('/\b(gui admin|nhan admin|bao admin|chuyen admin|can ho tro|yeu cau ho tro|ho tro toi|ho tro minh|ho tro em|giup toi|giup minh|giup em|quen mat khau|cap lai mat khau|mua vip|mua key vip|bao loi web|khieu nai|giai trinh|mo khoa key)\b/', $ascii);
+}
+
+/** True when customer explicitly asks to escalate/message Admin OR asks about account/key support rather than an IP block screen. */
+function pub_is_explicit_admin_escalation($text, $intent)
+{
+    $ascii = pub_fold_ascii($text);
+    if (in_array($intent, ['contact_admin', 'vip_key_buy'], true)) {
+        return true;
+    }
+    if (preg_match('/\b(gui|chuyen|bao|nhan|lien he|gap|nho|mong).{0,42}\b(admin|quan tri|chu web)\b/', $ascii)) {
+        return true;
+    }
+    if (preg_match('/\b(mo khoa key|mo key|khoa key|reset key|quen mat khau|cap lai mat khau|mua key vip|mua vip)\b/', $ascii)) {
+        return true;
+    }
+    return false;
 }
 
 function bot_public_appeal_handler(array $m)
@@ -5178,7 +5357,8 @@ function bot_public_appeal_handler(array $m)
     $firstName = trim((string) (isset($m['from']['first_name']) ? $m['from']['first_name'] : 'bạn'));
     $tgUser    = trim((string) (isset($m['from']['username']) ? $m['from']['username'] : ''));
     $nameSafe  = tg_e($firstName !== '' ? $firstName : 'bạn');
-    $text      = isset($m['text']) ? trim((string) $m['text']) : '';
+    $text      = isset($m['text']) ? trim((string) $m['text']) : (isset($m['caption']) ? trim((string) $m['caption']) : '');
+    $hasPhoto  = !empty($m['photo']) || (!empty($m['document']['mime_type']) && strpos(strtolower((string) $m['document']['mime_type']), 'image/') === 0);
 
     if ($from === '' || $chatId === '') {
         return;
@@ -5188,7 +5368,7 @@ function bot_public_appeal_handler(array $m)
     }
 
     $typedImxEarly = $text !== '' ? sh_extract_case_code($text) : '';
-    if (!pub_rate_allow($from, $typedImxEarly !== '')) {
+    if (!pub_rate_allow($from, $typedImxEarly !== '' || $hasPhoto)) {
         return;
     }
 
@@ -5231,48 +5411,64 @@ function bot_public_appeal_handler(array $m)
                 if (!empty($liveNow['is_admin_perm'])) {
                     pub_send_reply(
                         $chatId,
-                        'Chào <b>' . $nameSafe . '</b>! Mình vừa kiểm tra kết nối của bạn trên <b>iosmods.xyz</b>.' . "\n\n"
+                        'Chào <b>' . $nameSafe . '</b>! 👋 Mình là trợ lý quản lý &amp; giám sát 24/7 của <b>iosmods.xyz</b>.' . "\n\n"
                         . '⛔ Hiện kết nối/tài khoản của bạn đang chịu <b>lệnh CẤM VĨNH VIỄN trực tiếp từ Quản trị viên (Admin)</b>'
                         . (!empty($liveNow['reason']) ? ' (Lý do: <i>' . tg_e($liveNow['reason']) . '</i>).' : '.') . "\n\n"
-                        . '💬 Vì đây là lệnh cấm của Admin nên mình không thể tự gỡ. Bạn hãy <b>nhắn rõ lời giải trình / yêu cầu hỗ trợ ngay tại đây</b>, mình sẽ chuyển thẳng tới Admin và báo lại ngay khi Admin phản hồi nhé!'
+                        . '💬 Vì đây là lệnh cấm của Admin nên mình không thể tự gỡ. Bạn hãy <b>nhắn rõ lời giải trình (hoặc gửi ảnh chụp màn hình) ngay tại đây</b>, mình sẽ chuyển thẳng tới Admin và báo lại liền khi Admin phản hồi nhé! ✨'
                     );
                     return;
                 }
                 pub_send_reply(
                     $chatId,
-                    'Chào <b>' . $nameSafe . '</b>! 👋 Mình vừa nhận được tín hiệu bạn mở từ màn hình khoá của <b>iosmods.xyz</b>.' . "\n\n"
+                    'Chào <b>' . $nameSafe . '</b>! 👋 Mình vừa nhận được tín hiệu bạn mở từ màn hình khoá của <b>iosmods.xyz</b> 🛡️' . "\n\n"
                     . ($cNow !== ''
-                        ? ('Mã phiên hiện tại của bạn là <code>' . tg_e($cNow) . '</code> — bạn chỉ cần gửi mã đó hoặc nhắn cho mình biết tình huống lúc nãy để mình kiểm tra và xử lý mở khoá ngay cho nhé!')
-                        : 'Bạn dán <b>Mã xác minh (IMX-...)</b> đang hiện trên màn hình khoá gửi vào đây hoặc kể mình nghe chuyện gì vừa xảy ra nhé!')
+                        ? ('Mã phiên hiện tại của bạn là <code>' . tg_e($cNow) . '</code> — bạn chỉ cần gửi mã đó, <b>gửi ảnh chụp màn hình khoá</b>, hoặc kể tình huống lúc nãy để mình kiểm tra và hỗ trợ mở khoá ngay nhé! ✨')
+                        : 'Bạn dán <b>Mã xác minh (IMX-...)</b>, <b>gửi ảnh chụp màn hình khoá</b>, hoặc kể mình nghe chuyện gì vừa xảy ra để mình kiểm tra ngay nha! 🔍✨')
                 );
                 return;
             }
             pub_send_reply(
                 $chatId,
-                'Chào <b>' . $nameSafe . '</b>! 👋 Mình là trợ lý quản lý &amp; hỗ trợ chuyên trách của <b>iosmods.xyz</b>.' . "\n\n"
-                . 'Bạn cần kiểm tra tài khoản, nhận Key Free/VIP, tra cứu &amp; mở khoá mã <code>IMX-...</code>, hay gửi lời nhắn hỗ trợ tới Quản trị viên thì cứ nhắn thẳng tại đây nhé!'
+                'Chào <b>' . $nameSafe . '</b>! 👋✨ Mình là trợ lý AI chuyên trách quản lý, giám sát &amp; hỗ trợ toàn bộ website <b>iosmods.xyz</b> 24/7 🛡️' . "\n\n"
+                . 'Bạn cần kiểm tra tài khoản, nhận Key Free/VIP, tra cứu &amp; mở khoá mã <code>IMX-...</code> (có thể gửi cả <b>ảnh chụp màn hình</b> 📸), hay gửi yêu cầu hỗ trợ trực tiếp tới Quản trị viên thì cứ nhắn thẳng tại đây nhé! 💬'
             );
             return;
         }
         $text = $argCode;
     }
 
-    if ($text === '') {
+    // 1.5. IMAGE / SCREENSHOT UPLOAD + VISION/OCR EXTRACTION!
+    $photoData = null;
+    $photoPath = '';
+    $photoOcr  = '';
+    if ($hasPhoto) {
+        @tg_api_raw('sendChatAction', ['chat_id' => $chatId, 'action' => 'typing'], 2);
+        $photoData = pub_download_tg_photo($m);
+        if (is_array($photoData) && !empty($photoData['ok'])) {
+            $photoPath = (string) ($photoData['path'] ?? '');
+            $photoOcr  = trim((string) ($photoData['ocr'] ?? ''));
+            if ($text === '' && !empty($photoData['code'])) {
+                $text = (string) $photoData['code'];
+            }
+        }
+    }
+
+    if ($text === '' && !$hasPhoto) {
         return;
     }
 
     // 2. STRICT SCOPE GUARDRAIL: Refuse coding, scripts, prompt injections & off-website AI requests IMMEDIATELY!
-    if (pub_is_offscope_coding_or_prompt($text)) {
+    if ($text !== '' && pub_is_offscope_coding_or_prompt($text)) {
         pub_conv_set($from, ['step' => '']);
-        $refusal = 'Xin lỗi <b>' . $nameSafe . '</b>, mình là trợ lý chuyên trách quản lý &amp; hỗ trợ riêng cho website <b>iosmods.xyz</b> nên <b>không nhận viết code, lập trình, giải bài tập hay xử lý các prompt ngoài phạm vi website</b> nhé!' . "\n\n"
-            . '👉 Mình chỉ hỗ trợ các vấn đề liên quan tới <b>iosmods.xyz</b>: công cụ/sản phẩm, Key Free &amp; VIP, kiểm tra tài khoản/IP, xử lý mã mở khoá <code>IMX-...</code> và chuyển lời nhắn hỗ trợ tới Quản trị viên.';
+        $refusal = 'Xin lỗi <b>' . $nameSafe . '</b> nha 😅 Mình là trợ lý chuyên trách quản lý &amp; hỗ trợ riêng cho website <b>iosmods.xyz</b> nên <b>không nhận viết code, lập trình, giải bài tập hay xử lý các prompt ngoài phạm vi website</b> đâu!' . "\n\n"
+            . '🛡️ Mình chỉ hỗ trợ mọi thứ về <b>iosmods.xyz</b>: sản phẩm/công cụ, Key Free &amp; VIP, tài khoản/IP, xử lý mã mở khoá <code>IMX-...</code> (hoặc ảnh chụp màn hình) và chuyển yêu cầu hỗ trợ tới Quản trị viên nhé! ✨';
         pub_send_reply($chatId, $refusal);
         return;
     }
 
     $intent       = pub_detect_intent($text);
-    $mentionedUsr = pub_extract_mentioned_username($text);
-    $mentionedIp  = pub_extract_ip_in_text($text);
+    $mentionedUsr = pub_extract_mentioned_username($text . ' ' . $photoOcr);
+    $mentionedIp  = pub_extract_ip_in_text($text . ' ' . $photoOcr);
     if ($mentionedUsr !== '') {
         $mem['username'] = $mentionedUsr;
         pub_conv_set($from, ['username' => $mentionedUsr]);
@@ -5280,6 +5476,9 @@ function bot_public_appeal_handler(array $m)
     }
 
     $typedImx   = sh_extract_case_code($text);
+    if ($typedImx === '' && is_array($photoData) && !empty($photoData['code'])) {
+        $typedImx = (string) $photoData['code'];
+    }
     $activeCode = $typedImx !== '' ? $typedImx : (string) ($mem['last_code'] ?? '');
     if ($typedImx !== '') {
         $mem['last_code'] = $typedImx;
@@ -5289,22 +5488,23 @@ function bot_public_appeal_handler(array $m)
     $admLink   = function_exists('sh_contact_url') ? sh_contact_url() : 'https://t.me/iosnea';
     $admHandle = (preg_match('~t\.me/([A-Za-z0-9_]+)~', $admLink, $hm)) ? ('@' . $hm[1]) : $admLink;
 
-    // 3. TWO-WAY SUPPORT TICKET RELAY: If user was prompted to write their message for Admin, forward it NOW!
+    // 3. TWO-WAY SUPPORT TICKET RELAY: If user was prompted to write their message (or send photo) for Admin, forward it NOW!
     $curStep = (string) ($mem['step'] ?? '');
     if ($curStep === 'await_support_msg' && $typedImx === '') {
         $asciiSup = pub_fold_ascii($text);
-        if (preg_match('/^(huy|thoi|khong can|ko can|cancel|khong)$/', $asciiSup)) {
+        if ($text !== '' && !$hasPhoto && preg_match('/^(huy|thoi|khong can|ko can|cancel|khong)$/', $asciiSup)) {
             pub_conv_set($from, ['step' => '']);
-            pub_send_reply($chatId, 'Đã huỷ gửi yêu cầu hỗ trợ nhé <b>' . $nameSafe . '</b>! Khi nào cần hỗ trợ gì trên <b>iosmods.xyz</b> cứ nhắn lại cho mình.');
+            pub_send_reply($chatId, 'Đã huỷ gửi yêu cầu hỗ trợ rồi nhé <b>' . $nameSafe . '</b>! 😊 Khi nào cần hỗ trợ gì trên <b>iosmods.xyz</b> cứ nhắn lại cho mình nha ✨');
             return;
         }
         $msgLen = function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : strlen($text);
-        if ($msgLen < 6) {
-            pub_send_reply($chatId, 'Bạn vui lòng ghi rõ hơn một chút nội dung cần Quản trị viên hỗ trợ (từ 6 ký tự trở lên, kèm tên tài khoản web nếu có) để Admin xử lý nhanh nhất cho bạn nhé!');
+        if (!$hasPhoto && $msgLen < 6) {
+            pub_send_reply($chatId, 'Bạn vui lòng ghi rõ hơn một chút nội dung cần Quản trị viên hỗ trợ (từ 6 ký tự trở lên, kèm tên tài khoản web hoặc gửi kèm ảnh chụp màn hình) để Admin xử lý nhanh nhất cho bạn nhé! 📝✨');
             return;
         }
         $supIp  = (string) ($mem['real_ip'] ?? ($mem['last_ip'] ?? ($mentionedIp !== '' ? $mentionedIp : '')));
         $supUsr = (string) ($mem['username'] ?? '');
+        $supMsg = $text !== '' ? $text : ('[Khách gửi ảnh chụp màn hình cần Admin hỗ trợ]' . ($photoOcr !== '' ? (' · OCR: ' . tg_clip($photoOcr, 200)) : ''));
         pub_save_multi_links($chatId, $firstName, [$supIp], '', $supUsr);
         tg_event('user_support_ticket', [
             'tg_uid'   => $from,
@@ -5312,19 +5512,27 @@ function bot_public_appeal_handler(array $m)
             'tg_user'  => $tgUser,
             'ip'       => $supIp,
             'username' => $supUsr,
-            'message'  => $text,
+            'message'  => $supMsg,
         ]);
         tg_flush(false);
+        if ($photoPath !== '' && is_file($photoPath) && function_exists('tg_send_photo_admin')) {
+            $cap = '🖼 <b>Ảnh yêu cầu hỗ trợ gửi Admin</b>' . "\n"
+                . '👤 <b>' . tg_e($firstName) . '</b>' . ($tgUser !== '' ? ' (@' . tg_e(ltrim($tgUser, '@')) . ')' : '') . ' · 🆔 <code>' . tg_e($from) . "</code>\n"
+                . ($supUsr !== '' ? ('👤 Tài khoản web: <code>' . tg_e($supUsr) . "</code>\n") : '')
+                . '💬 ' . tg_e(tg_clip($supMsg, 320));
+            $mk = ['inline_keyboard' => [[['text' => '💬 Phản hồi khách ngay', 'callback_data' => 'qa|reply|' . $from]]]];
+            @tg_send_photo_admin($photoPath, $cap, $mk);
+        }
         pub_conv_set($from, ['step' => '']);
         $hist   = isset($mem['hist']) && is_array($mem['hist']) ? $mem['hist'] : [];
-        $hist[] = ['role' => 'user', 'content' => tg_clip($text, 400)];
-        $hist[] = ['role' => 'assistant', 'content' => 'Mình đã chuyển lời nhắn hỗ trợ của bạn trực tiếp tới Quản trị viên iosmods.xyz. Ngay khi Admin phản hồi, mình sẽ nhắn báo lại tại đây cho bạn.'];
+        $hist[] = ['role' => 'user', 'content' => tg_clip($supMsg, 400)];
+        $hist[] = ['role' => 'assistant', 'content' => 'Mình đã chuyển yêu cầu hỗ trợ của bạn trực tiếp tới Quản trị viên iosmods.xyz rồi nhé! Ngay khi Admin phản hồi, mình sẽ nhắn báo lại tại đây cho bạn.'];
         pub_conv_set($from, ['hist' => array_slice($hist, -14)]);
         pub_send_reply(
             $chatId,
-            '✅ <b>Đã chuyển yêu cầu hỗ trợ của bạn tới Quản trị viên iosmods.xyz!</b>' . "\n\n"
-            . '📝 Nội dung đã gửi: <i>' . tg_e(tg_clip($text, 280)) . "</i>\n\n"
-            . '🔔 Bạn cứ giữ nguyên khung chat này — ngay khi Admin phản hồi hoặc xử lý xong, mình sẽ <b>nhắn báo trực tiếp lại cho bạn tại đây</b> liền nhé!'
+            '✅ <b>Đã chuyển yêu cầu hỗ trợ' . ($photoPath !== '' ? ' (kèm ảnh chụp màn hình 📸)' : '') . ' của bạn tới Quản trị viên iosmods.xyz!</b>' . "\n\n"
+            . '📝 Nội dung đã gửi: <i>' . tg_e(tg_clip($supMsg, 280)) . "</i>\n\n"
+            . '🔔 Bạn cứ giữ nguyên khung chat này — ngay khi Admin phản hồi hoặc xử lý xong, mình sẽ <b>nhắn báo trực tiếp lại cho bạn tại đây</b> liền nhé! 💬✨'
         );
         return;
     }
@@ -5344,28 +5552,82 @@ function bot_public_appeal_handler(array $m)
     $hasRealAppeal  = ($cleanReasonLen >= 6 && !$isAbusive && !in_array($intent, ['greeting', 'thanks_ok', 'ask_why', 'unknown_slash'], true));
 
     $isVpnTurnedOff  = pub_is_vpn_turned_off_phrase($text);
+    $isExplicitAdm   = pub_is_explicit_admin_escalation($text, $intent);
     $isSecurityTopic = pub_is_security_unlock_topic($text, $typedImx, $intent);
+
+    // If user explicitly asks to send a request to Admin or unlock a KEY (no IMX code pasted!), route to Admin Support Ticket FIRST
+    // instead of falling into Path 2 "no active IP ban"!
+    if ($typedImx === '' && $isExplicitAdm && !$isAbusive) {
+        $isSecurityTopic = false;
+    }
+
+    // If user sent a screenshot WITHOUT IMX-... code and NOT in a security unlock context -> read OCR & assist/offer Admin relay!
+    if ($hasPhoto && $typedImx === '' && !$isExplicitAdm) {
+        $supIp  = (string) ($mem['real_ip'] ?? ($mem['last_ip'] ?? ($mentionedIp !== '' ? $mentionedIp : '')));
+        $supUsr = (string) ($mem['username'] ?? '');
+        $ocrShort = $photoOcr !== '' ? tg_clip($photoOcr, 280) : '';
+        $isLockScreenPhoto = ($photoOcr !== '' && (bool) preg_match('/(vpn|proxy|blocked|locked|security|iosmods|ddos|tam khoa|bi chan|xac minh|got it)/i', $photoOcr));
+        if ($isLockScreenPhoto) {
+            $isSecurityTopic = true;
+        } elseif ($photoPath !== '') {
+            // Check if user already attached a caption asking for help -> forward photo directly to Admin!
+            if ($cleanReasonLen >= 10 && pub_is_support_request($text, $intent)) {
+                pub_save_multi_links($chatId, $firstName, [$supIp], '', $supUsr);
+                tg_event('user_support_ticket', [
+                    'tg_uid'   => $from,
+                    'tg_name'  => $firstName,
+                    'tg_user'  => $tgUser,
+                    'ip'       => $supIp,
+                    'username' => $supUsr,
+                    'message'  => $text . ($ocrShort !== '' ? (' [OCR: ' . $ocrShort . ']') : ''),
+                ]);
+                tg_flush(false);
+                if (function_exists('tg_send_photo_admin')) {
+                    $cap = '🖼 <b>Ảnh khách gửi cần Admin hỗ trợ</b>' . "\n"
+                        . '👤 <b>' . tg_e($firstName) . '</b> · 🆔 <code>' . tg_e($from) . "</code>\n"
+                        . '💬 ' . tg_e(tg_clip($text, 300));
+                    $mk = ['inline_keyboard' => [[['text' => '💬 Phản hồi khách ngay', 'callback_data' => 'qa|reply|' . $from]]]];
+                    @tg_send_photo_admin($photoPath, $cap, $mk);
+                }
+                pub_send_reply($chatId, '✅ Mình đã nhận <b>ảnh chụp màn hình</b> và chuyển thẳng kèm lời nhắn của bạn tới Quản trị viên <b>iosmods.xyz</b> rồi nhé! 📸💬 Khi Admin phản hồi mình sẽ báo lại bạn ngay lập tức nha ✨');
+                return;
+            }
+            $imgPromptText = ($text !== '' ? $text : 'Khách vừa gửi một ảnh chụp màn hình.') . ($ocrShort !== '' ? ("\n[Nội dung chữ đọc được từ ảnh OCR]: " . $ocrShort) : "\n[Ảnh không có mã IMX-... rõ nét]");
+            $sysImg = "Bạn là TRỢ LÝ AI quản lý, giám sát & hỗ trợ toàn bộ website iosmods.xyz đang tiếp chuyện \"$firstName\". Luôn dùng thêm icon/emoji bình thường sinh động (😊 📸 🔍 ✨ 🛡️ 💬).\n"
+                . "Khách vừa gửi 1 bức ảnh chụp màn hình. Hãy phân tích ngắn gọn 2-3 câu dựa trên nội dung OCR (nếu có):\n"
+                . "- Nếu ảnh là lỗi web / màn hình khoá chưa rõ mã IMX-..., hướng dẫn khách chụp rõ mã IMX-... hoặc dán mã vào đây.\n"
+                . "- Nếu khách cần gửi ảnh & vấn đề này cho Quản trị viên xem xét, thêm đúng thẻ [SEND_ADMIN: tóm tắt ngắn] ở cuối câu trả lời để hệ thống chuyển ảnh + tin nhắn thật cho Admin!";
+            $fbImg = '📸 Mình đã nhận được ảnh của <b>' . $nameSafe . '</b> rồi nè!'
+                . ($ocrShort !== '' ? ("\n🔍 Chữ đọc được trong ảnh: <i>" . tg_e(tg_clip($ocrShort, 160)) . '</i>') : '')
+                . "\n\nNếu đây là màn hình khoá trên <b>iosmods.xyz</b>, bạn dán thêm mã <code>IMX-...</code> (nếu có) hoặc nhắn <i>\"gửi admin\"</i> kèm mô tả ngắn để mình chuyển nguyên ảnh cho Quản trị viên xử lý ngay cho bạn nhé! ✨";
+            pub_ai_respond_smart($from, $chatId, $firstName, $imgPromptText, $mem, $sysImg, $fbImg, ['ip' => $supIp, 'username' => $supUsr, 'tg_user' => $tgUser, 'photo_path' => $photoPath]);
+            return;
+        }
+    }
 
     // =========================================================================
     // PATH 1: IOSMODS.XYZ SUPPORT & WEBSITE INFO ASSISTANT (STRICT WEBSITE SCOPE + ADMIN TICKET RELAY!)
     // =========================================================================
     if (!$isSecurityTopic) {
-        // If customer explicitly asks for human Admin support / password reset / VIP buy without full message yet -> open Two-Way Ticket prompt!
+        // If customer asks to message Admin / request support -> either prompt for details OR forward immediately!
         if (pub_is_support_request($text, $intent) && !$isAbusive) {
-            $isShortAsk = ($cleanReasonLen < 28 || in_array($intent, ['contact_admin'], true));
+            $asciiReq     = pub_fold_ascii($text);
+            $isPureAskAdm = (bool) preg_match('/^(toi |minh |em )?(muon |can |xin |hay )?(gui|lien he|gap|nhan|bao).{0,24}\b(admin|quan tri|chu web)\b[.!?~\s]*$/', $asciiReq);
+            $isShortAsk   = !$hasPhoto && ($isPureAskAdm || $cleanReasonLen < 24);
             if ($isShortAsk) {
                 pub_conv_set($from, ['step' => 'await_support_msg']);
                 pub_send_reply(
                     $chatId,
-                    '📩 <b>GỬI YÊU CẦU HỖ TRỢ TỚI QUẢN TRỊ VIÊN IOSMODS.XYZ</b>' . "\n\n"
-                    . 'Chào <b>' . $nameSafe . '</b>, bạn hãy <b>nhắn 1 tin nhắn ghi rõ vấn đề cần hỗ trợ</b> (kèm tên tài khoản web nếu có — ví dụ: quên mật khẩu, mua Key VIP, báo lỗi hoặc cần Admin xem xét).' . "\n\n"
-                    . 'Mình sẽ chuyển thẳng cho Quản trị viên và <b>gửi lại phản hồi của Admin ngay tại khung chat này</b> cho bạn nhé! <i>(Nhắn "huỷ" nếu không cần nữa)</i>'
+                    '📩 <b>GỬI YÊU CẦU HỖ TRỢ TỚI QUẢN TRỊ VIÊN IOSMODS.XYZ</b> ✨' . "\n\n"
+                    . 'Chào <b>' . $nameSafe . '</b> 😊 Bạn hãy <b>nhắn rõ nội dung cần hỗ trợ</b> (kèm tên tài khoản web hoặc <b>ảnh chụp màn hình</b> 📸 nếu có — ví dụ: mở khoá Key, quên mật khẩu, mua VIP, báo lỗi web...).' . "\n\n"
+                    . 'Mình sẽ chuyển thẳng lên Quản trị viên và <b>gửi lại phản hồi của Admin ngay tại đây</b> cho bạn nhé! 💬 <i>(Nhắn "huỷ" nếu không cần nữa)</i>'
                 );
                 return;
             }
-            // User already wrote a detailed support request -> forward straight to Admin immediately!
+            // User already wrote a detailed support request -> forward straight to Admin IMMEDIATELY!
             $supIp  = (string) ($mem['real_ip'] ?? ($mem['last_ip'] ?? ($mentionedIp !== '' ? $mentionedIp : '')));
             $supUsr = (string) ($mem['username'] ?? '');
+            $supMsg = $text . ($photoOcr !== '' ? (' [OCR ảnh: ' . tg_clip($photoOcr, 180) . ']') : '');
             pub_save_multi_links($chatId, $firstName, [$supIp], '', $supUsr);
             tg_event('user_support_ticket', [
                 'tg_uid'   => $from,
@@ -5373,20 +5635,32 @@ function bot_public_appeal_handler(array $m)
                 'tg_user'  => $tgUser,
                 'ip'       => $supIp,
                 'username' => $supUsr,
-                'message'  => $text,
+                'message'  => $supMsg,
             ]);
             tg_flush(false);
+            if ($photoPath !== '' && is_file($photoPath) && function_exists('tg_send_photo_admin')) {
+                $cap = '🖼 <b>Ảnh yêu cầu hỗ trợ gửi Admin</b>' . "\n"
+                    . '👤 <b>' . tg_e($firstName) . '</b> · 🆔 <code>' . tg_e($from) . "</code>\n"
+                    . '💬 ' . tg_e(tg_clip($text, 300));
+                $mk = ['inline_keyboard' => [[['text' => '💬 Phản hồi khách ngay', 'callback_data' => 'qa|reply|' . $from]]]];
+                @tg_send_photo_admin($photoPath, $cap, $mk);
+            }
+            $hist   = isset($mem['hist']) && is_array($mem['hist']) ? $mem['hist'] : [];
+            $hist[] = ['role' => 'user', 'content' => tg_clip($supMsg, 400)];
+            $hist[] = ['role' => 'assistant', 'content' => 'Mình đã chuyển yêu cầu hỗ trợ của bạn trực tiếp tới Quản trị viên iosmods.xyz rồi nhé!'];
+            pub_conv_set($from, ['hist' => array_slice($hist, -14), 'step' => '']);
             pub_send_reply(
                 $chatId,
-                '✅ <b>Mình đã chuyển lời nhắn hỗ trợ của bạn trực tiếp tới Quản trị viên iosmods.xyz!</b>' . "\n\n"
+                '✅ <b>Mình đã chuyển yêu cầu hỗ trợ' . ($photoPath !== '' ? ' (kèm ảnh 📸)' : '') . ' của bạn trực tiếp tới Quản trị viên iosmods.xyz!</b>' . "\n\n"
                 . '📝 Nội dung gửi Admin: <i>' . tg_e(tg_clip($text, 280)) . "</i>\n\n"
-                . '🔔 Ngay khi Admin phản hồi hoặc xử lý, mình sẽ <b>nhắn báo lại ngay tại đây</b> cho bạn nhé!'
+                . '🔔 Bạn giữ nguyên khung chat này nhé — ngay khi Admin phản hồi hoặc xử lý, mình sẽ <b>nhắn báo lại liền tại đây</b> cho bạn nha! 💬✨'
             );
             return;
         }
 
         $bgFacts = [];
         $bgFacts[] = 'Thời gian hiện tại (VN): ' . date('H:i d/m/Y');
+        $bgFacts[] = 'Vai trò của bạn: TRỢ LÝ AI QUẢN LÝ & GIÁM SÁT TOÀN BỘ WEBSITE iosmods.xyz 24/7 (quản lý sản phẩm/công cụ, Key Free/VIP, tài khoản, chống DDoS/VPN/Script, xét mở khoá mã IMX-..., đọc ảnh chụp màn hình và chuyển tiếp phản hồi 2 chiều với Quản trị viên).';
         $bgFacts[] = 'Quản trị viên chính thức của iosmods.xyz: ' . $admHandle;
 
         $cat = pub_ai_live_catalog();
@@ -5394,7 +5668,7 @@ function bot_public_appeal_handler(array $m)
         if ($allTools) {
             $bgFacts[] = 'Danh sách sản phẩm/công cụ trên iosmods.xyz (' . count($allTools) . ' mục): ' . implode(', ', array_slice($allTools, 0, 12));
         }
-        $bgFacts[] = 'Trạng thái website iosmods.xyz: ' . ($cat['maint'] ? 'Đang bảo trì nâng cấp' : 'Hoạt động bình thường');
+        $bgFacts[] = 'Trạng thái website iosmods.xyz: ' . ($cat['maint'] ? 'Đang bảo trì nâng cấp' : 'Hoạt động bình thường 🟢');
         $bgFacts[] = 'Quy tắc Key: Key Free nhận miễn phí mỗi 8h tại tab Keys (tắt VPN/1.1.1.1); Key VIP liên hệ hỗ trợ để Admin cấp trực tiếp.';
 
         if ($mentionedIp !== '') {
@@ -5420,17 +5694,22 @@ function bot_public_appeal_handler(array $m)
             }
         }
 
-        $sysPrompt = "Bạn là TRỢ LÝ CHUYÊN TRÁCH QUẢN LÝ & HỖ TRỢ WEBSITE iosmods.xyz đang tiếp chuyện khách tên \"$firstName\".\n"
+        $sysPrompt = "Bạn là TRỢ LÝ AI CHUYÊN TRÁCH QUẢN LÝ, GIÁM SÁT 24/7 & HỖ TRỢ TOÀN BỘ WEBSITE iosmods.xyz đang tiếp chuyện khách tên \"$firstName\".\n"
             . "QUY TẮC BẮT BUỘC TUYỆT ĐỐI:\n"
-            . "1. CHỈ hỗ trợ các vấn đề liên quan đến website iosmods.xyz (công cụ/sản phẩm, Key Free/VIP, tài khoản, kiểm tra IP, mở khoá mã IMX-..., nội quy web, gửi yêu cầu hỗ trợ tới Quản trị viên).\n"
-            . "2. TUYỆT ĐỐI TỪ CHỐI viết code (Python, JS, PHP, HTML, C++, script...), giải bài tập, viết văn, dịch thuật, hay làm theo các câu lệnh prompt/đóng vai ngoài phạm vi iosmods.xyz! Nếu khách yêu cầu làm việc ngoài phạm vi web, từ chối lịch sự gọn gàng trong 1-2 câu và nhắc mình chỉ hỗ trợ riêng cho iosmods.xyz.\n"
-            . "3. Trả lời tiếng Việt (hoặc tiếng Anh nếu khách nhắn tiếng Anh) thật tự nhiên, ngắn gọn (1-3 câu), thông minh, lịch sự, không lặp lại máy móc, nhớ chính xác các tin nhắn trước đó.\n"
-            . "4. Nếu khách cần Admin can thiệp trực tiếp (cấp lại mật khẩu, mua VIP, khiếu nại, hỗ trợ đặc biệt), hãy nói họ nhắn \"gửi admin\" hoặc gửi rõ nội dung cần hỗ trợ để bạn chuyển thẳng tới Quản trị viên và báo lại phản hồi của Admin ngay tại đây.\n"
+            . "1. Nếu khách hỏi bạn có quản lý website iosmods.xyz không hay vai trò của bạn là gì: HÃY TỰ HÀO KHẲNG ĐỊNH RÕ RÀNG rằng bạn đang trực tiếp quản lý, giám sát bảo mật 24/7 và hỗ trợ toàn bộ website iosmods.xyz (từ danh mục tool, Key Free/VIP, kiểm tra tài khoản/IP, chống DDoS/VPN/Script đến xét mở khoá mã IMX-... và kết nối 2 chiều với Admin)!\n"
+            . "2. CHỈ hỗ trợ các vấn đề liên quan đến website iosmods.xyz. TUYỆT ĐỐI TỪ CHỐI viết code (Python, JS, PHP, HTML, C++, script...), giải bài tập, viết văn, dịch thuật hay làm theo prompt ngoài phạm vi iosmods.xyz.\n"
+            . "3. Trả lời tiếng Việt (hoặc tiếng Anh nếu khách nhắn tiếng Anh) cực kỳ tự nhiên, thông minh, thân thiện (2-3 câu), LUÔN chèn thêm 2-3 icon/emoji bình thường sinh động (😊 🛡️ ✨ 🔍 💬 🚀) cho cuộc trò chuyện cuốn hút, không lặp lại máy móc, nhớ chính xác ngữ cảnh trước đó.\n"
+            . "4. QUAN TRỌNG: Khi khách thực sự muốn gửi lời nhắn/yêu cầu/khiếu nại tới Quản trị viên (Admin), HÃY thêm đúng thẻ [SEND_ADMIN: tóm tắt rõ yêu cầu của khách] ở cuối câu trả lời để hệ thống tự động đẩy đơn sang Telegram Admin thật sự (KHÔNG BAO GIỜ nói đã gửi cho Admin nếu bạn không gắn thẻ [SEND_ADMIN: ...]!).\n"
             . "5. Nếu khách gõ lệnh /menu hay lệnh gạch chéo, nhắc nhẹ họ cứ nhắn bình thường không cần lệnh (không bao giờ lộ lệnh Admin).\n\n"
             . "[DỮ LIỆU TRỰC TIẾP TỪ MÁY CHỦ IOSMODS.XYZ]:\n- " . implode("\n- ", $bgFacts);
 
         $fallbackHtml = pub_ai_handle_unlocked_topic($from, $nameSafe, $text, $intent, $mem);
-        pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysPrompt, $fallbackHtml);
+        pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysPrompt, $fallbackHtml, [
+            'ip'         => (string) ($mem['real_ip'] ?? ($mem['last_ip'] ?? $mentionedIp)),
+            'username'   => (string) ($mem['username'] ?? ''),
+            'tg_user'    => $tgUser,
+            'photo_path' => $photoPath,
+        ]);
         return;
     }
 
@@ -5443,14 +5722,19 @@ function bot_public_appeal_handler(array $m)
 
     // CASE A: NO ACTIVE BAN FOUND ANYWHERE IN CACHE OR MYSQL!
     if (!$info || empty($info['active'])) {
-        $sysA = "Bạn là trợ lý quản lý & bảo mật chuyên trách của iosmods.xyz đang hỗ trợ \"$firstName\". Tuyệt đối chỉ hỗ trợ về iosmods.xyz.\n"
+        $sysA = "Bạn là trợ lý quản lý & bảo mật 24/7 chuyên trách toàn bộ website iosmods.xyz đang hỗ trợ \"$firstName\". Luôn dùng icon bình thường sinh động (😊 🛡️ 🔍 ✨ 💬).\n"
             . ($typedImx !== ''
-                ? "TRẠNG THÁI THỰC TẾ TRÊN MÁY CHỦ: Mã xác minh $typedImx hiện KHÔNG còn lệnh chặn hay tạm khoá nào đang áp dụng (đã hết hạn hoặc đã được mở khoá sạch).\nHướng dẫn họ tự nhiên trong 2 câu: tắt hẳn VPN/1.1.1.1 (nếu có), mở lại iosmods.xyz bấm nút Got it nếu thấy màn hình Automatically Unlocked. Nếu vẫn thấy màn hình khoá kèm mã IMX-... mới khác thì gửi mã mới đó."
-                : "TRẠNG THÁI THỰC TẾ TRÊN MÁY CHỦ: Hiện chưa thấy lệnh khoá nào gắn với phiên Telegram này.\nTrả lời ngắn gọn 2 câu: nếu họ bảo đã tắt VPN thì nhắc mở lại iosmods.xyz bấm Got it, còn nếu màn hình vẫn khoá thì dán mã IMX-... đang hiện trên màn hình vào đây để kiểm tra đúng phiên (hoặc nhắn \"gửi admin\" nếu cần chuyển lời nhắn trực tiếp cho Quản trị viên).");
+                ? "TRẠNG THÁI THỰC TẾ TRÊN MÁY CHỦ: Mã xác minh $typedImx hiện KHÔNG còn lệnh chặn hay tạm khoá nào đang áp dụng (đã hết hạn hoặc đã được mở khoá sạch).\nHướng dẫn họ tự nhiên trong 2 câu: tắt hẳn VPN/1.1.1.1 (nếu có), quay lại iosmods.xyz — màn hình sẽ tự hiện Automatically Unlocked, bấm nút Got it là vào bình thường. Nếu vẫn thấy màn hình khoá kèm mã IMX-... mới khác thì dán mã mới hoặc gửi ảnh chụp màn hình vào đây."
+                : "TRẠNG THÁI THỰC TẾ TRÊN MÁY CHỦ: Hiện chưa thấy lệnh khoá nào gắn với phiên Telegram này.\nTrả lời ngắn gọn 2 câu: nếu họ vừa tắt VPN thì nhắc mở lại iosmods.xyz bấm Got it, còn nếu màn hình vẫn khoá thì dán mã IMX-... (hoặc chụp ảnh màn hình khoá 📸) gửi vào đây để kiểm tra đúng phiên. Nếu khách nhờ chuyển yêu cầu cho Admin thì gắn thẻ [SEND_ADMIN: tóm tắt] ở cuối câu.");
         $fbA = $typedImx !== ''
-            ? ('Mình vừa kiểm tra mã <code>' . tg_e($typedImx) . '</code> trên máy chủ: hiện không còn lệnh khoá nào đang áp dụng. Bạn mở lại <b>iosmods.xyz</b> và bấm <b>Got it</b> (nếu hiện) là vào bình thường nhé!')
-            : 'Hiện trên máy chủ không thấy lệnh khoá nào gắn với bạn — bạn thử mở lại <b>iosmods.xyz</b> nhé, còn nếu màn hình vẫn khoá thì dán giúp mình mã <code>IMX-...</code> mới nhất vào đây hoặc nhắn <i>"gửi admin"</i> để mình chuyển hỗ trợ cho Quản trị viên nha!';
-        pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysA, $fbA);
+            ? ('🔍 Mình vừa kiểm tra mã <code>' . tg_e($typedImx) . '</code> trên máy chủ <b>iosmods.xyz</b>: hiện không còn lệnh khoá nào đang áp dụng nữa rồi! ✅ Bạn mở lại web và bấm <b>Got it</b> (nếu hiện) là vào bình thường ngay nhé ✨')
+            : '🔍 Hiện trên máy chủ <b>iosmods.xyz</b> không thấy lệnh khoá nào gắn với bạn — bạn mở lại web thử nhé! Nếu màn hình vẫn khoá thì dán giúp mình mã <code>IMX-...</code> mới nhất hoặc <b>gửi ảnh chụp màn hình khoá</b> 📸 vào đây để mình xử lý liền nha ✨';
+        pub_ai_respond_smart($from, $chatId, $firstName, $text !== '' ? $text : 'Kiểm tra ảnh màn hình khoá', $mem, $sysA, $fbA, [
+            'ip'         => (string) ($mem['real_ip'] ?? ($mem['last_ip'] ?? $mentionedIp)),
+            'username'   => (string) ($mem['username'] ?? ''),
+            'tg_user'    => $tgUser,
+            'photo_path' => $photoPath,
+        ]);
         return;
     }
 
@@ -5481,15 +5765,16 @@ function bot_public_appeal_handler(array $m)
 
     // -------------------------------------------------------------------------
     // SUBCASE B1: ADMIN PERMANENT BAN (STRICT — NEVER UNLOCK, EXACT REASON,
-    // TWO-WAY ADMIN RELAY WHEN USER WRITES EXPLANATION — ZERO EMPTY ALERTS!)
+    // TWO-WAY ADMIN RELAY + PHOTO WHEN USER WRITES EXPLANATION — ZERO EMPTY ALERTS!)
     // -------------------------------------------------------------------------
     if ($isAdminPerm) {
         pub_conv_set($from, ['step' => '', 'last_verdict' => 'perm_admin']);
 
         $forwardedNote = '';
-        if ($hasRealAppeal) {
-            $fwdKey   = 'pub_adm_fwd_' . md5($code . '|' . $ip . '|' . substr(md5($reasonInput), 0, 8));
-            $notified = tg_store_read('pub_notified');
+        if ($hasRealAppeal || $photoPath !== '') {
+            $appealTxt = $reasonInput !== '' ? $reasonInput : '[Khách gửi ảnh chụp màn hình giải trình]';
+            $fwdKey    = 'pub_adm_fwd_' . md5($code . '|' . $ip . '|' . substr(md5($appealTxt . $photoPath), 0, 8));
+            $notified  = tg_store_read('pub_notified');
             if (empty($notified[$fwdKey])) {
                 tg_store_update('pub_notified', function ($s) use ($fwdKey) {
                     if (!is_array($s)) $s = [];
@@ -5502,15 +5787,22 @@ function bot_public_appeal_handler(array $m)
                     'tg_uid'    => $from,
                     'case_code' => $code,
                     'reason'    => 'Lệnh cấm vĩnh viễn bởi Admin: ' . $reasonOrig,
-                    'message'   => $reasonInput,
+                    'message'   => $appealTxt,
                     'note'      => 'Khách gửi lời nhắn xin Admin xem xét lệnh cấm vĩnh viễn',
                 ]);
                 tg_flush(false);
-                $forwardedNote = 'Mình ĐÃ CHUYỂN lời giải thích của khách trực tiếp lên cho Quản trị viên — khi Admin quyết định mở, từ chối hay phản hồi, mình sẽ nhắn báo ngay tại khung chat này.';
+                if ($photoPath !== '' && is_file($photoPath) && function_exists('tg_send_photo_admin')) {
+                    $cap = '🖼 <b>Ảnh giải trình lệnh cấm vĩnh viễn</b>' . "\n"
+                        . '🎫 Mã: <code>' . tg_e($code) . '</code> · 👤 <b>' . tg_e($firstName) . "</b>\n"
+                        . '💬 ' . tg_e(tg_clip($appealTxt, 260));
+                    $mk = ['inline_keyboard' => [[['text' => '💬 Phản hồi khách ngay', 'callback_data' => 'qa|reply|' . $from]]]];
+                    @tg_send_photo_admin($photoPath, $cap, $mk);
+                }
+                $forwardedNote = 'Mình ĐÃ CHUYỂN lời giải thích (và ảnh nếu có) của khách trực tiếp lên cho Quản trị viên — khi Admin quyết định mở, từ chối hay phản hồi, mình sẽ nhắn báo ngay tại khung chat này.';
             }
         }
 
-        $sysB1 = "Bạn là trợ lý bảo mật chuyên trách của iosmods.xyz đang trả lời \"$firstName\". Tuyệt đối chỉ hỗ trợ về iosmods.xyz.\n"
+        $sysB1 = "Bạn là trợ lý quản lý & bảo mật chuyên trách của iosmods.xyz đang trả lời \"$firstName\". Luôn dùng icon bình thường sinh động (⛔ 🛡️ 💬 ✨).\n"
             . "SỰ THẬT BẮT BUỘC TỪ CƠ SỞ DỮ LIỆU:\n"
             . "- Mã phiên: $code | IP: $ip" . ($uname !== '' ? " | Tài khoản: $uname" : '') . "\n"
             . "- Trạng thái: ĐANG BỊ QUẢN TRỊ VIÊN (ADMIN) CẤM VĨNH VIỄN (TUYỆT ĐỐI CHƯA ĐƯỢC MỞ, KHÔNG THỂ VÀO WEB).\n"
@@ -5519,15 +5811,15 @@ function bot_public_appeal_handler(array $m)
             . "HÃY TRẢ LỜI TỰ NHIÊN (2-3 câu): Báo rõ đang bị Admin cấm vĩnh viễn kèm đúng lý do trên, khẳng định bạn không có quyền tự gỡ lệnh cấm của Admin, và hướng dẫn theo trạng thái chuyển lời nhắn ở trên.";
         $fbB1 = '⛔ Mã <code>' . tg_e($code) . '</code> hiện đang chịu <b>lệnh CẤM VĨNH VIỄN trực tiếp từ Admin</b> (Lý do: <b>' . tg_e($reasonOrig) . '</b>). '
             . ($forwardedNote !== ''
-                ? 'Mình đã chuyển lời giải thích của bạn tới Quản trị viên rồi nhé — ngay khi Admin phản hồi hoặc xử lý, mình sẽ nhắn báo lại cho bạn tại đây!'
-                : 'Mình không có quyền tự gỡ lệnh cấm của Admin. Bạn hãy nhắn rõ lời giải thích ngay tại đây để mình chuyển thẳng lên cho Quản trị viên xem xét và báo lại kết quả cho bạn nhé!');
-        pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysB1, $fbB1);
+                ? 'Mình đã chuyển lời giải thích của bạn tới Quản trị viên rồi nhé 💬 — ngay khi Admin phản hồi hoặc xử lý, mình sẽ nhắn báo lại cho bạn tại đây liền! ✨'
+                : 'Mình không có quyền tự gỡ lệnh cấm của Admin 🛡️ Bạn hãy nhắn rõ lời giải thích ngay tại đây để mình chuyển thẳng lên cho Quản trị viên xem xét và báo lại kết quả cho bạn nhé! 💬');
+        pub_ai_respond_smart($from, $chatId, $firstName, $text !== '' ? $text : $code, $mem, $sysB1, $fbB1, ['already_sent' => ($forwardedNote !== '')]);
         return;
     }
 
     // -------------------------------------------------------------------------
     // SUBCASE B2: SEVERE SYSTEM LOCK (DDoS / WAF / Script / Inspect / Repeat Evasion >= 2)
-    // ONLY forward to Admin when user ACTUALLY wrote a real appeal message!
+    // ONLY forward to Admin when user ACTUALLY wrote a real appeal message or sent photo!
     // -------------------------------------------------------------------------
     $isSevere = in_array($banType, ['ddos', 'waf', 'bug_buff', 'inspect'], true)
         || $expTs === 0
@@ -5537,8 +5829,9 @@ function bot_public_appeal_handler(array $m)
     if ($isSevere) {
         pub_conv_set($from, ['step' => '', 'last_verdict' => 'severe_attack']);
         $forwardedSev = false;
-        if ($hasRealAppeal) {
-            $denyOnceKey = 'pub_deny_' . md5($code . '|' . substr(md5($reasonInput), 0, 8));
+        if ($hasRealAppeal || $photoPath !== '') {
+            $appealTxt   = $reasonInput !== '' ? $reasonInput : '[Khách gửi ảnh chụp màn hình giải trình]';
+            $denyOnceKey = 'pub_deny_' . md5($code . '|' . substr(md5($appealTxt . $photoPath), 0, 8));
             $alreadySent = tg_store_read('pub_notified');
             if (empty($alreadySent[$denyOnceKey])) {
                 tg_store_update('pub_notified', function ($s) use ($denyOnceKey) {
@@ -5552,30 +5845,37 @@ function bot_public_appeal_handler(array $m)
                     'tg_uid'    => $from,
                     'case_code' => $code,
                     'reason'    => $reasonOrig,
-                    'message'   => $reasonInput,
+                    'message'   => $appealTxt,
                     'note'      => 'Khách gửi giải trình cho lệnh khoá bảo vệ cấp cao (' . $banType . ')',
                 ]);
                 tg_flush(false);
+                if ($photoPath !== '' && is_file($photoPath) && function_exists('tg_send_photo_admin')) {
+                    $cap = '🖼 <b>Ảnh giải trình khoá bảo mật cấp cao</b>' . "\n"
+                        . '🎫 Mã: <code>' . tg_e($code) . '</code> · 👤 <b>' . tg_e($firstName) . "</b>\n"
+                        . '💬 ' . tg_e(tg_clip($appealTxt, 260));
+                    $mk = ['inline_keyboard' => [[['text' => '💬 Phản hồi khách ngay', 'callback_data' => 'qa|reply|' . $from]]]];
+                    @tg_send_photo_admin($photoPath, $cap, $mk);
+                }
                 $forwardedSev = true;
             }
         }
 
-        $sysB2 = "Bạn là trợ lý bảo mật chuyên trách của iosmods.xyz đang trả lời \"$firstName\". Tuyệt đối chỉ hỗ trợ về iosmods.xyz.\n"
+        $sysB2 = "Bạn là trợ lý quản lý & bảo mật chuyên trách của iosmods.xyz đang trả lời \"$firstName\". Luôn dùng icon bình thường sinh động (🛡️ ⚠️ 💬 ✨).\n"
             . "SỰ THẬT TỪ MÁY CHỦ:\n"
             . "- Mã: $code | Loại vi phạm nghiêm trọng: $banType | Lý do kỹ thuật: $reasonOrig | Số lần cố lách khoá: $evasions.\n"
             . "- Trạng thái: GIỮ NGUYÊN KHOÁ, trợ lý KHÔNG được phép tự mở.\n"
             . ($forwardedSev ? "- Đã chuyển lời giải thích của khách thẳng tới Admin; khi Admin mở, từ chối hoặc nhắn phản hồi thì bot sẽ báo lại ngay tại đây.\n" : "- Chưa gửi cho Admin vì khách chưa viết nội dung giải thích; hãy mời khách nhắn rõ lời giải thích ngay tại đây để chuyển thẳng lên cho Admin.\n")
             . "Trả lời tự nhiên 2-3 câu đúng trọng tâm.";
-        $fbB2 = '🛡 Mã <code>' . tg_e($code) . '</code> đang bị khoá bảo vệ cấp cao do: <b>' . tg_e($reasonOrig) . '</b>. '
+        $fbB2 = '🛡️ Mã <code>' . tg_e($code) . '</code> đang bị khoá bảo vệ cấp cao do: <b>' . tg_e($reasonOrig) . '</b>. '
             . ($forwardedSev
-                ? 'Mình đã chuyển lời giải thích của bạn tới Quản trị viên — ngay khi Admin phản hồi hoặc xử lý, mình sẽ nhắn báo lại cho bạn tại đây nhé!'
-                : 'Trường hợp này mình không thể tự mở — bạn hãy nhắn rõ lời giải thích ngay tại đây để mình chuyển thẳng cho Admin xem xét và phản hồi lại bạn nhé!');
-        pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysB2, $fbB2);
+                ? 'Mình đã chuyển lời giải thích của bạn tới Quản trị viên rồi nhé 💬 — ngay khi Admin phản hồi hoặc xử lý, mình sẽ nhắn báo lại cho bạn tại đây! ✨'
+                : 'Trường hợp này mình không thể tự mở ⚠️ Bạn hãy nhắn rõ lời giải thích ngay tại đây để mình chuyển thẳng cho Admin xem xét và phản hồi lại bạn nhé! 💬');
+        pub_ai_respond_smart($from, $chatId, $firstName, $text !== '' ? $text : $code, $mem, $sysB2, $fbB2, ['already_sent' => $forwardedSev]);
         return;
     }
 
     // -------------------------------------------------------------------------
-    // SUBCASE B3: 2-MINUTE VPN BLOCK -> SMART INSTANT UNLOCK (ZERO "đã tắt VPN" LOOP!)
+    // SUBCASE B3: 2-MINUTE VPN BLOCK -> 7-SECOND DELIBERATE REVIEW & SMART AUTO-UNLOCK!
     // -------------------------------------------------------------------------
     if ($banType === 'vpn_block') {
         $vpnName    = !empty($info['vpn_lbl']) ? (string) $info['vpn_lbl'] : 'VPN / Proxy';
@@ -5583,6 +5883,10 @@ function bot_public_appeal_handler(array $m)
         $canUnlockV = ($evasions < 2 && $vpnUses6h < 3 && ($isVpnTurnedOff || $typedImx !== '' || empty($info['is_vpn'])));
 
         if ($canUnlockV) {
+            pub_wait_7s_deliberate(
+                $chatId,
+                '⏳ Đã tiếp nhận mã <code>' . tg_e($code) . '</code>' . ($photoPath !== '' ? ' từ ảnh chụp màn hình 📸' : '') . '! Mình đang kiểm tra kết nối &amp; xác minh trên máy chủ <b>iosmods.xyz</b> khoảng <b>7 giây</b>, bạn đợi xíu nhé 🔍✨'
+            );
             pub_conv_set($from, ['step' => '', 'last_code' => '', 'last_verdict' => 'unbanned_vpn']);
             pub_record_forgive($ip, $from, 'vpn');
             if (bot_ipg_ready()) {
@@ -5590,26 +5894,26 @@ function bot_public_appeal_handler(array $m)
             } elseif (function_exists('sh_full_clean_slate_unban')) {
                 sh_full_clean_slate_unban(bdb(), $ip, $uname, true, true, 'devios_bot_ai', 'Đã gỡ khoá VPN tự động');
             }
-            $sysVOk = "Bạn là trợ lý AI thân thiện của iosmods.xyz đang nói chuyện với \"$firstName\".\n"
-                . "HÀNH ĐỘNG HỆ THỐNG VỪA THỰC HIỆN THÀNH CÔNG: Đã MỞ KHOÁ HOÀN TOÀN mã $code (lỗi bật $vpnName).\n"
-                . "Hãy trả lời tự nhiên, thân thiện (2-3 câu): báo tin vui là bạn đã gỡ khoá xong rồi, nhắc khách đảm bảo đã tắt hẳn VPN/1.1.1.1, quay lại iosmods.xyz tải lại trang và bấm nút Got it là vào web bình thường!";
-            $fbVOk = '✅ Mình vừa mở khoá hoàn toàn mã <code>' . tg_e($code) . '</code> cho bạn rồi nhé! Bạn nhớ tắt hẳn VPN/1.1.1.1, quay lại <b>iosmods.xyz</b> tải lại trang rồi bấm <b>Got it</b> là vào web bình thường nha.';
-            pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysVOk, $fbVOk);
+            $sysVOk = "Bạn là trợ lý AI thân thiện của iosmods.xyz đang nói chuyện với \"$firstName\". Luôn dùng thêm icon bình thường sinh động (✅ 🎉 🛡️ ✨ 😊).\n"
+                . "HÀNH ĐỘNG HỆ THỐNG VỪA THỰC HIỆN THÀNH CÔNG SAU 7 GIÂY XÁC MINH: Đã MỞ KHOÁ HOÀN TOÀN mã $code (lỗi bật $vpnName).\n"
+                . "Hãy trả lời tự nhiên, thân thiện (2-3 câu): báo tin vui là bạn đã gỡ khoá xong hoàn toàn rồi, nhắc khách đảm bảo đã tắt hẳn VPN/1.1.1.1, chỉ cần quay lại tab iosmods.xyz — màn hình sẽ TỰ ĐỘNG chuyển sang Automatically Unlocked mà không cần tải lại trang, bấm Got it là vào web bình thường!";
+            $fbVOk = '✅🎉 Mình vừa xác minh &amp; <b>mở khoá hoàn toàn</b> mã <code>' . tg_e($code) . '</code> cho bạn rồi nhé! Bạn nhớ tắt hẳn VPN/1.1.1.1, quay lại tab <b>iosmods.xyz</b> — màn hình sẽ tự động hiện <b>Automatically Unlocked</b>, chỉ cần bấm <b>Got it</b> là vào web bình thường luôn mà không cần tải lại trang nha ✨😊';
+            pub_ai_respond_smart($from, $chatId, $firstName, $text !== '' ? $text : $code, $mem, $sysVOk, $fbVOk, ['already_sent' => true]);
             return;
         }
 
         // Only if they haven't turned off VPN or already used 3 instant VPN unlocks in 6h:
-        $sysVWait = "Bạn là trợ lý AI của iosmods.xyz đang nói chuyện với \"$firstName\".\n"
+        $sysVWait = "Bạn là trợ lý AI của iosmods.xyz đang nói chuyện với \"$firstName\". Luôn dùng icon bình thường sinh động (⏳ 🛡️ 😊 ✨).\n"
             . "TRẠNG THÁI THỰC TẾ: Phiên $code đang tạm khoá do bật $vpnName, chỉ còn $leftSec giây nữa sẽ tự mở hoàn toàn"
             . ($vpnUses6h >= 3 ? " (khách đã nhờ mở nhanh VPN 3 lần trong 6 giờ qua nên cần đợi nốt $leftSec giây)." : '.') . "\n"
-            . "Trả lời ngắn gọn, tự nhiên 2 câu: báo rõ lý do là $vpnName và còn đúng $leftSec giây, nhắc tắt VPN và chờ hết đếm ngược tải lại web bấm Got it (KHÔNG bắt khách phải gõ chính xác câu thần chú nào cả!).";
-        $fbVWait = 'Kết nối của bạn đang tạm khoá do <b>' . tg_e($vpnName) . '</b> và chỉ còn <b>' . $leftSec . ' giây</b> nữa là tự mở hoàn toàn. Bạn nhớ tắt VPN rồi chờ hết đếm ngược tải lại web bấm <b>Got it</b> là vào lại bình thường nhé!';
-        pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysVWait, $fbVWait);
+            . "Trả lời ngắn gọn, tự nhiên 2 câu: báo rõ lý do là $vpnName và còn đúng $leftSec giây, nhắc tắt VPN và chờ hết đếm ngược bấm Got it là vào bình thường.";
+        $fbVWait = '⏳ Kết nối của bạn đang tạm khoá do <b>' . tg_e($vpnName) . '</b> và chỉ còn <b>' . $leftSec . ' giây</b> nữa là tự mở hoàn toàn. Bạn nhớ tắt VPN rồi chờ hết đếm ngược bấm <b>Got it</b> là vào lại bình thường nhé! 😊✨';
+        pub_ai_respond_smart($from, $chatId, $firstName, $text !== '' ? $text : $code, $mem, $sysVWait, $fbVWait);
         return;
     }
 
     // -------------------------------------------------------------------------
-    // SUBCASE B4: VERY MINOR FIRST-TIME SPAM (<= 6m light prod_spam / key_spam, 0 evasions) -> INSTANT UNBAN!
+    // SUBCASE B4: VERY MINOR FIRST-TIME SPAM (<= 6m light prod_spam / key_spam, 0 evasions) -> 7s REVIEW & AUTO-UNBAN!
     // -------------------------------------------------------------------------
     $isVeryMinor = in_array($banType, ['prod_spam', 'key_spam'], true)
         && $expTs > 0
@@ -5619,6 +5923,10 @@ function bot_public_appeal_handler(array $m)
         && pub_forgive_count($ip, $from, 'spam') < 1;
 
     if ($isVeryMinor) {
+        pub_wait_7s_deliberate(
+            $chatId,
+            '⏳ Đã tiếp nhận mã <code>' . tg_e($code) . '</code>' . ($photoPath !== '' ? ' từ ảnh chụp màn hình 📸' : '') . '! Mình đang kiểm tra lịch sử phiên trên máy chủ <b>iosmods.xyz</b> khoảng <b>7 giây</b>, bạn đợi xíu nhé 🔍✨'
+        );
         pub_conv_set($from, ['step' => '', 'last_code' => '', 'last_verdict' => 'unbanned_tier1']);
         pub_record_forgive($ip, $from, 'spam');
         if (bot_ipg_ready()) {
@@ -5631,15 +5939,15 @@ function bot_public_appeal_handler(array $m)
             'username'  => $uname,
             'case_code' => $code,
             'reason'    => $reasonOrig,
-            'note'      => 'Bot tự mở khoá (lỗi nhẹ lần đầu)',
+            'note'      => 'Bot tự mở khoá sau 7s kiểm tra (lỗi nhẹ lần đầu)',
         ]);
         tg_flush(false);
 
-        $sysOk = "Bạn là trợ lý AI thân thiện của iosmods.xyz đang nói chuyện với \"$firstName\".\n"
-            . "HÀNH ĐỘNG VỪA THỰC HIỆN THÀNH CÔNG: Vì lỗi \"$reasonOrig\" chỉ là sơ suất lần đầu (0 lần lách khoá), bạn VỪA MỞ KHOÁ HOÀN TOÀN mã $code cho họ.\n"
-            . "Trả lời tự nhiên 2-3 câu: báo đã mở khoá xong, hướng dẫn quay lại iosmods.xyz tải lại trang bấm Got it, và nhắc nhẹ lần sau nạp Key trước khi bấm Get / thao tác chậm rãi hơn.";
-        $fbOk = '✅ Vì đây chỉ là thao tác nhầm nhẹ lần đầu nên mình đã <b>mở khoá hoàn toàn</b> mã <code>' . tg_e($code) . '</code> cho bạn rồi nhé! Bạn tải lại <b>iosmods.xyz</b> rồi bấm <b>Got it</b> là vào web bình thường nha.';
-        pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysOk, $fbOk);
+        $sysOk = "Bạn là trợ lý AI thân thiện của iosmods.xyz đang nói chuyện với \"$firstName\". Luôn dùng icon bình thường sinh động (✅ 🎉 😊 🛡️ ✨).\n"
+            . "HÀNH ĐỘNG VỪA THỰC HIỆN THÀNH CÔNG SAU 7 GIÂY KIỂM TRA: Vì lỗi \"$reasonOrig\" chỉ là sơ suất lần đầu (0 lần lách khoá), bạn VỪA MỞ KHOÁ HOÀN TOÀN mã $code cho họ.\n"
+            . "Trả lời tự nhiên 2-3 câu: báo đã mở khoá xong, hướng dẫn quay lại tab iosmods.xyz — màn hình sẽ TỰ ĐỘNG hiện Automatically Unlocked mà không cần tải lại trang, bấm Got it là vào web bình thường, và nhắc nhẹ lần sau nạp Key trước khi bấm Get / thao tác chậm rãi hơn.";
+        $fbOk = '✅🎉 Vì đây chỉ là thao tác nhầm nhẹ lần đầu nên mình đã xác minh và <b>mở khoá hoàn toàn</b> mã <code>' . tg_e($code) . '</code> cho bạn rồi nhé! Bạn quay lại tab <b>iosmods.xyz</b> — màn hình sẽ tự động hiện <b>Automatically Unlocked</b>, bấm <b>Got it</b> là vào web bình thường luôn nha 😊✨';
+        pub_ai_respond_smart($from, $chatId, $firstName, $text !== '' ? $text : $code, $mem, $sysOk, $fbOk, ['already_sent' => true]);
         return;
     }
 
@@ -5666,22 +5974,97 @@ function bot_public_appeal_handler(array $m)
         ]);
         tg_flush(false);
 
-        $sysRed = "Bạn là trợ lý AI của iosmods.xyz đang nói chuyện với \"$firstName\".\n"
+        $sysRed = "Bạn là trợ lý AI của iosmods.xyz đang nói chuyện với \"$firstName\". Luôn dùng icon bình thường sinh động (⏱️ 😊 ✨ 🛡️).\n"
             . "HÀNH ĐỘNG VỪA THỰC HIỆN: Sau khi nghe giải thích của khách, bạn vừa GIẢM THỜI GIAN TẠM KHOÁ mã $code từ $leftMin phút xuống còn $newMin phút (tự mở lúc " . date('H:i', (int) $newExpTs) . ").\n"
-            . "Trả lời tự nhiên 2-3 câu: xác nhận đã giảm xuống còn $newMin phút, hết giờ tải lại iosmods.xyz bấm Got it là vào được.";
-        $fbRed = '⏱ Cảm ơn bạn đã giải thích! Mình vừa giảm thời gian tạm khoá mã <code>' . tg_e($code) . '</code> từ <b>' . $leftMin . ' phút</b> xuống còn <b>' . $newMin . ' phút</b> (tự mở lúc <b>' . date('H:i', (int) $newExpTs) . '</b>). Hết giờ bạn tải lại web bấm <b>Got it</b> nhé!';
-        pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysRed, $fbRed);
+            . "Trả lời tự nhiên 2-3 câu: xác nhận đã giảm xuống còn $newMin phút, hết giờ quay lại iosmods.xyz bấm Got it là vào được.";
+        $fbRed = '⏱️ Cảm ơn bạn đã giải thích nhé! Mình vừa giảm thời gian tạm khoá mã <code>' . tg_e($code) . '</code> từ <b>' . $leftMin . ' phút</b> xuống còn <b>' . $newMin . ' phút</b> (tự mở lúc <b>' . date('H:i', (int) $newExpTs) . '</b>). Hết giờ bạn bấm <b>Got it</b> là vào lại bình thường nha! 😊✨';
+        pub_ai_respond_smart($from, $chatId, $firstName, $text !== '' ? $text : $code, $mem, $sysRed, $fbRed, ['already_sent' => true]);
         return;
     }
 
-    $sysWait = "Bạn là trợ lý AI của iosmods.xyz đang nói chuyện với \"$firstName\".\n"
+    $sysWait = "Bạn là trợ lý AI quản lý & bảo mật của iosmods.xyz đang nói chuyện với \"$firstName\". Luôn dùng icon bình thường sinh động (⏳ 🛡️ 💬 😊).\n"
         . "TRẠNG THÁI HIỆN TẠI CỦA MÃ $code:\n"
         . "- Nguyên nhân tạm khoá: $reasonOrig\n"
         . "- Thời gian còn lại: $leftMin phút ($leftSec giây, mở lúc " . date('H:i', $expTs) . ")\n"
-        . ($aiReduced ? "- Đã được giảm thời gian 1 lần rồi nên không giảm thêm lần 2 được nữa; nếu cần mở ngay lập tức phải liên hệ Admin ($admHandle).\n" : "- Nếu khách giải thích rõ lý do vô ý và còn > 3.5 phút thì bạn có thể xét giảm bớt thời gian chờ.\n")
+        . ($aiReduced ? "- Đã được giảm thời gian 1 lần rồi nên không giảm thêm lần 2 được nữa; nếu khách muốn gửi lời nhắn tới Admin thì gắn thẻ [SEND_ADMIN: tóm tắt] ở cuối câu.\n" : "- Nếu khách giải thích rõ lý do vô ý và còn > 3.5 phút thì bạn có thể xét giảm bớt thời gian chờ.\n")
         . "Trả lời tự nhiên, thân thiện 2-3 câu đúng trọng tâm lời khách vừa hỏi.";
-    $fbWait = 'Mã <code>' . tg_e($code) . '</code> hiện đang tạm khoá do <b>' . tg_e($reasonOrig) . '</b>, còn <b>' . $leftMin . ' phút</b> (mở lúc ' . date('H:i', $expTs) . '). ' . ($aiReduced ? 'Bạn đợi nốt ít phút rồi tải lại web bấm <b>Got it</b> nhé!' : 'Bạn kể ngắn gọn tình huống lúc nãy để mình xem xét giảm bớt thời gian chờ nha!');
-    pub_ai_respond_smart($from, $chatId, $firstName, $text, $mem, $sysWait, $fbWait);
+    $fbWait = '⏳ Mã <code>' . tg_e($code) . '</code> hiện đang tạm khoá do <b>' . tg_e($reasonOrig) . '</b>, còn <b>' . $leftMin . ' phút</b> (mở lúc ' . date('H:i', $expTs) . '). ' . ($aiReduced ? 'Bạn đợi nốt ít phút rồi bấm <b>Got it</b> là vào lại web nhé! 😊✨' : 'Bạn kể ngắn gọn tình huống lúc nãy để mình xem xét giảm bớt thời gian chờ nha! 💬');
+    pub_ai_respond_smart($from, $chatId, $firstName, $text !== '' ? $text : $code, $mem, $sysWait, $fbWait, [
+        'ip'         => $realIp !== '' ? $realIp : $ip,
+        'username'   => $uname,
+        'tg_user'    => $tgUser,
+        'photo_path' => $photoPath,
+    ]);
+}
+
+/**
+ * Smart Admin AI Co-Pilot: When Admin chats normally in Telegram (without /menu or /start),
+ * replies naturally with live iosmods.xyz metrics & lively emojis instead of popping up /menu!
+ */
+function bot_admin_ai_copilot($text, array $m = [])
+{
+    $admin  = (string) ($GLOBALS['CTX']['admin'] ?? '');
+    $chatId = (string) ($GLOBALS['CTX']['chat'] ?? '');
+    $aName  = (string) ($GLOBALS['CTX']['name'] ?? 'Admin');
+    if ($chatId === '') {
+        return;
+    }
+
+    @tg_api_raw('sendChatAction', ['chat_id' => $chatId, 'action' => 'typing'], 2);
+
+    // Gather live iosmods.xyz telemetry for the Admin Co-Pilot
+    $uCnt   = (int) bq_val('SELECT COUNT(*) FROM users', '', [], 0);
+    $kAct   = (int) bq_val('SELECT COUNT(*) FROM users WHERE turns_left > 0 AND expiry_date > NOW()', '', [], 0);
+    $banCnt = bot_ipg_ready() ? (int) bq_val('SELECT COUNT(*) FROM ip_bans WHERE expires_at IS NULL OR expires_at > NOW()', '', [], 0) : 0;
+    $maint  = ((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'maintenance_mode'", '', [], '0') === '1');
+    $snow   = ((string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_snow'", '', [], '1') !== '0');
+    $shine  = (string) bq_val("SELECT config_value FROM site_config WHERE config_key = 'ds_shine_seconds'", '', [], '1.45');
+
+    $storeKey = 'admin_ai_hist_' . preg_replace('/[^0-9]/', '', $admin);
+    $hist     = tg_store_read($storeKey);
+    if (!is_array($hist)) {
+        $hist = [];
+    }
+
+    $sys = "Bạn là TRỢ LÝ AI QUẢN TRỊ RIÊNG của Quản trị viên (Admin \"$aName\") cho website iosmods.xyz.\n"
+        . "QUY TẮC:\n"
+        . "1. Trò chuyện tự nhiên, thông minh, gọn gàng (2-4 câu), dùng thêm icon/emoji bình thường sinh động (👋 🛡️ 📊 ✨ 🚀 😊) như một trợ lý thực thụ đang đồng hành 24/7 cùng Admin.\n"
+        . "2. Nắm rõ và báo cáo chính xác tình trạng trực tiếp của website iosmods.xyz khi Admin hỏi.\n"
+        . "3. Không bao giờ tự spam bảng lệnh dài dòng; chỉ nhắc ngắn \"gõ /menu khi cần mở bảng điều khiển\" nếu Admin thực sự muốn thao tác nút bấm.\n\n"
+        . "[CHỈ SỐ TRỰC TIẾP IOSMODS.XYZ]:\n"
+        . "- Tổng tài khoản: $uCnt | Tài khoản đang có Key hoạt động: $kAct\n"
+        . "- IP đang bị chặn hiện tại: $banCnt\n"
+        . "- Bảo trì web: " . ($maint ? 'ĐANG BẬT 🔧' : 'Đang mở bình thường 🟢') . "\n"
+        . "- Hiệu ứng tuyết: " . ($snow ? 'Đang BẬT ❄️' : 'Đang TẮT') . " | Tốc độ lắp loá logo: {$shine}s ✨\n"
+        . "- Thời gian VN: " . date('H:i d/m/Y');
+
+    $msgs = [['role' => 'system', 'content' => $sys]];
+    foreach (array_slice($hist, -10) as $h) {
+        if (is_array($h) && !empty($h['role']) && isset($h['content'])) {
+            $msgs[] = ['role' => (string) $h['role'], 'content' => (string) $h['content']];
+        }
+    }
+    $msgs[] = ['role' => 'user', 'content' => (string) $text];
+
+    $reply = pub_ai_call_llm($msgs);
+    if ($reply === '') {
+        $reply = 'Chào sếp ' . $aName . '! 👋🛡️ Hệ thống **iosmods.xyz** đang hoạt động ổn định (' . $uCnt . ' user, ' . $kAct . ' Key đang dùng, ' . $banCnt . ' IP đang bị chặn). Sếp cần mình kiểm tra nhanh tài khoản, IP hay hỗ trợ gì cứ nhắn tự nhiên nhé — lúc nào cần mở bảng điều khiển thì gõ `/menu` nha! ✨';
+    }
+
+    $hist[] = ['role' => 'user', 'content' => tg_clip((string) $text, 400)];
+    $hist[] = ['role' => 'assistant', 'content' => tg_clip($reply, 600)];
+    $keep   = array_slice($hist, -12);
+    tg_store_update($storeKey, function () use ($keep) {
+        return $keep;
+    });
+
+    // Send cleanly WITHOUT popping up /menu keyboard!
+    tg_api_raw('sendMessage', [
+        'chat_id'                  => $chatId,
+        'text'                     => pub_md_to_tg_html($reply),
+        'parse_mode'               => 'HTML',
+        'disable_web_page_preview' => true,
+    ], 6);
 }
 
 function bot_on_message(array $m)
@@ -5873,15 +6256,27 @@ function bot_on_message(array $m)
         return bot_conv_input($convNow, $text, $m);
     }
 
-    // Smart Direct IP or Single-Token Username Check when no conversation is active!
+    // Smart Direct IP check
     if (filter_var($text, FILTER_VALIDATE_IP) !== false) {
         return screen_smart_check($text);
     }
-    if (preg_match('/^[A-Za-z0-9_.-]{3,36}$/', $text)) {
-        return screen_smart_check($text);
+
+    // Explicit menu request in plain text -> open /menu ONLY when asked!
+    $asciiAdm = pub_fold_ascii($text);
+    if (preg_match('/^(menu|mo menu|hien menu|bang dieu khien|trang chu|home)$/', $asciiAdm)) {
+        return screen_home('👋 Bảng điều khiển quản trị <b>iosmods.xyz</b>!');
     }
 
-    return screen_home();
+    // Single-token username lookup ONLY if it actually exists in MySQL users (never hijack casual greetings like "alo", "hello", "test"!)
+    if (preg_match('/^[A-Za-z0-9_.-]{3,36}$/', $text)) {
+        $exactUser = bq_row('SELECT id FROM users WHERE username = ? LIMIT 1', 's', [$text]);
+        if ($exactUser) {
+            return screen_smart_check($text);
+        }
+    }
+
+    // Natural Admin chat -> reply via Smart Admin AI Co-Pilot (NEVER spam /menu on normal messages!)
+    return bot_admin_ai_copilot($text, $m);
 }
 
 function bot_route($data, array $origMessage = [])
