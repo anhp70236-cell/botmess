@@ -1,0 +1,107 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ipa:
+    name: Test Engine & Build Unsigned iOS IPA
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check Xcode & Swift Environment
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Ensure AppIcon Exists
+        run: |
+          ICON_PATH="Sources/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+          if [ ! -f "$ICON_PATH" ]; then
+            python3 - <<'PY'
+          import os, struct, zlib
+          w, h = 1024, 1024
+          rows = []
+          for y in range(h):
+              row = bytearray([0])
+              for x in range(w):
+                  dx, dy = abs(x - 512), abs(y - 512)
+                  if dx < 220 and dy < 220 and (dx + dy) < 340:
+                      row.extend((59, 130, 246, 255))
+                  else:
+                      row.extend((15, 23, 42, 255))
+              rows.append(bytes(row))
+          raw = b"".join(rows)
+          def chunk(tag, data):
+              return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+          png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b"")
+          with open("Sources/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png", "wb") as f:
+              f.write(png)
+          PY
+          fi
+
+      - name: Run Pure-Swift Core Engine Unit Tests
+        run: |
+          ENGINE_FILES=$(find Sources/Engine -name '*.swift' | sort)
+          swiftc -O -lz -o EngineTests $ENGINE_FILES Tests/EngineTests.swift
+          ./EngineTests
+
+      - name: Install XcodeGen & Generate Xcode Project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build Unsigned Release arm64 App
+        run: |
+          xcodebuild \
+            -project IPADumperPro.xcodeproj \
+            -scheme IPADumperPro \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            SYMROOT="$PWD/build" \
+            build
+
+      - name: Package IPADumperPro.ipa
+        run: |
+          rm -rf Payload IPADumperPro.ipa
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/IPADumperPro.app Payload/IPADumperPro.app
+          rm -rf Payload/IPADumperPro.app/_CodeSignature
+          file Payload/IPADumperPro.app/IPADumperPro
+          zip -r -9 IPADumperPro.ipa Payload
+          ls -lh IPADumperPro.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IPADumperPro-iOS-IPA
+          path: IPADumperPro.ipa
+          retention-days: 90
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v2.0.0-latest"
+          NOTES="IPA Dumper Pro v2.0.0 (Unsigned arm64 iOS 15+ IPA). Built automatically from ${GITHUB_SHA}."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" IPADumperPro.ipa --clobber
+          else
+            gh release create "$TAG" IPADumperPro.ipa --title "IPA Dumper Pro v2.0.0" --notes "$NOTES"
+          fi

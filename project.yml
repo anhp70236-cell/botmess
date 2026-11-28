@@ -1,0 +1,37 @@
+name: IPADumperPro
+options:
+  bundleIdPrefix: com.botmess
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+targets:
+  IPADumperPro:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources
+    dependencies:
+      - sdk: libz.tbd
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        INFOPLIST_FILE: "Sources/App/Info.plist"
+        GENERATE_INFOPLIST_FILE: "NO"
+        PRODUCT_BUNDLE_IDENTIFIER: "com.botmess.ipadumper"
+        PRODUCT_NAME: "IPADumperPro"
+        MARKETING_VERSION: "2.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTED_PLATFORMS: "iphoneos"
+        SUPPORTS_MACCATALYST: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: "AccentColor"
+        DEAD_CODE_STRIPPING: "YES"
+        SWIFT_OPTIMIZATION_LEVEL: "-O"
