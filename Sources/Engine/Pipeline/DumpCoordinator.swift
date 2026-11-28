@@ -134,7 +134,7 @@ public final class DumpCoordinator {
         overrideMetadataURL: URL? = nil,
         outputsRootURL: URL,
         options: DumpOptions,
-        isCancelled: () -> Bool = { false },
+        isCancelled: @escaping () -> Bool = { false },
         onProgress: @escaping (DumpProgressUpdate) -> Void
     ) throws -> DumpCoordinatorResult {
         let startTime = Date()
@@ -263,7 +263,7 @@ public final class DumpCoordinator {
         metadataURL: URL?,
         outputsRootURL: URL,
         options: DumpOptions,
-        isCancelled: () -> Bool = { false },
+        isCancelled: @escaping () -> Bool = { false },
         onProgress: @escaping (DumpProgressUpdate) -> Void
     ) throws -> DumpCoordinatorResult {
         let startTime = Date()
@@ -322,7 +322,7 @@ public final class DumpCoordinator {
         outputsRootURL: URL,
         options: DumpOptions,
         startTime: Date,
-        isCancelled: () -> Bool,
+        isCancelled: @escaping () -> Bool,
         onProgress: @escaping (DumpProgressUpdate) -> Void
     ) throws -> DumpCoordinatorResult {
         if isCancelled() { throw DumpCoordinatorError.cancelled }
