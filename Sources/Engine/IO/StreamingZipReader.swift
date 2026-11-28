@@ -385,14 +385,9 @@ public final class StreamingZipReader {
             remaining -= UInt64(toRead)
             let flags: Int32 = (toRead == 0) ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
 
-            try inBuf.withUnsafeBytes { inRaw in
-                if toRead > 0, let srcBase = inRaw.bindMemory(to: UInt8.self).baseAddress {
-                    streamPtr.pointee.src_ptr = srcBase
-                    streamPtr.pointee.src_size = toRead
-                } else {
-                    streamPtr.pointee.src_ptr = withUnsafePointer(to: &dummySrc) { $0 }
-                    streamPtr.pointee.src_size = 0
-                }
+            func pumpStream(srcBase: UnsafePointer<UInt8>, srcSize: Int) throws {
+                streamPtr.pointee.src_ptr = srcBase
+                streamPtr.pointee.src_size = srcSize
 
                 while !done {
                     if isCancelled() { throw ZipReaderError.ioFailed("Đã huỷ giải nén") }
@@ -403,7 +398,7 @@ public final class StreamingZipReader {
                     let status = compression_stream_process(streamPtr, flags)
                     let produced = chunkSize - streamPtr.pointee.dst_size
                     if produced > 0 {
-                        try outHandle.write(contentsOf: Data(bytes: dstBuffer, count: produced))
+                        try outHandle.write(contentsOf: Data(bytesNoCopy: dstBuffer, count: produced, deallocator: .none))
                     }
 
                     if status == COMPRESSION_STATUS_END {
@@ -424,6 +419,22 @@ public final class StreamingZipReader {
                             break
                         }
                     }
+                }
+            }
+
+            if toRead > 0 {
+                try inBuf.withUnsafeBytes { inRaw in
+                    if let srcBase = inRaw.bindMemory(to: UInt8.self).baseAddress {
+                        try pumpStream(srcBase: srcBase, srcSize: toRead)
+                    } else {
+                        try withUnsafePointer(to: &dummySrc) { ptr in
+                            try pumpStream(srcBase: ptr, srcSize: 0)
+                        }
+                    }
+                }
+            } else {
+                try withUnsafePointer(to: &dummySrc) { ptr in
+                    try pumpStream(srcBase: ptr, srcSize: 0)
                 }
             }
 

@@ -12,6 +12,7 @@ struct EngineTests {
         try testChainedFixupsAndDyldInfoOnlyAndMultiBinary()
         try testIL2CPPv24CodeGenModulesAndGenericMethodsAndUnicode()
         try testUnityFrameworkBaseVMZeroAndCFString()
+        try testCyclicExportsTrieAndZeroVMNegativeADRP()
         print("ALL ENGINE TESTS PASSED!")
     }
 
@@ -37,6 +38,20 @@ struct EngineTests {
         assertTrue(!SafetyGuard.isRealMoneyBlocked("AssetBundle.GetBundle"), "AssetBundle.GetBundle must NOT be blocked")
         assertTrue(!SafetyGuard.isRealMoneyBlocked("UniRx.EventSubscription"), "UniRx.EventSubscription must NOT be blocked")
         assertTrue(!SafetyGuard.isRealMoneyBlocked("SpriteAtlas.AddPack"), "SpriteAtlas.AddPack must NOT be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("AddGold"), "AddGold must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("SetGems"), "SetGems must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("GetCoins"), "GetCoins must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("UnlockVIP"), "UnlockVIP must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("RestorePurchases"), "RestorePurchases must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("CheckoutFlow"), "CheckoutFlow must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("CreditCard"), "CreditCard must be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("GetComponent"), "GetComponent must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("SetPosition"), "SetPosition must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("AddListener"), "AddListener must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("DirectHit"), "DirectHit must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("RecordScore"), "RecordScore must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("CheckCollision"), "CheckCollision must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("CardDeck"), "CardDeck must NOT be blocked")
 
         let bankCheck = SafetyGuard.detectRestrictedApp(
             fileName: "Vietcombank.ipa",
@@ -1012,6 +1027,92 @@ struct EngineTests {
         assertTrue(dumpCS.contains("UpdateHero") && dumpCS.contains("RVA: 0x1000"), "Module 1 method RVA 0x1000 must survive Module 0 having all-NULL abstract pointers")
         assertTrue(nativeText.contains("BossSpawnedCFString"), "ARM64 XRef to __cfstring entry missing")
         print("[PASS] UnityFramework baseVM==0 + Abstract Module + __cfstring XRef")
+    }
+
+    static func testCyclicExportsTrieAndZeroVMNegativeADRP() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("trie_cycle_test_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let baseVM: UInt64 = 0
+        var macho = Data(repeating: 0, count: 0x3000)
+
+        // __text at 0x1000:
+        // 0x1000: ADRP X0, #-2 (pcVM=0x1000 -> pageBase=0xFFFF_FFFF_FFFF_F000); ADD X0, X0, #0xFFF -> wraps without trapping
+        // 0x1008: ADRP X1, #0  (pcVM=0x1000 -> pageBase=0x1000); ADD X1, X1, #0x200 -> 0x1200 ("ValidXRefTarget")
+        putU32(&macho, 0x1000, 0xD0FF_FFE0) // ADRP X0, #-2
+        putU32(&macho, 0x1004, 0x913F_FC00) // ADD X0, X0, #0xFFF
+        putU32(&macho, 0x1008, 0x9000_0001) // ADRP X1, #0
+        putU32(&macho, 0x100C, 0x9108_0021) // ADD X1, X1, #0x200
+        putU32(&macho, 0x1010, 0xD65F_03C0) // RET
+
+        for (i, b) in Array("ValidXRefTarget\0".utf8).enumerated() { macho[0x1200 + i] = b }
+
+        // LC_DYLD_EXPORTS_TRIE at 0x2000 (size 0x100):
+        // Node 0: child "_safeDylibExport" -> 32, child invalid-UTF8 [0xFF, 0xFE, 0x5F] -> 48 (mutual cycle 48 <-> 64)
+        macho[0x2000] = 0 // termSize = 0
+        macho[0x2001] = 2 // 2 children
+        let safeEdge = Array("_safeDylibExport\0".utf8)
+        for (i, b) in safeEdge.enumerated() { macho[0x2002 + i] = b }
+        macho[0x2002 + safeEdge.count] = 32 // child offset = 32
+        let badEdge: [UInt8] = [0xFF, 0xFE, 0x5F, 0x00]
+        let badStart = 0x2002 + safeEdge.count + 1
+        for (i, b) in badEdge.enumerated() { macho[badStart + i] = b }
+        macho[badStart + badEdge.count] = 48 // child offset = 48
+
+        // Node 32 -> export _safeDylibExport at RVA 0x1008
+        macho[0x2020] = 3
+        macho[0x2021] = 0
+        macho[0x2022] = 0x88 // uleb128(0x1008) byte 0
+        macho[0x2023] = 0x20 // uleb128(0x1008) byte 1
+        macho[0x2024] = 0
+
+        // Node 48 -> child "_loop" -> 64
+        macho[0x2030] = 0
+        macho[0x2031] = 1
+        let loopEdge = Array("_loop\0".utf8)
+        for (i, b) in loopEdge.enumerated() { macho[0x2032 + i] = b }
+        macho[0x2032 + loopEdge.count] = 64
+
+        // Node 64 -> back to Node 48 (cycle!)
+        macho[0x2040] = 0
+        macho[0x2041] = 1
+        let backEdge = Array("_cycle\0".utf8)
+        for (i, b) in backEdge.enumerated() { macho[0x2042 + i] = b }
+        macho[0x2042 + backEdge.count] = 48
+
+        let segTextSz: UInt32 = 72 + 2 * 80
+        let segLinkSz: UInt32 = 72
+        let expSz: UInt32 = 16
+        putU32(&macho, 0, 0xFEED_FACF); putU32(&macho, 4, 0x0100_000C)
+        putU32(&macho, 12, 6); putU32(&macho, 16, 3); putU32(&macho, 20, segTextSz + segLinkSz + expSz)
+
+        var c = 32
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segTextSz); writeFixed(&macho, c + 8, "__TEXT")
+        putU64(&macho, c + 24, baseVM); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0); putU64(&macho, c + 48, 0x2000)
+        putU32(&macho, c + 56, 5); putU32(&macho, c + 60, 5); putU32(&macho, c + 64, 2)
+        c += 72
+        writeFixed(&macho, c, "__text"); writeFixed(&macho, c + 16, "__TEXT")
+        putU64(&macho, c + 32, 0x1000); putU64(&macho, c + 40, 0x200); putU32(&macho, c + 48, 0x1000); putU32(&macho, c + 64, 0x8000_0400)
+        c += 80
+        writeFixed(&macho, c, "__cstring"); writeFixed(&macho, c + 16, "__TEXT")
+        putU64(&macho, c + 32, 0x1200); putU64(&macho, c + 40, 0x100); putU32(&macho, c + 48, 0x1200); putU32(&macho, c + 64, 0x02)
+        c += 80
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segLinkSz); writeFixed(&macho, c + 8, "__LINKEDIT")
+        putU64(&macho, c + 24, 0x2000); putU64(&macho, c + 32, 0x1000); putU64(&macho, c + 40, 0x2000); putU64(&macho, c + 48, 0x1000)
+        putU32(&macho, c + 56, 1); putU32(&macho, c + 60, 1); putU32(&macho, c + 64, 0)
+        c += 72
+        putU32(&macho, c, 0x8000_0033); putU32(&macho, c + 4, expSz)
+        putU32(&macho, c + 8, 0x2000); putU32(&macho, c + 12, 0x100)
+
+        let dylibURL = tmp.appendingPathComponent("CyclicTrie.dylib")
+        try macho.write(to: dylibURL)
+        let parsed = try MachOParser(url: dylibURL, sourceName: "CyclicTrie.dylib")
+        parsed.runDeepNativeScan()
+
+        assertTrue(parsed.exportedSymbols.contains(where: { $0.name == "safeDylibExport" && $0.rva == 0x1008 }), "Valid export missing alongside cyclic/invalid-UTF8 trie node")
+        assertTrue(parsed.xrefFunctions.contains(where: { $0.name.contains("ValidXRefTarget") }), "Valid XRef missing after negative ADRP on baseVM==0")
+        print("[PASS] Cyclic Exports Trie + Invalid UTF-8 Edge + Negative Zero-VM ADRP")
     }
 
     static func readU32(_ d: Data, _ o: Int) -> UInt32 {

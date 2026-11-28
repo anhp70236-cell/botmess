@@ -445,10 +445,14 @@ final class DumpViewModel: ObservableObject {
         appendLog("[Hệ thống] Đang yêu cầu huỷ...")
     }
 
-    func appendLog(_ msg: String) {
+    private static let logTimeFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm:ss"
-        let line = "[\(fmt.string(from: Date()))] \(msg)"
+        return fmt
+    }()
+
+    func appendLog(_ msg: String) {
+        let line = "[\(Self.logTimeFormatter.string(from: Date()))] \(msg)"
         logs.append(line)
         if logs.count > 400 {
             logs.removeFirst(logs.count - 400)

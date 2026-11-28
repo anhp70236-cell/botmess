@@ -85,46 +85,58 @@ public enum SafetyGuard {
     }
 
     private static let triggerBytePatterns: [[UInt8]] = [
-        "iap", "inapp", "in_app", "store", "skp", "skr", "bill", "check",
-        "pay", "rec", "card", "money", "micro", "topup", "recharg", "vouch",
+        "iap", "inapp", "in_app", "store", "skp", "skr", "bill", "checkout",
+        "pay", "receipt", "creditcard", "money", "micro", "topup", "recharg", "vouch",
         "coup", "invoic", "entitle", "monetiz", "subscr", "buy", "purch",
         "spend", "gem", "diam", "gold", "coin", "cash", "curren", "vip",
-        "prem", "noads", "prod", "shop", "transact", "consum",
-        "add", "set", "get", "grant", "give", "unlock", "restore"
+        "prem", "noads", "prod", "shop", "transact", "consum"
     ].map { Array($0.utf8) }
 
-    private static func hasRealMoneyTrigger(_ raw: String) -> Bool {
-        let utf8 = Array(raw.utf8)
-        let n = utf8.count
-        guard n >= 3 else { return false }
-        var lower = [UInt8](repeating: 0, count: n)
-        for i in 0..<n {
-            let b = utf8[i]
-            lower[i] = (b >= 65 && b <= 90) ? (b + 32) : b
-        }
+    private static let patternsByFirstByte: [[[UInt8]]] = {
+        var buckets = [[[UInt8]]](repeating: [], count: 26)
         for pat in triggerBytePatterns {
-            let m = pat.count
-            if n < m { continue }
-            let p0 = pat[0]
-            var i = 0
-            let limit = n - m
-            while i <= limit {
-                if lower[i] == p0 {
-                    var matched = true
-                    var j = 1
-                    while j < m {
-                        if lower[i + j] != pat[j] {
-                            matched = false
-                            break
-                        }
-                        j += 1
+            if let first = pat.first, first >= 97 && first <= 122 {
+                buckets[Int(first - 97)].append(pat)
+            }
+        }
+        return buckets
+    }()
+
+    @inline(__always)
+    private static func scanTriggerBuffer(_ ptr: UnsafeBufferPointer<UInt8>) -> Bool {
+        let n = ptr.count
+        guard n >= 3 else { return false }
+        for i in 0..<(n - 2) {
+            var b0 = ptr[i]
+            if b0 >= 65 && b0 <= 90 { b0 &+= 32 }
+            guard b0 >= 97 && b0 <= 122 else { continue }
+            let bucket = patternsByFirstByte[Int(b0 - 97)]
+            if bucket.isEmpty { continue }
+            for pat in bucket {
+                let m = pat.count
+                if i + m > n { continue }
+                var matched = true
+                var j = 1
+                while j < m {
+                    var bj = ptr[i + j]
+                    if bj >= 65 && bj <= 90 { bj &+= 32 }
+                    if bj != pat[j] {
+                        matched = false
+                        break
                     }
-                    if matched { return true }
+                    j += 1
                 }
-                i += 1
+                if matched { return true }
             }
         }
         return false
+    }
+
+    private static func hasRealMoneyTrigger(_ raw: String) -> Bool {
+        if let res = raw.utf8.withContiguousStorageIfAvailable({ scanTriggerBuffer($0) }) {
+            return res
+        }
+        return ContiguousArray(raw.utf8).withUnsafeBufferPointer { scanTriggerBuffer($0) }
     }
 
     /// Strict real-money / In-App Purchase / StoreKit / payment symbol filter.

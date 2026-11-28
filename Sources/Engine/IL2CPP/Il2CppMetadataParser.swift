@@ -561,6 +561,7 @@ public enum Il2CppMetadataParser {
 
             stringLiterals.reserveCapacity(min(slCount, 50_000))
             for i in 0..<slCount {
+                if (i & 0xFFF) == 0 && isCancelled() { break }
                 let p = stringLiteralOff + i * 8
                 let first = Int(mapped.readUInt32(at: p))
                 let second = Int(mapped.readUInt32(at: p + 4))

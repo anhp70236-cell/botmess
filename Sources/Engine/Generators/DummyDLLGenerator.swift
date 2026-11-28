@@ -7,6 +7,7 @@ public enum DummyDLLGenerator {
         images: [Il2CppImageInfo],
         types: [Il2CppTypeInfo],
         options: DumpOptions,
+        isCancelled: @escaping () -> Bool = { false },
         log: (String) -> Void
     ) throws -> Int {
         let fm = FileManager.default
@@ -32,6 +33,7 @@ public enum DummyDLLGenerator {
         var firstError: Error?
 
         for img in images {
+            if isCancelled() { break }
             let imgTypes = typesByImage[img.index] ?? []
             sem.wait()
             group.enter()
@@ -40,19 +42,22 @@ public enum DummyDLLGenerator {
                     sem.signal()
                     group.leave()
                 }
-                do {
-                    let safeFileName = img.name.lowercased().hasSuffix(".dll") ? img.name : "\(img.name).dll"
-                    let cleanName = safeFileName.replacingOccurrences(of: "/", with: "_")
-                    let outURL = directoryURL.appendingPathComponent(cleanName)
-                    let peData = buildAssemblyDLL(image: img, types: imgTypes, options: options)
-                    try peData.write(to: outURL, options: .atomic)
-                    lock.lock()
-                    generatedCount += 1
-                    lock.unlock()
-                } catch {
-                    lock.lock()
-                    if firstError == nil { firstError = error }
-                    lock.unlock()
+                if isCancelled() { return }
+                autoreleasepool {
+                    do {
+                        let safeFileName = img.name.lowercased().hasSuffix(".dll") ? img.name : "\(img.name).dll"
+                        let cleanName = safeFileName.replacingOccurrences(of: "/", with: "_")
+                        let outURL = directoryURL.appendingPathComponent(cleanName)
+                        let peData = buildAssemblyDLL(image: img, types: imgTypes, options: options)
+                        try peData.write(to: outURL, options: .atomic)
+                        lock.lock()
+                        generatedCount += 1
+                        lock.unlock()
+                    } catch {
+                        lock.lock()
+                        if firstError == nil { firstError = error }
+                        lock.unlock()
+                    }
                 }
             }
         }
@@ -316,7 +321,7 @@ public enum DummyDLLGenerator {
             ))
 
             if !isSupportDummyDll && options.restoreDummyDllTokens && t.token != 0 {
-                let blobIdx = buildNamedArgAttrBlob([("Token", String(format: "0x%X", t.token))])
+                let blobIdx = buildNamedArgAttrBlob([("Token", "0x" + String(t.token, radix: 16, uppercase: true))])
                 customAttrs.append(CustomAttrRow(
                     parent: (tdRowIndex << 5) | 3,
                     type: (tokenAttrCtorMemberRef << 3) | 3,
@@ -356,7 +361,7 @@ public enum DummyDLLGenerator {
                 fieldsTable.append(FieldRow(flags: fFlags, name: heaps.addString(f.name), sig: fSig))
 
                 if !isSupportDummyDll && options.restoreDummyDllTokens && f.token != 0 {
-                    let blobIdx = buildNamedArgAttrBlob([("Token", String(format: "0x%X", f.token))])
+                    let blobIdx = buildNamedArgAttrBlob([("Token", "0x" + String(f.token, radix: 16, uppercase: true))])
                     customAttrs.append(CustomAttrRow(
                         parent: (fRowIdx << 5) | 1,
                         type: (tokenAttrCtorMemberRef << 3) | 3,
@@ -364,7 +369,7 @@ public enum DummyDLLGenerator {
                     ))
                 }
                 if !isSupportDummyDll && options.writeFieldOffsets && f.offset >= 0 {
-                    let blobIdx = buildNamedArgAttrBlob([("Offset", String(format: "0x%X", f.offset))])
+                    let blobIdx = buildNamedArgAttrBlob([("Offset", "0x" + String(UInt32(bitPattern: f.offset), radix: 16, uppercase: true))])
                     customAttrs.append(CustomAttrRow(
                         parent: (fRowIdx << 5) | 1,
                         type: (fieldOffAttrCtorMemberRef << 3) | 3,
@@ -381,7 +386,7 @@ public enum DummyDLLGenerator {
                     let pSig = heaps.addBlob([0x28, 0x00, encodeElemType(p.typeName)])
                     propsTable.append(PropertyRow(flags: UInt16(p.attrs & 0xFFFF), name: heaps.addString(p.name), sig: pSig))
                     if !isSupportDummyDll && options.restoreDummyDllTokens && p.token != 0 {
-                        let blobIdx = buildNamedArgAttrBlob([("Token", String(format: "0x%X", p.token))])
+                        let blobIdx = buildNamedArgAttrBlob([("Token", "0x" + String(p.token, radix: 16, uppercase: true))])
                         customAttrs.append(CustomAttrRow(
                             parent: (pRowIdx << 5) | 9,
                             type: (tokenAttrCtorMemberRef << 3) | 3,
@@ -421,7 +426,7 @@ public enum DummyDLLGenerator {
                 ))
 
                 if !isSupportDummyDll && options.restoreDummyDllTokens && m.token != 0 {
-                    let blobIdx = buildNamedArgAttrBlob([("Token", String(format: "0x%X", m.token))])
+                    let blobIdx = buildNamedArgAttrBlob([("Token", "0x" + String(m.token, radix: 16, uppercase: true))])
                     customAttrs.append(CustomAttrRow(
                         parent: (mRowIdx << 5) | 0,
                         type: (tokenAttrCtorMemberRef << 3) | 3,
@@ -430,12 +435,12 @@ public enum DummyDLLGenerator {
                 }
                 if !isSupportDummyDll && options.writeMethodOffsets && m.rva > 0 {
                     var args: [(String, String)] = [
-                        ("RVA", String(format: "0x%llX", m.rva)),
-                        ("Offset", String(format: "0x%llX", m.fileOffset)),
-                        ("VA", String(format: "0x%llX", m.va))
+                        ("RVA", "0x" + String(m.rva, radix: 16, uppercase: true)),
+                        ("Offset", "0x" + String(m.fileOffset, radix: 16, uppercase: true)),
+                        ("VA", "0x" + String(m.va, radix: 16, uppercase: true))
                     ]
                     if m.slot != 0xFFFF {
-                        args.append(("Slot", String(format: "0x%X", m.slot)))
+                        args.append(("Slot", "0x" + String(m.slot, radix: 16, uppercase: true)))
                     }
                     let blobIdx = buildNamedArgAttrBlob(args)
                     customAttrs.append(CustomAttrRow(

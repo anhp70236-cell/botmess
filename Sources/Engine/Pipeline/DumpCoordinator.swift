@@ -207,7 +207,7 @@ public final class DumpCoordinator {
         if let secPath = info.secondaryMachOPath,
            let secEntry = reader.entries.first(where: { $0.path == secPath }) {
             let secDest = tempDir.appendingPathComponent("secondary_macho")
-            try? reader.extractEntry(secEntry, to: secDest, progress: nil)
+            try? reader.extractEntry(secEntry, to: secDest, isCancelled: isCancelled, progress: nil)
             if FileManager.default.fileExists(atPath: secDest.path) {
                 localSecondaryMachO = secDest
             }
@@ -226,6 +226,7 @@ public final class DumpCoordinator {
         let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xCAFEBABE, 0xBEBAFECA, 0xCAFEBABF, 0xBFBAFECA]
 
         var extraBinaryEntries: [ZipEntry] = []
+        var seenExtraOffsets = Set<UInt64>()
         if options.deepMachOScan && !appRootPrefix.isEmpty {
             for entry in reader.entries {
                 if isCancelled() { throw DumpCoordinatorError.cancelled }
@@ -262,7 +263,8 @@ public final class DumpCoordinator {
                 if let prefix = reader.peekEntryPrefix(entry, maxBytes: 4), prefix.count >= 4 {
                     let magic = UInt32(prefix[0]) | (UInt32(prefix[1]) << 8) | (UInt32(prefix[2]) << 16) | (UInt32(prefix[3]) << 24)
                     let magicBE = (UInt32(prefix[0]) << 24) | (UInt32(prefix[1]) << 16) | (UInt32(prefix[2]) << 8) | UInt32(prefix[3])
-                    if machoMagics.contains(magic) || machoMagics.contains(magicBE) {
+                    if (machoMagics.contains(magic) || machoMagics.contains(magicBE)),
+                       seenExtraOffsets.insert(entry.localHeaderOffset).inserted {
                         extraBinaryEntries.append(entry)
                     }
                 }
@@ -277,7 +279,7 @@ public final class DumpCoordinator {
                   let metaEntry = reader.entries.first(where: { $0.path == metaPath }) {
             let metaDest = tempDir.appendingPathComponent("global-metadata.dat")
             onProgress(DumpProgressUpdate(phase: .inspecting, progress: 0.25, message: "Giải nén streaming global-metadata.dat (\(formatSize(metaEntry.uncompressedSize)))..."))
-            try reader.extractEntry(metaEntry, to: metaDest, progress: nil)
+            try reader.extractEntry(metaEntry, to: metaDest, isCancelled: isCancelled, progress: nil)
             localMetadata = metaDest
         }
 
@@ -406,8 +408,8 @@ public final class DumpCoordinator {
             defer { sem.signal(); group.leave() }
             autoreleasepool {
                 do {
-                    let m = try MachOParser(url: machOURL, sourceName: URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent)
-                    if options.deepMachOScan {
+                    let m = try MachOParser(url: machOURL, sourceName: URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent, isCancelled: isCancelled)
+                    if options.deepMachOScan && !isCancelled() {
                         m.runDeepNativeScan(isCancelled: isCancelled)
                     }
                     lock.lock(); parsedMachO = m; lock.unlock()
@@ -465,8 +467,8 @@ public final class DumpCoordinator {
 
             if reg.codeGenModules.isEmpty && reg.legacyMethodRVAs.isEmpty,
                let secURL = secondaryMachOURL,
-               let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent) {
-                if options.deepMachOScan { secMacho.runDeepNativeScan(isCancelled: isCancelled) }
+               let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent, isCancelled: isCancelled) {
+                if options.deepMachOScan && !isCancelled() { secMacho.runDeepNativeScan(isCancelled: isCancelled) }
                 let secReg = Il2CppRegistrationFinder.find(
                     in: secMacho,
                     imageNames: peek.imageNames,
@@ -499,8 +501,8 @@ public final class DumpCoordinator {
                 for (cIdx, entry) in prioritized.prefix(3).enumerated() {
                     if isCancelled() { throw DumpCoordinatorError.cancelled }
                     let candDest = tDir.appendingPathComponent("cand_il2cpp_\(cIdx)")
-                    if (try? reader.extractEntry(entry, to: candDest, progress: nil)) != nil,
-                       let candMacho = try? MachOParser(url: candDest, sourceName: URL(fileURLWithPath: entry.path).lastPathComponent) {
+                    if (try? reader.extractEntry(entry, to: candDest, isCancelled: isCancelled, progress: nil)) != nil,
+                       let candMacho = try? MachOParser(url: candDest, sourceName: URL(fileURLWithPath: entry.path).lastPathComponent, isCancelled: isCancelled) {
                         let candReg = Il2CppRegistrationFinder.find(
                             in: candMacho,
                             imageNames: peek.imageNames,
@@ -514,7 +516,7 @@ public final class DumpCoordinator {
                             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.63, message: msg))
                         }
                         if !candReg.codeGenModules.isEmpty || !candReg.legacyMethodRVAs.isEmpty {
-                            if options.deepMachOScan { candMacho.runDeepNativeScan(isCancelled: isCancelled) }
+                            if options.deepMachOScan && !isCancelled() { candMacho.runDeepNativeScan(isCancelled: isCancelled) }
                             reg = candReg
                             macho = candMacho
                             promotedExtraPath = entry.path
@@ -526,6 +528,7 @@ public final class DumpCoordinator {
             }
 
             if isCancelled() { throw DumpCoordinatorError.cancelled }
+            macho.releaseChainedFixups()
             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.65, message: "Giải mã toàn bộ Types, Fields, Properties, Events, Methods & Attributes..."))
             fullMeta = try autoreleasepool {
                 try Il2CppMetadataParser.inspectAndParse(
@@ -539,14 +542,19 @@ public final class DumpCoordinator {
                 }
             }
         } else if metadataURL != nil {
+            macho.releaseChainedFixups()
             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.62, message: "Chuyển sang chế độ Mach-O Multi-Binary (Obj-C: \(macho.objcClasses.count), Swift: \(macho.swiftTypes.count), Exports: \(macho.exportedSymbols.count))..."))
+        } else {
+            macho.releaseChainedFixups()
         }
 
         // Collect all Mach-O snapshots across primary, secondary, and embedded frameworks (one-by-one temp disk cleanup)
         var allNativeSnapshots: [NativeBinarySnapshot] = [macho.makeSnapshot()]
+        macho.releaseParsedCollections()
         if !secondaryConsumed, let secURL = secondaryMachOURL,
-           let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent) {
-            if options.deepMachOScan { secMacho.runDeepNativeScan(isCancelled: isCancelled) }
+           let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent, isCancelled: isCancelled) {
+            if options.deepMachOScan && !isCancelled() { secMacho.runDeepNativeScan(isCancelled: isCancelled, releaseFixupsBeforeXRefs: true) }
+            secMacho.releaseChainedFixups()
             if !allNativeSnapshots.contains(where: { $0.sourceName == secMacho.sourceName }) {
                 allNativeSnapshots.append(secMacho.makeSnapshot())
             }
@@ -558,16 +566,19 @@ public final class DumpCoordinator {
                 if isCancelled() { throw DumpCoordinatorError.cancelled }
                 let binName = URL(fileURLWithPath: entry.path).lastPathComponent
                 let frac = Double(idx + 1) / Double(max(1, totalExtra))
-                onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.72 + frac * 0.04, message: "Quét binary phụ \(idx + 1)/\(totalExtra): \(binName)..."))
+                onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.72 + frac * 0.04, message: "Quét binary phụ \(idx + 1)/\(totalExtra): \(binName) (\(formatSize(entry.uncompressedSize)))..."))
                 autoreleasepool {
                     let tmpBin = tDir.appendingPathComponent("extra_bin_\(idx)")
                     defer { try? FileManager.default.removeItem(at: tmpBin) }
-                    if (try? reader.extractEntry(entry, to: tmpBin, progress: nil)) != nil,
-                       let fwMacho = try? MachOParser(url: tmpBin, sourceName: binName) {
-                        fwMacho.runDeepNativeScan(isCancelled: isCancelled)
-                        allNativeSnapshots.append(fwMacho.makeSnapshot())
+                    if (try? reader.extractEntry(entry, to: tmpBin, isCancelled: isCancelled, progress: nil)) != nil,
+                       let fwMacho = try? MachOParser(url: tmpBin, sourceName: binName, isCancelled: isCancelled) {
+                        fwMacho.runDeepNativeScan(isCancelled: isCancelled, releaseFixupsBeforeXRefs: true)
+                        if !isCancelled() {
+                            allNativeSnapshots.append(fwMacho.makeSnapshot())
+                        }
                     }
                 }
+                if isCancelled() { throw DumpCoordinatorError.cancelled }
             }
         }
 
@@ -677,7 +688,8 @@ public final class DumpCoordinator {
                     to: dllDir,
                     images: fullMeta.images,
                     types: fullMeta.types,
-                    options: options
+                    options: options,
+                    isCancelled: isCancelled
                 ) { msg in
                     onProgress(DumpProgressUpdate(phase: .generating, progress: 0.90, message: msg))
                 }
@@ -790,7 +802,7 @@ public final class DumpCoordinator {
         try writer.writeLine("Input Size: \(formatSize(info.fileSizeBytes))")
         try writer.writeLine("Primary Mach-O: \(info.primaryMachOPath) [\(macho.architecture)] (Total Binaries Scanned: \(snapshots.count))")
         try writer.writeLine("FairPlay DRM: \(diagnostics.fairPlayEncrypted ? "ENCRYPTED (cryptid=\(diagnostics.cryptId))" : "Decrypted")")
-        try writer.writeLine("Chained Fixups: \(macho.hasChainedFixups ? "Yes (\(macho.chainedFixupPointers.count) pointers)" : "No")")
+        try writer.writeLine("Chained Fixups: \(macho.hasChainedFixups ? "Yes (\(macho.chainedFixupsCount) pointers)" : "No")")
         try writer.writeLine("Metadata Status: \(diagnostics.metadataStatus.summaryText)")
         try writer.writeLine("Assemblies: \(meta.images.count) | Types: \(meta.types.count) | Dummy DLLs: \(dummyDllCount)")
         try writer.writeLine("IL2CPP Methods with RVA: \(methodsWithRVA)/\(totalMethods) (GenericInst RVAs: \(genericInstTotal)) | Field Offsets Resolved: \(resolvedFields)/\(totalFields)")

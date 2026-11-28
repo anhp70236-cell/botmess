@@ -113,7 +113,7 @@ public enum DumpCSGenerator {
                         var offComment = ""
                         if options.writeFieldOffsets {
                             if f.offset >= 0 {
-                                offComment = String(format: " // 0x%X", f.offset)
+                                offComment = " // 0x" + String(f.offset, radix: 16, uppercase: true)
                             } else if f.isStatic {
                                 offComment = " // 0x0 (static)"
                             } else {
@@ -138,8 +138,8 @@ public enum DumpCSGenerator {
                         }
                         if options.writeMethodOffsets && (p.getRVA > 0 || p.setRVA > 0) {
                             var rvaNotes: [String] = []
-                            if p.getRVA > 0 { rvaNotes.append(String(format: "get RVA: 0x%llX", p.getRVA)) }
-                            if p.setRVA > 0 { rvaNotes.append(String(format: "set RVA: 0x%llX", p.setRVA)) }
+                            if p.getRVA > 0 { rvaNotes.append("get RVA: 0x" + String(p.getRVA, radix: 16, uppercase: true)) }
+                            if p.setRVA > 0 { rvaNotes.append("set RVA: 0x" + String(p.setRVA, radix: 16, uppercase: true)) }
                             try writer.writeLine("\t// \(rvaNotes.joined(separator: " | "))")
                         }
                         var accessors: [String] = []
