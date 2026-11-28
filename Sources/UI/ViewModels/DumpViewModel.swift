@@ -68,6 +68,10 @@ final class DumpViewModel: ObservableObject {
         documentsRootURL.appendingPathComponent("IPADumperOutputs", isDirectory: true)
     }
 
+    nonisolated static var importsRootURL: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("IPADumperImports", isDirectory: true)
+    }
+
     init() {
         if let data = UserDefaults.standard.data(forKey: optionsKey),
            let decoded = try? JSONDecoder().decode(DumpOptions.self, from: data) {
@@ -82,6 +86,7 @@ final class DumpViewModel: ObservableObject {
             self.selectedTheme = .obsidianDark
         }
         self.useInPlacePicker = UserDefaults.standard.bool(forKey: "dip_inplace_picker_v2")
+        try? FileManager.default.removeItem(at: Self.importsRootURL)
         loadSavedSessions()
         refreshLocalDocumentsIPAs()
     }
@@ -91,7 +96,7 @@ final class DumpViewModel: ObservableObject {
             url.stopAccessingSecurityScopedResource()
         }
         for url in copiedTempURLs {
-            try? FileManager.default.removeItem(at: url)
+            Self.removeImportedTempEntry(url)
         }
     }
 
@@ -107,20 +112,48 @@ final class DumpViewModel: ObservableObject {
         }
     }
 
+    nonisolated private static func removeImportedTempEntry(_ url: URL) {
+        let fm = FileManager.default
+        let stdPath = url.standardizedFileURL.path
+        let tmpPath = fm.temporaryDirectory.standardizedFileURL.path
+        let importsPath = importsRootURL.standardizedFileURL.path
+        guard stdPath.hasPrefix(tmpPath) else { return }
+
+        let parent = url.deletingLastPathComponent().standardizedFileURL
+        if parent.path.hasPrefix(importsPath + "/"), parent.path != importsPath {
+            try? fm.removeItem(at: parent)
+        } else {
+            try? fm.removeItem(at: url)
+        }
+    }
+
     private func cleanupOldCopiedTemps(keeping keepURL: URL?) {
+        let protected: Set<String> = Set(
+            [keepURL, selectedIPAURL, overrideMetadataURL, selectedMachOURL, selectedMetadataURL]
+                .compactMap { $0?.standardizedFileURL.path }
+        )
         let tmpPath = FileManager.default.temporaryDirectory.standardizedFileURL.path
         var kept: [URL] = []
         for url in copiedTempURLs {
-            if url == keepURL {
+            let path = url.standardizedFileURL.path
+            if protected.contains(path) {
                 kept.append(url)
-            } else if url.standardizedFileURL.path.hasPrefix(tmpPath) {
-                try? FileManager.default.removeItem(at: url)
+            } else if path.hasPrefix(tmpPath) {
+                Self.removeImportedTempEntry(url)
             }
         }
         copiedTempURLs = kept
     }
 
     nonisolated static func withCoordinatedRead<T>(url: URL, _ body: (URL) throws -> T) throws -> T {
+        let fm = FileManager.default
+        let stdPath = url.standardizedFileURL.path
+        let tmpPath = fm.temporaryDirectory.standardizedFileURL.path
+        let docsPath = fm.urls(for: .documentDirectory, in: .userDomainMask).first?.standardizedFileURL.path
+        if stdPath.hasPrefix(tmpPath) || (docsPath.map { stdPath.hasPrefix($0) } ?? false) {
+            return try body(url)
+        }
+
         let accessed = url.startAccessingSecurityScopedResource()
         defer {
             if accessed { url.stopAccessingSecurityScopedResource() }
@@ -138,7 +171,7 @@ final class DumpViewModel: ObservableObject {
         if let res = innerResult {
             return try res.get()
         }
-        if FileManager.default.isReadableFile(atPath: url.path) {
+        if fm.isReadableFile(atPath: url.path) {
             return try body(url)
         }
         if let err = coordError {
@@ -188,8 +221,17 @@ final class DumpViewModel: ObservableObject {
         }
     }
 
-    func handleIncomingFileURL(_ url: URL) {
+    private func trackTempURL(_ url: URL) {
+        let tmpPath = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        if url.standardizedFileURL.path.hasPrefix(tmpPath), !copiedTempURLs.contains(url) {
+            copiedTempURLs.append(url)
+        }
+    }
+
+    func handleIncomingFileURL(_ rawURL: URL) {
+        let url = NativeDocumentPicker.preservePickedFileIfNeeded(rawURL)
         acquireSecurityAccess(for: url)
+        trackTempURL(url)
         activeTab = 0
         let ext = url.pathExtension.lowercased()
         if ext == "ipa" || ext == "tipa" || ext == "zip" {
@@ -209,12 +251,10 @@ final class DumpViewModel: ObservableObject {
         }
     }
 
-    func setIPAFile(_ url: URL) {
+    func setIPAFile(_ rawURL: URL) {
+        let url = NativeDocumentPicker.preservePickedFileIfNeeded(rawURL)
         acquireSecurityAccess(for: url)
-        let tmpPath = FileManager.default.temporaryDirectory.standardizedFileURL.path
-        if url.standardizedFileURL.path.hasPrefix(tmpPath) {
-            copiedTempURLs.append(url)
-        }
+        trackTempURL(url)
         cleanupOldCopiedTemps(keeping: url)
 
         selectedIPAURL = url
@@ -248,8 +288,10 @@ final class DumpViewModel: ObservableObject {
         }
     }
 
-    func setOverrideMetadataFile(_ url: URL) {
+    func setOverrideMetadataFile(_ rawURL: URL) {
+        let url = NativeDocumentPicker.preservePickedFileIfNeeded(rawURL)
         acquireSecurityAccess(for: url)
+        trackTempURL(url)
         overrideMetadataURL = url
         errorMessage = nil
         appendLog("[IPA] Đã gắn global-metadata.dat rời: \(url.lastPathComponent)")
