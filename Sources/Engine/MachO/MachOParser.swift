@@ -981,7 +981,7 @@ public final class MachOParser {
         }
         var result: [Int32: String] = [:]
         var regs: [Int: Int64] = [:]
-        var fregs: [Int: Double] = [:]
+        let fregs: [Int: Double] = [:]
         var thisRegs: Set<Int> = [0]
         let steps = min(36, (sliceSize - startOff) / 4)
 

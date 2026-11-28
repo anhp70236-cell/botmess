@@ -1,6 +1,14 @@
 import Foundation
 import SwiftUI
 
+private final class CancellationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    func reset() { lock.lock(); cancelled = false; lock.unlock() }
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+}
+
 @MainActor
 final class DumpViewModel: ObservableObject {
     enum InputMode: String, CaseIterable, Identifiable {
@@ -40,8 +48,7 @@ final class DumpViewModel: ObservableObject {
     @Published var selectedAssemblyFilter: String = "Tất cả"
 
     private var activeSecurityURLs: [URL] = []
-    private var cancelFlag = false
-    private let cancelLock = NSLock()
+    private let cancellation = CancellationFlag()
     private let optionsKey = "dip_options_v2"
 
     var outputsRootURL: URL {
@@ -154,9 +161,8 @@ final class DumpViewModel: ObservableObject {
         currentPhase = .inspecting
         isRunning = true
 
-        cancelLock.lock()
-        cancelFlag = false
-        cancelLock.unlock()
+        cancellation.reset()
+        let cancelToken = cancellation
 
         let mode = inputMode
         let ipaURL = selectedIPAURL
@@ -167,12 +173,8 @@ final class DumpViewModel: ObservableObject {
 
         Task.detached(priority: .userInitiated) {
             let coordinator = DumpCoordinator()
-            let checkCancelled: () -> Bool = { [weak self] in
-                guard let self = self else { return true }
-                self.cancelLock.lock()
-                let c = self.cancelFlag
-                self.cancelLock.unlock()
-                return c
+            let checkCancelled: () -> Bool = {
+                cancelToken.isCancelled
             }
             let emitProgress: (DumpProgressUpdate) -> Void = { [weak self] upd in
                 Task { @MainActor in
@@ -233,9 +235,7 @@ final class DumpViewModel: ObservableObject {
     }
 
     func cancelAnalysis() {
-        cancelLock.lock()
-        cancelFlag = true
-        cancelLock.unlock()
+        cancellation.cancel()
         appendLog("[Hệ thống] Đang yêu cầu huỷ...")
     }
 

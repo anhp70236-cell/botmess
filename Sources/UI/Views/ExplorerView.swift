@@ -179,6 +179,7 @@ struct ExplorerView: View {
         case .method: return theme.accent
         case .field: return theme.warning
         case .property: return Color.purple
+        case .event: return Color.pink
         case .type: return theme.success
         case .native: return Color.orange
         }
