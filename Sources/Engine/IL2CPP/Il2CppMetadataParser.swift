@@ -105,11 +105,21 @@ public enum Il2CppMetadataParser {
         let typeDefsOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 160))
         let typeDefsSize = Int(mapped.readUInt32(at: baseOffset + 164))
 
-        // Attributes: v24-v27 (@200/@208) vs v29+ (@256/@264)
-        let attrInfoOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 200))
-        let attrInfoSize = Int(mapped.readUInt32(at: baseOffset + 204))
-        let attrTypesOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 208))
-        let attrTypesSize = Int(mapped.readUInt32(at: baseOffset + 212))
+        // Attributes: v24-v27 (probe [200, 192, 208]) vs v29+ (@256/@264)
+        var attrInfoOff = 0
+        var attrInfoSize = 0
+        var attrTypesOff = 0
+        var attrTypesSize = 0
+        for cand in [200, 192, 208] {
+            let io = baseOffset + Int(mapped.readUInt32(at: baseOffset + cand))
+            let isz = Int(mapped.readUInt32(at: baseOffset + cand + 4))
+            let to = baseOffset + Int(mapped.readUInt32(at: baseOffset + cand + 8))
+            let tsz = Int(mapped.readUInt32(at: baseOffset + cand + 12))
+            if isz > 0 && tsz > 0 && isz % 8 == 0 && tsz % 4 == 0 && mapped.inRange(io, isz) && mapped.inRange(to, tsz) {
+                attrInfoOff = io; attrInfoSize = isz; attrTypesOff = to; attrTypesSize = tsz
+                break
+            }
+        }
         let attrDataOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 256))
         let attrDataSize = Int(mapped.readUInt32(at: baseOffset + 260))
         let attrDataRangeOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 264))

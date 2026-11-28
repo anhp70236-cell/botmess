@@ -2,13 +2,7 @@ import SwiftUI
 import UIKit
 
 struct AnalyzerView: View {
-    enum PickerKind: Int, Identifiable {
-        case ipa, overrideMetadata, macho, metadata
-        var id: Int { rawValue }
-    }
-
     @EnvironmentObject var vm: DumpViewModel
-    @State private var activePicker: PickerKind?
     @State private var showOptionsSheet = false
     @State private var showOptionsDetails = false
     @State private var showLogs = false
@@ -76,26 +70,6 @@ struct AnalyzerView: View {
                 OptionsSheetView()
                     .environmentObject(vm)
             }
-            .sheet(item: $activePicker) { kind in
-                DocumentPickerSheet(
-                    onPick: { url in
-                        activePicker = nil
-                        switch kind {
-                        case .ipa:
-                            vm.setIPAFile(url)
-                        case .overrideMetadata:
-                            vm.setOverrideMetadataFile(url)
-                        case .macho:
-                            vm.setMachOFile(url)
-                        case .metadata:
-                            vm.setMetadataFile(url)
-                        }
-                    },
-                    onCancel: {
-                        activePicker = nil
-                    }
-                )
-            }
             .sheet(item: Binding(
                 get: { quickShareZipURL.map { AnalyzerShareURL(url: $0) } },
                 set: { quickShareZipURL = $0?.url }
@@ -148,35 +122,59 @@ struct AnalyzerView: View {
             .pickerStyle(.segmented)
 
             if vm.inputMode == .ipa {
-                Button {
-                    activePicker = .ipa
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "doc.zipper")
-                            .font(.title2)
-                            .foregroundColor(theme.accent)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(vm.selectedIPAURL?.lastPathComponent ?? "Chọn tệp .IPA / .TIPA (tối đa 10 GB)")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(theme.primaryText)
-                                .lineLimit(1)
-                            Text("Mở trực tiếp từ Tệp / iCloud / Share Sheet")
-                                .font(.caption)
+                HStack(spacing: 8) {
+                    Button {
+                        NativeDocumentPicker.shared.presentFilePicker(asCopy: !vm.useInPlacePicker) { url in
+                            vm.setIPAFile(url)
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "doc.zipper")
+                                .font(.title2)
+                                .foregroundColor(theme.accent)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(vm.selectedIPAURL?.lastPathComponent ?? "Chọn tệp .IPA / .TIPA (≤ 10 GB)")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(theme.primaryText)
+                                    .lineLimit(1)
+                                Text("Mở từ Tệp / Tải về / iCloud")
+                                    .font(.caption)
+                                    .foregroundColor(theme.secondaryText)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
                                 .foregroundColor(theme.secondaryText)
                         }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(theme.secondaryText)
+                        .padding(12)
+                        .background(theme.elevatedBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
-                    .padding(12)
-                    .background(theme.elevatedBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    Button {
+                        NativeDocumentPicker.shared.presentFolderPicker { folderURL in
+                            vm.loadIPAsFromFolder(folderURL)
+                        }
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.title3)
+                            Text("Thư mục")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundColor(theme.accent)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(theme.elevatedBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
                 }
 
                 // Optional external plaintext global-metadata.dat override
                 HStack(spacing: 8) {
                     Button {
-                        activePicker = .overrideMetadata
+                        NativeDocumentPicker.shared.presentFilePicker(asCopy: true) { url in
+                            vm.setOverrideMetadataFile(url)
+                        }
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "doc.badge.plus")
@@ -204,7 +202,7 @@ struct AnalyzerView: View {
                 if !vm.localDocumentsIPAs.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text("IPA trong thư mục Tệp của app")
+                            Text("Danh sách IPA đã quét (\(vm.localDocumentsIPAs.count))")
                                 .font(.caption.weight(.semibold))
                                 .foregroundColor(theme.secondaryText)
                             Spacer()
@@ -240,7 +238,9 @@ struct AnalyzerView: View {
             } else {
                 VStack(spacing: 8) {
                     Button {
-                        activePicker = .macho
+                        NativeDocumentPicker.shared.presentFilePicker(asCopy: !vm.useInPlacePicker) { url in
+                            vm.setMachOFile(url)
+                        }
                     } label: {
                         fileRowLabel(
                             icon: "terminal.fill",
@@ -250,7 +250,9 @@ struct AnalyzerView: View {
                         )
                     }
                     Button {
-                        activePicker = .metadata
+                        NativeDocumentPicker.shared.presentFilePicker(asCopy: true) { url in
+                            vm.setMetadataFile(url)
+                        }
                     } label: {
                         fileRowLabel(
                             icon: "doc.text.magnifyingglass",

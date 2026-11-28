@@ -139,9 +139,8 @@ public enum StructAndJSONGenerator {
         try writer.writeLine("  ],")
 
         try writer.writeLine("  \"ScriptMetadata\": [")
-        let metaTypes = Array(types.prefix(50_000))
-        for (idx, t) in metaTypes.enumerated() {
-            let comma = (idx + 1 < metaTypes.count) ? "," : ""
+        for (idx, t) in types.enumerated() {
+            let comma = (idx + 1 < types.count) ? "," : ""
             let cIdent = Il2CppTypeResolver.sanitizeCIdentifier(t.fullName)
             try writer.writeLine("    {")
             try writer.writeLine("      \"Address\": 0,")
@@ -231,10 +230,63 @@ public enum StructAndJSONGenerator {
             }
             if !macho.exportedSymbols.isEmpty {
                 try writer.writeLine("# Mach-O Exports (\(macho.exportedSymbols.count))")
-                for sym in macho.exportedSymbols.prefix(5000) {
+                for sym in macho.exportedSymbols {
                     try writer.writeLine(String(format: "  EXPORT RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
                 }
             }
+        }
+
+        try writer.close()
+    }
+
+    public static func generateNativeFunctionsReport(
+        to url: URL,
+        snapshots: [NativeBinarySnapshot]
+    ) throws {
+        let writer = try BufferedFileWriter(url: url)
+        defer { try? writer.close() }
+
+        try writer.writeLine("# IPA Dumper Pro v2.0 — Uncapped Multi-Binary Native Offsets")
+        try writer.writeLine("# Binaries scanned: \(snapshots.count)")
+        try writer.writeLine("# Real-money / IAP / StoreKit symbols strictly filtered.")
+        try writer.writeLine("")
+
+        for bin in snapshots {
+            try writer.writeLine("============================================================")
+            try writer.writeLine("Binary: \(bin.sourceName) [\(bin.architecture)] BaseVM=0x\(String(bin.baseVM, radix: 16, uppercase: true)) FairPlay=\(bin.fairPlayEncrypted ? "Encrypted(cryptid=\(bin.cryptId))" : "Decrypted")")
+            try writer.writeLine("Exports=\(bin.exportedSymbols.count) | Symtab=\(bin.symtabSymbols.count) | ObjC=\(bin.objcClasses.count) | Swift=\(bin.swiftTypes.count) | FuncStarts=\(bin.functionStartsRVA.count) | XRefs=\(bin.xrefFunctions.count)")
+            try writer.writeLine("============================================================")
+
+            for sym in bin.exportedSymbols {
+                try writer.writeLine(String(format: "EXPORT  RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
+            }
+            for sym in bin.symtabSymbols {
+                try writer.writeLine(String(format: "SYMTAB  RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
+            }
+            for cls in bin.objcClasses {
+                for iv in cls.ivars {
+                    try writer.writeLine(String(format: "IVAR    OFF=0x%X | %@.%@ (%@)", iv.offset, cls.name, iv.name, iv.typeEncoding))
+                }
+                for m in cls.methods {
+                    try writer.writeLine(String(format: "OBJC    RVA=0x%llX VA=0x%llX OFF=0x%llX | %@[%@ %@]", m.rva, m.va, m.fileOffset, m.isClassMethod ? "+" : "-", cls.name, m.name))
+                }
+            }
+            for st in bin.swiftTypes {
+                try writer.writeLine(String(format: "SWIFT   RVA=0x%llX | %@ %@", st.descriptorRVA, st.kind, st.name))
+            }
+            for xr in bin.xrefFunctions {
+                try writer.writeLine(String(format: "XREF    RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", xr.rva, xr.va, xr.fileOffset, xr.name))
+            }
+
+            var covered = Set<UInt64>()
+            for s in bin.exportedSymbols { covered.insert(s.rva) }
+            for s in bin.symtabSymbols { covered.insert(s.rva) }
+            for c in bin.objcClasses { for m in c.methods { covered.insert(m.rva) } }
+            for rva in bin.functionStartsRVA where rva > 0 && !covered.contains(rva) {
+                let va = bin.baseVM + rva
+                try writer.writeLine(String(format: "FUNC    RVA=0x%llX VA=0x%llX | sub_%llX", rva, va, rva))
+            }
+            try writer.writeLine("")
         }
 
         try writer.close()

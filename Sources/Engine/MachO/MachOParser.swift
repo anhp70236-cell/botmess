@@ -527,10 +527,9 @@ public final class MachOParser {
 
     private func decodeSymtab(symoff: Int, nsyms: Int, stroff: Int, strsize: Int) {
         guard symoff >= 0 && stroff >= 0 && symoff + nsyms * 16 <= sliceSize && stroff + strsize <= sliceSize else { return }
-        let limit = min(nsyms, 120_000)
         var out: [NativeSymbolEntry] = []
-        out.reserveCapacity(min(limit, 8192))
-        for i in 0..<limit {
+        out.reserveCapacity(min(nsyms, 32_768))
+        for i in 0..<nsyms {
             let nlistAbs = sliceOffset + symoff + i * 16
             let strx = Int(mapped.readUInt32(at: nlistAbs))
             let nType = mapped.readUInt8(at: nlistAbs + 4)
@@ -559,6 +558,23 @@ public final class MachOParser {
             parseSwiftTypes()
             scanArm64StringXRefs()
         }
+    }
+
+    public func makeSnapshot() -> NativeBinarySnapshot {
+        NativeBinarySnapshot(
+            sourceName: sourceName,
+            architecture: architecture,
+            baseVM: baseVM,
+            fairPlayEncrypted: fairPlayEncrypted,
+            cryptId: cryptId,
+            objcClasses: objcClasses,
+            swiftTypes: swiftTypes,
+            exportedSymbols: exportedSymbols,
+            symtabSymbols: symtabSymbols,
+            functionStartsRVA: functionStartsRVA,
+            xrefFunctions: xrefFunctions,
+            filteredRealMoneyCount: filteredRealMoneyCount
+        )
     }
 
     private func buildStringMaps() {
@@ -780,6 +796,109 @@ public final class MachOParser {
                 ))
             }
         }
+
+        // Obj-C Categories (__objc_catlist)
+        let catSecs = sections.filter {
+            $0.sectName == "__objc_catlist" && $0.size >= 8
+                && Int($0.offset + $0.size) <= sliceSize
+                && !isInEncryptedRange(sliceRelOffset: Int($0.offset))
+        }
+        for sec in catSecs {
+            let cnt = Int(sec.size / 8)
+            let base = Int(sec.offset)
+            for i in 0..<cnt {
+                let catVM = decodePointer(atSliceRelOffset: base + i * 8)
+                guard catVM != 0, let catOff = vmToSliceRelOffset(catVM), catOff + 48 <= sliceSize, !isInEncryptedRange(sliceRelOffset: catOff) else { continue }
+                let catNameVM = decodePointer(atSliceRelOffset: catOff)
+                let hostClsVM = decodePointer(atSliceRelOffset: catOff + 8)
+                let catName = vmToSliceRelOffset(catNameVM).map { readSliceCString($0, maxLength: 120) } ?? "Category"
+                var hostName = "NSObject"
+                if let hOff = vmToSliceRelOffset(hostClsVM), hOff + 40 <= sliceSize {
+                    let hRoVM = decodePointer(atSliceRelOffset: hOff + 32) & ~0x7
+                    if let hRoOff = vmToSliceRelOffset(hRoVM), hRoOff + 32 <= sliceSize {
+                        let hnVM = decodePointer(atSliceRelOffset: hRoOff + 24)
+                        if let hnOff = vmToSliceRelOffset(hnVM) {
+                            let s = readSliceCString(hnOff, maxLength: 120)
+                            if !s.isEmpty { hostName = s }
+                        }
+                    }
+                }
+                let fullCatName = "\(hostName)+\(catName)"
+                if SafetyGuard.isRealMoneyBlocked(fullCatName) {
+                    filteredRealMoneyCount += 1
+                    continue
+                }
+                var catMethods: [ObjCMethodInfo] = []
+                func readCatMethods(atPtrOff ptrOff: Int, isClassMethod: Bool) {
+                    let mlVM = decodePointer(atSliceRelOffset: ptrOff)
+                    guard mlVM != 0, let mlOff = vmToSliceRelOffset(mlVM), mlOff + 8 <= sliceSize, !isInEncryptedRange(sliceRelOffset: mlOff) else { return }
+                    let flagsAndSize = readSliceUInt32(mlOff)
+                    let mCnt = Int(readSliceUInt32(mlOff + 4))
+                    let isSmall = (flagsAndSize & 0x8000_0000) != 0
+                    let entsize = max(isSmall ? 12 : 24, Int(flagsAndSize & 0xFFFF))
+                    guard mCnt > 0 && mCnt < 4096 && mlOff + 8 + mCnt * entsize <= sliceSize else { return }
+                    for mi in 0..<mCnt {
+                        let mOff = mlOff + 8 + mi * entsize
+                        var selName = ""
+                        var impVM: UInt64 = 0
+                        if isSmall {
+                            let relSel = Int64(readSliceInt32(mOff))
+                            let relImp = Int64(readSliceInt32(mOff + 8))
+                            if let curVM = sliceRelOffsetToVM(mOff) {
+                                let selRefVM = UInt64(bitPattern: Int64(bitPattern: curVM) &+ relSel)
+                                selName = selRefByVM[selRefVM] ?? vmToSliceRelOffset(selRefVM).map { readSliceCString($0, maxLength: 140) } ?? ""
+                            }
+                            if let curImpVM = sliceRelOffsetToVM(mOff + 8) {
+                                impVM = UInt64(bitPattern: Int64(bitPattern: curImpVM) &+ relImp)
+                            }
+                        } else {
+                            let selVM = decodePointer(atSliceRelOffset: mOff)
+                            impVM = decodePointer(atSliceRelOffset: mOff + 16)
+                            selName = vmToSliceRelOffset(selVM).map { readSliceCString($0, maxLength: 140) } ?? ""
+                        }
+                        if selName.isEmpty { continue }
+                        if SafetyGuard.isRealMoneyBlocked("\(fullCatName).\(selName)") {
+                            filteredRealMoneyCount += 1
+                            continue
+                        }
+                        let rva = impVM >= baseVM ? (impVM - baseVM) : 0
+                        let fOff = UInt64(vmToSliceRelOffset(impVM) ?? 0)
+                        catMethods.append(ObjCMethodInfo(name: selName, types: "", rva: rva, va: impVM, fileOffset: fOff, isClassMethod: isClassMethod))
+                    }
+                }
+                readCatMethods(atPtrOff: catOff + 16, isClassMethod: false)
+                readCatMethods(atPtrOff: catOff + 24, isClassMethod: true)
+                if !catMethods.isEmpty {
+                    results.append(ObjCClassInfo(name: fullCatName, superName: hostName, methods: catMethods, ivars: [], properties: []))
+                }
+            }
+        }
+
+        // Obj-C Protocols (__objc_protolist)
+        let protoSecs = sections.filter {
+            $0.sectName == "__objc_protolist" && $0.size >= 8
+                && Int($0.offset + $0.size) <= sliceSize
+                && !isInEncryptedRange(sliceRelOffset: Int($0.offset))
+        }
+        var seenProto = Set<String>()
+        for sec in protoSecs {
+            let cnt = Int(sec.size / 8)
+            let base = Int(sec.offset)
+            for i in 0..<cnt {
+                let pVM = decodePointer(atSliceRelOffset: base + i * 8)
+                guard pVM != 0, let pOff = vmToSliceRelOffset(pVM), pOff + 24 <= sliceSize, !isInEncryptedRange(sliceRelOffset: pOff) else { continue }
+                let nmVM = decodePointer(atSliceRelOffset: pOff + 8)
+                let pName = vmToSliceRelOffset(nmVM).map { readSliceCString($0, maxLength: 140) } ?? ""
+                if pName.isEmpty || seenProto.contains(pName) { continue }
+                seenProto.insert(pName)
+                if SafetyGuard.isRealMoneyBlocked(pName) {
+                    filteredRealMoneyCount += 1
+                    continue
+                }
+                results.append(ObjCClassInfo(name: "Protocol::\(pName)", superName: "Protocol", methods: [], ivars: [], properties: []))
+            }
+        }
+
         self.objcClasses = results
     }
 
@@ -828,14 +947,14 @@ public final class MachOParser {
         guard let textSec = sections.first(where: { $0.segName == "__TEXT" && $0.sectName == "__text" && $0.size >= 16 && Int($0.offset + $0.size) <= sliceSize && !isInEncryptedRange(sliceRelOffset: Int($0.offset)) }) else {
             return
         }
-        let maxBytes = min(Int(textSec.size), 24 * 1024 * 1024)
+        let maxBytes = min(Int(textSec.size), 256 * 1024 * 1024)
         let start = Int(textSec.offset)
         let end = start + maxBytes
         var out: [NativeSymbolEntry] = []
-        out.reserveCapacity(2048)
+        out.reserveCapacity(4096)
 
         var p = start
-        while p + 8 <= end && out.count < 15_000 {
+        while p + 8 <= end && out.count < 150_000 {
             let w1 = readSliceUInt32(p)
             // ADRP Xd, imm
             if (w1 & 0x9F00_0000) == 0x9000_0000 {

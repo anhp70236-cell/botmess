@@ -153,6 +153,21 @@ public struct NativeSymbolEntry: Codable, Equatable, Sendable {
     public var source: String
 }
 
+public struct NativeBinarySnapshot: Sendable {
+    public var sourceName: String
+    public var architecture: String
+    public var baseVM: UInt64
+    public var fairPlayEncrypted: Bool
+    public var cryptId: UInt32
+    public var objcClasses: [ObjCClassInfo]
+    public var swiftTypes: [SwiftTypeInfo]
+    public var exportedSymbols: [NativeSymbolEntry]
+    public var symtabSymbols: [NativeSymbolEntry]
+    public var functionStartsRVA: [UInt64]
+    public var xrefFunctions: [NativeSymbolEntry]
+    public var filteredRealMoneyCount: Int
+}
+
 public struct Il2CppImageInfo: Codable, Equatable, Sendable {
     public var index: Int
     public var name: String

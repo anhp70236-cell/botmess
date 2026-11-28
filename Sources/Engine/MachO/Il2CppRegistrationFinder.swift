@@ -174,11 +174,11 @@ public enum Il2CppRegistrationFinder {
                 fieldOffsetsByType = parsedFields
             }
 
-            // Parse Il2CppType table located at p - 32 (typesCount @ p-32, types** @ p-24)
-            if il2cppTypes.isEmpty && p >= 32 {
-                let tCnt = Int(macho.readSliceUInt32(p - 32))
-                let tHi = macho.readSliceUInt32(p - 28)
-                let tArrVM = macho.decodePointer(atSliceRelOffset: p - 24)
+            // Parse Il2CppType table located at p - 32 or p - 40 (typesCount, types**)
+            for typeHdrDelta in [32, 40] where il2cppTypes.isEmpty && p >= typeHdrDelta {
+                let tCnt = Int(macho.readSliceUInt32(p - typeHdrDelta))
+                let tHi = macho.readSliceUInt32(p - typeHdrDelta + 4)
+                let tArrVM = macho.decodePointer(atSliceRelOffset: p - typeHdrDelta + 8)
                 if tHi == 0 && tCnt >= 1 && tCnt <= 800_000,
                    let tArrOff = macho.vmToSliceRelOffset(tArrVM),
                    tArrOff + tCnt * 8 <= sliceSize,
@@ -369,12 +369,16 @@ public enum Il2CppRegistrationFinder {
                   !macho.isInEncryptedRange(sliceRelOffset: fOff) else { continue }
             var adrpPages: [Int: UInt64] = [:]
             var regs: [Int: UInt64] = [:]
-            for st in 0..<24 {
+            for st in 0..<48 {
                 let ioff = fOff + st * 4
                 guard ioff + 4 <= sliceSize else { break }
                 let w = macho.readSliceUInt32(ioff)
                 if w == 0xD65F_03C0 { break }
-                if (w & 0x9F00_0000) == 0x9000_0000 { // ADRP
+                if (w & 0xFFE0_FFE0) == 0xAA00_03E0 { // MOV Xd, Xm (ORR Xd, XZR, Xm)
+                    let rd = Int(w & 0x1F)
+                    let rm = Int((w >> 16) & 0x1F)
+                    if let val = regs[rm] { regs[rd] = val }
+                } else if (w & 0x9F00_0000) == 0x9000_0000 { // ADRP
                     let rd = Int(w & 0x1F)
                     var imm21 = (Int64((w >> 5) & 0x7FFFF) << 2) | Int64((w >> 29) & 0x3)
                     if (imm21 & 0x10_0000) != 0 { imm21 |= ~0x1F_FFFF }

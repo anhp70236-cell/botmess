@@ -169,6 +169,16 @@ public final class DumpCoordinator {
             }
         }
 
+        let extraBinaryEntries: [ZipEntry] = options.deepMachOScan ? Array(reader.entries.filter { entry in
+            guard !entry.isDirectory else { return false }
+            let np = Self.normalizedZipPath(entry.path)
+            if np == Self.normalizedZipPath(info.primaryMachOPath) { return false }
+            if let sp = info.secondaryMachOPath, np == Self.normalizedZipPath(sp) { return false }
+            let isFwBin = np.range(of: #"(?:^|/)Payload/[^/]+\.app/Frameworks/([^/]+)\.framework/\1$"#, options: [.regularExpression, .caseInsensitive]) != nil
+            let isDylib = np.range(of: #"(?:^|/)Payload/[^/]+\.app/Frameworks/[^/]+\.dylib$"#, options: [.regularExpression, .caseInsensitive]) != nil
+            return (isFwBin || isDylib) && !SafetyGuard.isRealMoneyBlocked(np)
+        }.prefix(16)) : []
+
         var localMetadata: URL? = nil
         if let overrideMetadataURL = overrideMetadataURL {
             localMetadata = overrideMetadataURL
@@ -185,6 +195,9 @@ public final class DumpCoordinator {
             info: info,
             machOURL: localMachO,
             secondaryMachOURL: localSecondaryMachO,
+            extraMachOReader: reader,
+            extraMachOEntries: extraBinaryEntries,
+            tempDir: tempDir,
             metadataURL: localMetadata,
             outputsRootURL: outputsRootURL,
             options: options,
@@ -235,6 +248,9 @@ public final class DumpCoordinator {
             info: info,
             machOURL: machOURL,
             secondaryMachOURL: nil,
+            extraMachOReader: nil,
+            extraMachOEntries: [],
+            tempDir: nil,
             metadataURL: metadataURL,
             outputsRootURL: outputsRootURL,
             options: options,
@@ -248,6 +264,9 @@ public final class DumpCoordinator {
         info: IPAInspectionInfo,
         machOURL: URL,
         secondaryMachOURL: URL?,
+        extraMachOReader: StreamingZipReader?,
+        extraMachOEntries: [ZipEntry],
+        tempDir: URL?,
         metadataURL: URL?,
         outputsRootURL: URL,
         options: DumpOptions,
@@ -349,7 +368,6 @@ public final class DumpCoordinator {
                 onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.60, message: msg))
             }
 
-            // Multi-binary fallback: if primary Mach-O had no IL2CPP registration, probe secondary Mach-O
             if reg.codeGenModules.isEmpty && reg.legacyMethodRVAs.isEmpty,
                let secURL = secondaryMachOURL,
                let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent) {
@@ -381,7 +399,29 @@ public final class DumpCoordinator {
                 onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.72, message: msg))
             }
         } else if metadataURL != nil {
-            onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.62, message: "Chuyển sang chế độ Mach-O Fallback (Obj-C: \(macho.objcClasses.count), Swift: \(macho.swiftTypes.count), Exports: \(macho.exportedSymbols.count))..."))
+            onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.62, message: "Chuyển sang chế độ Mach-O Multi-Binary (Obj-C: \(macho.objcClasses.count), Swift: \(macho.swiftTypes.count), Exports: \(macho.exportedSymbols.count))..."))
+        }
+
+        // Collect all Mach-O snapshots across primary, secondary, and embedded frameworks (one-by-one temp disk cleanup)
+        var allNativeSnapshots: [NativeBinarySnapshot] = [macho.makeSnapshot()]
+        if let secURL = secondaryMachOURL,
+           let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent) {
+            if options.deepMachOScan { secMacho.runDeepNativeScan() }
+            if !allNativeSnapshots.contains(where: { $0.sourceName == secMacho.sourceName }) {
+                allNativeSnapshots.append(secMacho.makeSnapshot())
+            }
+        }
+        if options.deepMachOScan, let reader = extraMachOReader, let tDir = tempDir, !extraMachOEntries.isEmpty {
+            for (idx, entry) in extraMachOEntries.enumerated() {
+                if isCancelled() { throw DumpCoordinatorError.cancelled }
+                let tmpBin = tDir.appendingPathComponent("extra_bin_\(idx)")
+                defer { try? FileManager.default.removeItem(at: tmpBin) }
+                if (try? reader.extractEntry(entry, to: tmpBin, progress: nil)) != nil,
+                   let fwMacho = try? MachOParser(url: tmpBin, sourceName: URL(fileURLWithPath: entry.path).lastPathComponent) {
+                    fwMacho.runDeepNativeScan()
+                    allNativeSnapshots.append(fwMacho.makeSnapshot())
+                }
+            }
         }
 
         if isCancelled() { throw DumpCoordinatorError.cancelled }
@@ -456,6 +496,10 @@ public final class DumpCoordinator {
             macho: macho,
             diagnostics: diagnostics
         )
+        try StructAndJSONGenerator.generateNativeFunctionsReport(
+            to: outDir.appendingPathComponent("native_functions.txt"),
+            snapshots: allNativeSnapshots
+        )
 
         if options.generateDummyDLLs && !fullMeta.images.isEmpty {
             let dllDir = outDir.appendingPathComponent("DummyDll")
@@ -477,7 +521,7 @@ public final class DumpCoordinator {
         if let err = genError { throw err }
 
         let summaryURL = outDir.appendingPathComponent("report.txt")
-        try writeSummaryReport(to: summaryURL, info: info, diagnostics: diagnostics, macho: macho, meta: fullMeta, dummyDllCount: dummyDllCount)
+        try writeSummaryReport(to: summaryURL, info: info, diagnostics: diagnostics, macho: macho, meta: fullMeta, dummyDllCount: dummyDllCount, binariesScanned: allNativeSnapshots.count)
 
         if options.autoExportZip {
             onProgress(DumpProgressUpdate(phase: .packaging, progress: 0.93, message: "Đang nén gói kết quả ZIP..."))
@@ -485,7 +529,7 @@ public final class DumpCoordinator {
             try packageOutputDirectory(outDir, toZip: zipURL)
         }
 
-        let explorerRows = buildExplorerRows(meta: fullMeta, macho: macho)
+        let explorerRows = buildExplorerRows(meta: fullMeta, snapshots: allNativeSnapshots)
         let explorerURL = outDir.appendingPathComponent(".explorer_index.json")
         if let expData = try? JSONEncoder().encode(explorerRows) {
             try? expData.write(to: explorerURL, options: .atomic)
@@ -496,8 +540,11 @@ public final class DumpCoordinator {
         let totalFields = fullMeta.types.reduce(0) { $0 + $1.fields.count }
         let totalProps = fullMeta.types.reduce(0) { $0 + $1.properties.count }
         let totalEvents = fullMeta.types.reduce(0) { $0 + $1.events.count }
-        let totalFiltered = fullMeta.filteredRealMoneyCount + macho.filteredRealMoneyCount
-        let nativeCount = macho.objcClasses.reduce(0) { $0 + $1.methods.count } + macho.swiftTypes.count + macho.exportedSymbols.count
+        let extraFiltered = allNativeSnapshots.dropFirst().reduce(0) { $0 + $1.filteredRealMoneyCount }
+        let totalFiltered = fullMeta.filteredRealMoneyCount + macho.filteredRealMoneyCount + extraFiltered
+        let nativeCount = allNativeSnapshots.reduce(0) { acc, b in
+            acc + b.objcClasses.reduce(0) { $0 + $1.methods.count } + b.swiftTypes.count + b.exportedSymbols.count + b.symtabSymbols.count + b.functionStartsRVA.count
+        }
 
         let stats = DumpStats(
             assembliesCount: fullMeta.images.count,
@@ -555,7 +602,8 @@ public final class DumpCoordinator {
         diagnostics: ProtectionDiagnostics,
         macho: MachOParser,
         meta: ParsedMetadataResult,
-        dummyDllCount: Int
+        dummyDllCount: Int,
+        binariesScanned: Int
     ) throws {
         let writer = try BufferedFileWriter(url: url)
         defer { try? writer.close() }
@@ -563,7 +611,7 @@ public final class DumpCoordinator {
         try writer.writeLine("=====================================")
         try writer.writeLine("App: \(info.appName) (\(info.bundleId)) v\(info.bundleVersion)")
         try writer.writeLine("Input Size: \(formatSize(info.fileSizeBytes))")
-        try writer.writeLine("Primary Mach-O: \(info.primaryMachOPath) [\(macho.architecture)]")
+        try writer.writeLine("Primary Mach-O: \(info.primaryMachOPath) [\(macho.architecture)] (Total Binaries Scanned: \(binariesScanned))")
         try writer.writeLine("FairPlay DRM: \(diagnostics.fairPlayEncrypted ? "ENCRYPTED (cryptid=\(diagnostics.cryptId))" : "Decrypted")")
         try writer.writeLine("Chained Fixups: \(macho.hasChainedFixups ? "Yes (\(macho.chainedFixupPointers.count) pointers)" : "No")")
         try writer.writeLine("Metadata Status: \(diagnostics.metadataStatus.summaryText)")
@@ -573,13 +621,14 @@ public final class DumpCoordinator {
         try writer.close()
     }
 
-    private func buildExplorerRows(meta: ParsedMetadataResult, macho: MachOParser) -> [ExplorerRow] {
+    private func buildExplorerRows(meta: ParsedMetadataResult, snapshots: [NativeBinarySnapshot]) -> [ExplorerRow] {
         var rows: [ExplorerRow] = []
-        rows.reserveCapacity(min(80_000, meta.types.count * 4 + macho.objcClasses.count * 4))
+        let rowCap = 300_000
+        rows.reserveCapacity(min(80_000, meta.types.count * 4))
         var nextId = 1
 
         for t in meta.types {
-            if rows.count >= 120_000 { break }
+            if rows.count >= rowCap { break }
             rows.append(ExplorerRow(
                 id: nextId,
                 kind: .type,
@@ -600,7 +649,7 @@ public final class DumpCoordinator {
             nextId += 1
 
             for f in t.fields {
-                if rows.count >= 120_000 { break }
+                if rows.count >= rowCap { break }
                 rows.append(ExplorerRow(
                     id: nextId,
                     kind: .field,
@@ -622,7 +671,7 @@ public final class DumpCoordinator {
             }
 
             for p in t.properties {
-                if rows.count >= 120_000 { break }
+                if rows.count >= rowCap { break }
                 rows.append(ExplorerRow(
                     id: nextId,
                     kind: .property,
@@ -644,7 +693,7 @@ public final class DumpCoordinator {
             }
 
             for ev in t.events {
-                if rows.count >= 120_000 { break }
+                if rows.count >= rowCap { break }
                 rows.append(ExplorerRow(
                     id: nextId,
                     kind: .event,
@@ -666,7 +715,7 @@ public final class DumpCoordinator {
             }
 
             for m in t.methods {
-                if rows.count >= 120_000 { break }
+                if rows.count >= rowCap { break }
                 let paramText = m.parameters.map { "\($0.typeName) \($0.name)" }.joined(separator: ", ")
                 rows.append(ExplorerRow(
                     id: nextId,
@@ -689,50 +738,96 @@ public final class DumpCoordinator {
             }
         }
 
-        for cls in macho.objcClasses {
-            for m in cls.methods {
-                if rows.count >= 120_000 { break }
+        for macho in snapshots {
+            for cls in macho.objcClasses {
+                for m in cls.methods {
+                    if rows.count >= rowCap { break }
+                    rows.append(ExplorerRow(
+                        id: nextId,
+                        kind: .native,
+                        assembly: macho.sourceName,
+                        namespace: "Objective-C",
+                        className: cls.name,
+                        name: m.name,
+                        signature: "\(m.isClassMethod ? "+" : "-")[\(cls.name) \(m.name)]",
+                        dataType: m.types,
+                        rvaHex: String(format: "0x%llX", m.rva),
+                        vaHex: String(format: "0x%llX", m.va),
+                        fileOffsetHex: String(format: "0x%llX", m.fileOffset),
+                        fieldOffsetHex: "—",
+                        tokenHex: "—",
+                        typeDefIndex: -1,
+                        extraNote: "Obj-C"
+                    ))
+                    nextId += 1
+                }
+            }
+
+            for st in macho.swiftTypes {
+                if rows.count >= rowCap { break }
                 rows.append(ExplorerRow(
                     id: nextId,
                     kind: .native,
                     assembly: macho.sourceName,
-                    namespace: "Objective-C",
-                    className: cls.name,
-                    name: m.name,
-                    signature: "\(m.isClassMethod ? "+" : "-")[\(cls.name) \(m.name)]",
-                    dataType: m.types,
-                    rvaHex: String(format: "0x%llX", m.rva),
-                    vaHex: String(format: "0x%llX", m.va),
-                    fileOffsetHex: String(format: "0x%llX", m.fileOffset),
+                    namespace: "Swift",
+                    className: st.name,
+                    name: st.name,
+                    signature: "\(st.kind) \(st.name)",
+                    dataType: st.kind,
+                    rvaHex: String(format: "0x%llX", st.descriptorRVA),
+                    vaHex: "—",
+                    fileOffsetHex: "—",
                     fieldOffsetHex: "—",
                     tokenHex: "—",
                     typeDefIndex: -1,
-                    extraNote: "Obj-C"
+                    extraNote: "Swift 5"
                 ))
                 nextId += 1
             }
-        }
 
-        for st in macho.swiftTypes {
-            if rows.count >= 120_000 { break }
-            rows.append(ExplorerRow(
-                id: nextId,
-                kind: .native,
-                assembly: macho.sourceName,
-                namespace: "Swift",
-                className: st.name,
-                name: st.name,
-                signature: "\(st.kind) \(st.name)",
-                dataType: st.kind,
-                rvaHex: String(format: "0x%llX", st.descriptorRVA),
-                vaHex: "—",
-                fileOffsetHex: "—",
-                fieldOffsetHex: "—",
-                tokenHex: "—",
-                typeDefIndex: -1,
-                extraNote: "Swift 5"
-            ))
-            nextId += 1
+            for sym in macho.exportedSymbols {
+                if rows.count >= rowCap { break }
+                rows.append(ExplorerRow(
+                    id: nextId,
+                    kind: .native,
+                    assembly: macho.sourceName,
+                    namespace: "Exports",
+                    className: macho.sourceName,
+                    name: sym.name,
+                    signature: sym.name,
+                    dataType: sym.source,
+                    rvaHex: String(format: "0x%llX", sym.rva),
+                    vaHex: String(format: "0x%llX", sym.va),
+                    fileOffsetHex: String(format: "0x%llX", sym.fileOffset),
+                    fieldOffsetHex: "—",
+                    tokenHex: "—",
+                    typeDefIndex: -1,
+                    extraNote: sym.source
+                ))
+                nextId += 1
+            }
+
+            for sym in macho.symtabSymbols {
+                if rows.count >= rowCap { break }
+                rows.append(ExplorerRow(
+                    id: nextId,
+                    kind: .native,
+                    assembly: macho.sourceName,
+                    namespace: "Symtab",
+                    className: macho.sourceName,
+                    name: sym.name,
+                    signature: sym.name,
+                    dataType: sym.source,
+                    rvaHex: String(format: "0x%llX", sym.rva),
+                    vaHex: String(format: "0x%llX", sym.va),
+                    fileOffsetHex: String(format: "0x%llX", sym.fileOffset),
+                    fieldOffsetHex: "—",
+                    tokenHex: "—",
+                    typeDefIndex: -1,
+                    extraNote: sym.source
+                ))
+                nextId += 1
+            }
         }
 
         return rows

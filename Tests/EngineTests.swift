@@ -55,7 +55,7 @@ struct EngineTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let srcFile = tmp.appendingPathComponent("hello.txt")
-        let payload = String(repeating: "IL2CPP_STREAM_TEST_LINE\n", count: 5000)
+        let payload = String(repeating: "IL2CPP_STREAM_TEST_LINE\n", count: 100_000) // ~2.4 MB (>4 chunks)
         try payload.write(to: srcFile, atomically: true, encoding: .utf8)
 
         let zipURL = tmp.appendingPathComponent("archive.zip")
@@ -125,6 +125,9 @@ struct EngineTests {
 
         let summaryText = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("offsets_summary.txt"), encoding: .utf8)
         assertTrue(summaryText.contains("GameCore.PlayerStats"), "offsets_summary.txt missing PlayerStats")
+
+        let nativeText = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("native_functions.txt"), encoding: .utf8)
+        assertTrue(nativeText.contains("Binary: UnityFramework"), "native_functions.txt missing UnityFramework header")
 
         let scriptData = try Data(contentsOf: result.outputDirectoryURL.appendingPathComponent("script.json"))
         let scriptObj = try JSONSerialization.jsonObject(with: scriptData) as? [String: Any]

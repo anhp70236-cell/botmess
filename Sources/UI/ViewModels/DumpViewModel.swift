@@ -33,6 +33,11 @@ final class DumpViewModel: ObservableObject {
             UserDefaults.standard.set(selectedTheme.rawValue, forKey: "dip_theme_v2")
         }
     }
+    @Published var useInPlacePicker: Bool {
+        didSet {
+            UserDefaults.standard.set(useInPlacePicker, forKey: "dip_inplace_picker_v2")
+        }
+    }
 
     @Published var isRunning = false
     @Published var currentPhase: DumpPhase = .idle
@@ -50,6 +55,7 @@ final class DumpViewModel: ObservableObject {
     @Published var selectedAssemblyFilter: String = "Tất cả"
 
     private var activeSecurityURLs: [URL] = []
+    private var copiedTempURLs: [URL] = []
     private let cancellation = CancellationFlag()
     private let optionsKey = "dip_options_v2"
 
@@ -75,6 +81,7 @@ final class DumpViewModel: ObservableObject {
         } else {
             self.selectedTheme = .obsidianDark
         }
+        self.useInPlacePicker = UserDefaults.standard.bool(forKey: "dip_inplace_picker_v2")
         loadSavedSessions()
         refreshLocalDocumentsIPAs()
     }
@@ -82,6 +89,9 @@ final class DumpViewModel: ObservableObject {
     deinit {
         for url in activeSecurityURLs {
             url.stopAccessingSecurityScopedResource()
+        }
+        for url in copiedTempURLs {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
@@ -95,6 +105,19 @@ final class DumpViewModel: ObservableObject {
         if !activeSecurityURLs.contains(url), url.startAccessingSecurityScopedResource() {
             activeSecurityURLs.append(url)
         }
+    }
+
+    private func cleanupOldCopiedTemps(keeping keepURL: URL?) {
+        let tmpPath = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        var kept: [URL] = []
+        for url in copiedTempURLs {
+            if url == keepURL {
+                kept.append(url)
+            } else if url.standardizedFileURL.path.hasPrefix(tmpPath) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        copiedTempURLs = kept
     }
 
     nonisolated static func withCoordinatedRead<T>(url: URL, _ body: (URL) throws -> T) throws -> T {
@@ -133,6 +156,38 @@ final class DumpViewModel: ObservableObject {
         }.sorted { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
     }
 
+    func loadIPAsFromFolder(_ folderURL: URL) {
+        acquireSecurityAccess(for: folderURL)
+        do {
+            let items = try Self.withCoordinatedRead(url: folderURL) { actualFolder in
+                try FileManager.default.contentsOfDirectory(
+                    at: actualFolder,
+                    includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
+                )
+            }
+            let found = items.filter { url in
+                let ext = url.pathExtension.lowercased()
+                return ext == "ipa" || ext == "tipa" || ext == "zip"
+            }.sorted { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
+
+            for item in found {
+                acquireSecurityAccess(for: item)
+            }
+            localDocumentsIPAs = found
+            if found.isEmpty {
+                errorMessage = "Không tìm thấy tệp .ipa / .tipa nào trong thư mục \(folderURL.lastPathComponent)."
+            } else {
+                errorMessage = nil
+                appendLog("[Thư mục] Tìm thấy \(found.count) tệp IPA trong \(folderURL.lastPathComponent).")
+                if found.count == 1 {
+                    setIPAFile(found[0])
+                }
+            }
+        } catch {
+            errorMessage = "Không thể đọc thư mục: \(error.localizedDescription)"
+        }
+    }
+
     func handleIncomingFileURL(_ url: URL) {
         acquireSecurityAccess(for: url)
         activeTab = 0
@@ -156,6 +211,12 @@ final class DumpViewModel: ObservableObject {
 
     func setIPAFile(_ url: URL) {
         acquireSecurityAccess(for: url)
+        let tmpPath = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        if url.standardizedFileURL.path.hasPrefix(tmpPath) {
+            copiedTempURLs.append(url)
+        }
+        cleanupOldCopiedTemps(keeping: url)
+
         selectedIPAURL = url
         errorMessage = nil
         inspectionInfo = nil

@@ -20,8 +20,11 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.apple.itunes.ipa</string>
-				<string>com.botmess.tipa</string>
-				<string>public.zip-archive</string>
+				<string>com.botmess.ipadumper.ipa</string>
+				<string>com.pkware.zip-archive</string>
+				<string>public.archive</string>
+				<string>public.data</string>
+				<string>public.item</string>
 			</array>
 		</dict>
 	</array>
@@ -69,16 +72,42 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.pkware.zip-archive</string>
+				<string>public.archive</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>iOS App Package (.ipa / .tipa)</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.botmess.ipadumper.ipa</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ipa</string>
+					<string>IPA</string>
+					<string>tipa</string>
+					<string>TIPA</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
 			<key>UTTypeConformsTo</key>
 			<array>
-				<string>public.zip-archive</string>
+				<string>com.pkware.zip-archive</string>
+				<string>public.archive</string>
 				<string>public.data</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>iOS App Package (.ipa)</string>
+			<string>iOS App Store Package (.ipa)</string>
 			<key>UTTypeIdentifier</key>
 			<string>com.apple.itunes.ipa</string>
 			<key>UTTypeTagSpecification</key>
@@ -86,24 +115,7 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>ipa</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.zip-archive</string>
-				<string>public.data</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>TrollStore App Package (.tipa)</string>
-			<key>UTTypeIdentifier</key>
-			<string>com.botmess.tipa</string>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>tipa</string>
+					<string>IPA</string>
 				</array>
 			</dict>
 		</dict>
