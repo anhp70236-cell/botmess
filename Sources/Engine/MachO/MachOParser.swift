@@ -237,8 +237,9 @@ public final class MachOParser {
         } else {
             self.baseVM = segments.first(where: { $0.vmSize > 0 && $0.name != "__PAGEZERO" })?.vmAddr ?? 0x1_0000_0000
         }
-        self.maxVM = max(computedMaxVM, self.baseVM + UInt64(chosenSize))
-        self.minValidVM = sections.map(\.addr).filter { $0 > self.baseVM }.min() ?? (self.baseVM + 0x1000)
+        let bVM = self.baseVM
+        self.maxVM = max(computedMaxVM, bVM + UInt64(chosenSize))
+        self.minValidVM = sections.map(\.addr).filter { $0 > bVM }.min() ?? (bVM + 0x1000)
         self.sortedSegments = segments.filter { $0.fileSize > 0 && $0.vmSize > 0 }.sorted { $0.vmAddr < $1.vmAddr }
 
         if let cf = chainedFixupsCmd {
