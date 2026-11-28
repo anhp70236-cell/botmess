@@ -138,7 +138,7 @@ public final class MachOParser {
             switch cmd {
             case 0x19: // LC_SEGMENT_64
                 if cmdsize >= 72 {
-                    let segName = readFixedName(at: cmdPos + 8, length: 16)
+                    let segName = Self.readFixedName(in: mapped, at: cmdPos + 8, length: 16)
                     let vmAddr = mapped.readUInt64(at: cmdPos + 24)
                     let vmSize = mapped.readUInt64(at: cmdPos + 32)
                     let fileOff = mapped.readUInt64(at: cmdPos + 40)
@@ -167,8 +167,8 @@ public final class MachOParser {
                     var secPos = cmdPos + 72
                     for _ in 0..<nsects {
                         guard secPos + 80 <= cmdPos + cmdsize else { break }
-                        let sectName = readFixedName(at: secPos, length: 16)
-                        let sSegName = readFixedName(at: secPos + 16, length: 16)
+                        let sectName = Self.readFixedName(in: mapped, at: secPos, length: 16)
+                        let sSegName = Self.readFixedName(in: mapped, at: secPos + 16, length: 16)
                         let addr = mapped.readUInt64(at: secPos + 32)
                         let size = mapped.readUInt64(at: secPos + 40)
                         let offset = UInt64(mapped.readUInt32(at: secPos + 48))
@@ -245,7 +245,7 @@ public final class MachOParser {
         }
     }
 
-    private func readFixedName(at offset: Int, length: Int) -> String {
+    private static func readFixedName(in mapped: MappedFile, at offset: Int, length: Int) -> String {
         guard mapped.inRange(offset, length) else { return "" }
         var bytes: [UInt8] = []
         bytes.reserveCapacity(length)
