@@ -36,7 +36,7 @@ final class DumpViewModel: ObservableObject {
     }
     @Published var useInPlacePicker: Bool {
         didSet {
-            UserDefaults.standard.set(useInPlacePicker, forKey: "dip_inplace_picker_v3")
+            UserDefaults.standard.set(useInPlacePicker, forKey: "dip_inplace_picker_v4")
         }
     }
 
@@ -88,11 +88,7 @@ final class DumpViewModel: ObservableObject {
         } else {
             self.selectedTheme = .obsidianDark
         }
-        if UserDefaults.standard.object(forKey: "dip_inplace_picker_v3") == nil {
-            self.useInPlacePicker = true
-        } else {
-            self.useInPlacePicker = UserDefaults.standard.bool(forKey: "dip_inplace_picker_v3")
-        }
+        self.useInPlacePicker = UserDefaults.standard.bool(forKey: "dip_inplace_picker_v4")
         try? FileManager.default.removeItem(at: Self.importsRootURL)
         loadSavedSessions()
         refreshLocalDocumentsIPAs()
