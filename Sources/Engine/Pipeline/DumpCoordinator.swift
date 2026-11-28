@@ -322,7 +322,7 @@ public final class DumpCoordinator {
             typeFieldCounts: [UInt16],
             totalTypes: Int,
             totalMethods: Int,
-            ctorPairsByImage: [String: [(typeDefIndex: Int, methodId: Int)]]
+            ctorPairsByImage: [String: [(typeDefIndex: Int, ridIndex: Int, globalIndex: Int)]]
         )?
         var metaPeekError: Error?
         var parsedMachO: MachOParser?
