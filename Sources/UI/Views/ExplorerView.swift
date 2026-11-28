@@ -159,7 +159,7 @@ struct ExplorerView: View {
                     .foregroundColor(theme.secondaryText)
                 if row.tokenHex != "—" {
                     Text("Token: \(row.tokenHex)")
-                        .font(.caption2.monospaced())
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(theme.secondaryText)
                 }
                 if !row.extraNote.isEmpty {
