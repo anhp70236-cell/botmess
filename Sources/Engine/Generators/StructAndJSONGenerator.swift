@@ -84,6 +84,16 @@ public enum StructAndJSONGenerator {
         try writer.close()
     }
 
+    @inline(__always)
+    private static func hex(_ v: UInt64) -> String {
+        "0x" + String(v, radix: 16, uppercase: true)
+    }
+
+    @inline(__always)
+    private static func hex32(_ v: Int32) -> String {
+        "0x" + String(UInt32(bitPattern: v), radix: 16, uppercase: true)
+    }
+
     public static func generateScriptJSON(
         to url: URL,
         types: [Il2CppTypeInfo],
@@ -97,32 +107,44 @@ public enum StructAndJSONGenerator {
         try writer.writeLine("{")
         try writer.writeLine("  \"ScriptMethod\": [")
 
-        var methodEntries: [(addr: UInt64, name: String, sig: String, tdSig: String)] = []
+        var wroteMethod = false
         var addresses: [UInt64] = []
         var seenAddr = Set<UInt64>()
         func recordAddr(_ rva: UInt64) {
-            if rva > 0 && !seenAddr.contains(rva) {
-                seenAddr.insert(rva)
+            if rva > 0 && seenAddr.insert(rva).inserted {
                 addresses.append(rva)
             }
+        }
+        func writeMethodEntry(addr: UInt64, name: String, sig: String, tdSig: String) throws {
+            if wroteMethod {
+                try writer.writeLine("    },")
+            }
+            wroteMethod = true
+            try writer.writeLine("    {")
+            try writer.writeLine("      \"Address\": \(addr),")
+            try writer.writeLine("      \"Name\": \"\(jsonEscape(name))\",")
+            try writer.writeLine("      \"Signature\": \"\(jsonEscape(sig))\",")
+            try writer.writeLine("      \"TypeSignature\": \"\(jsonEscape(tdSig))\"")
         }
 
         var hasIL2CPPRVA = false
         for t in types {
+            let cStruct = Il2CppTypeResolver.sanitizeCIdentifier(t.fullName)
+            let tdSig = "\(cStruct)_o*"
             for m in t.methods {
-                let cStruct = Il2CppTypeResolver.sanitizeCIdentifier(t.fullName)
+                let hasValidRVA = m.rva > 0
+                let hasExtraGen = m.genericInstRVAs.contains { $0 > 0 && $0 != m.rva }
+                if !hasValidRVA && !hasExtraGen { continue }
                 let fullSig = "\(m.returnTypeName) \(t.fullName)__\(m.name)(\(m.parameters.map { "\($0.typeName) \($0.name)" }.joined(separator: ", ")))"
-                if m.rva > 0 {
+                if hasValidRVA {
                     hasIL2CPPRVA = true
-                    let name = "\(t.fullName)$$\(m.name)"
-                    methodEntries.append((m.rva, name, fullSig, "\(cStruct)_o*"))
+                    try writeMethodEntry(addr: m.rva, name: "\(t.fullName)$$\(m.name)", sig: fullSig, tdSig: tdSig)
                     recordAddr(m.rva)
                 }
                 var gIdx = 1
                 for gRVA in m.genericInstRVAs where gRVA > 0 && gRVA != m.rva {
                     hasIL2CPPRVA = true
-                    let gName = "\(t.fullName)$$\(m.name)<GenericInst_\(gIdx)>"
-                    methodEntries.append((gRVA, gName, fullSig, "\(cStruct)_o*"))
+                    try writeMethodEntry(addr: gRVA, name: "\(t.fullName)$$\(m.name)<GenericInst_\(gIdx)>", sig: fullSig, tdSig: tdSig)
                     recordAddr(gRVA)
                     gIdx += 1
                 }
@@ -137,9 +159,8 @@ public enum StructAndJSONGenerator {
                 for m in cls.methods where m.rva > 0 {
                     let nm = "\(prefix)\(cls.name)$$\(m.name)"
                     let key = "\(m.rva)|\(nm)"
-                    if !seenNativeKey.contains(key) {
-                        seenNativeKey.insert(key)
-                        methodEntries.append((m.rva, nm, "void \(cls.name)_\(m.name)()", "void*"))
+                    if seenNativeKey.insert(key).inserted {
+                        try writeMethodEntry(addr: m.rva, name: nm, sig: "void \(cls.name)_\(m.name)()", tdSig: "void*")
                         recordAddr(m.rva)
                     }
                 }
@@ -147,18 +168,16 @@ public enum StructAndJSONGenerator {
             for sym in bin.exportedSymbols where sym.rva > 0 {
                 let nm = "\(prefix)\(sym.name)"
                 let key = "\(sym.rva)|\(nm)"
-                if !seenNativeKey.contains(key) {
-                    seenNativeKey.insert(key)
-                    methodEntries.append((sym.rva, nm, nm, "void*"))
+                if seenNativeKey.insert(key).inserted {
+                    try writeMethodEntry(addr: sym.rva, name: nm, sig: nm, tdSig: "void*")
                     recordAddr(sym.rva)
                 }
             }
             for sym in bin.symtabSymbols where sym.rva > 0 {
                 let nm = "\(prefix)\(sym.name)"
                 let key = "\(sym.rva)|\(nm)"
-                if !seenNativeKey.contains(key) {
-                    seenNativeKey.insert(key)
-                    methodEntries.append((sym.rva, nm, nm, "void*"))
+                if seenNativeKey.insert(key).inserted {
+                    try writeMethodEntry(addr: sym.rva, name: nm, sig: nm, tdSig: "void*")
                     recordAddr(sym.rva)
                 }
             }
@@ -168,21 +187,14 @@ public enum StructAndJSONGenerator {
                 for s in bin.symtabSymbols { covered.insert(s.rva) }
                 for c in bin.objcClasses { for m in c.methods { covered.insert(m.rva) } }
                 for rva in bin.functionStartsRVA where rva > 0 && !covered.contains(rva) {
-                    let nm = String(format: "%@sub_%llX", prefix, rva)
-                    methodEntries.append((rva, nm, nm, "void*"))
+                    let nm = "\(prefix)sub_\(String(rva, radix: 16, uppercase: true))"
+                    try writeMethodEntry(addr: rva, name: nm, sig: nm, tdSig: "void*")
                     recordAddr(rva)
                 }
             }
         }
-
-        for (idx, item) in methodEntries.enumerated() {
-            let comma = (idx + 1 < methodEntries.count) ? "," : ""
-            try writer.writeLine("    {")
-            try writer.writeLine("      \"Address\": \(item.addr),")
-            try writer.writeLine("      \"Name\": \"\(jsonEscape(item.name))\",")
-            try writer.writeLine("      \"Signature\": \"\(jsonEscape(item.sig))\",")
-            try writer.writeLine("      \"TypeSignature\": \"\(jsonEscape(item.tdSig))\"")
-            try writer.writeLine("    }\(comma)")
+        if wroteMethod {
+            try writer.writeLine("    }")
         }
         try writer.writeLine("  ],")
 
@@ -210,8 +222,23 @@ public enum StructAndJSONGenerator {
         try writer.writeLine("  ],")
 
         try writer.writeLine("  \"ScriptMetadataMethod\": [],")
-        let addrList = addresses.map { String($0) }.joined(separator: ", ")
-        try writer.writeLine("  \"Addresses\": [\(addrList)]")
+        if addresses.isEmpty {
+            try writer.writeLine("  \"Addresses\": []")
+        } else {
+            try writer.writeLine("  \"Addresses\": [")
+            var i = 0
+            while i < addresses.count {
+                let end = min(addresses.count, i + 256)
+                var line = "    "
+                for j in i..<end {
+                    line += String(addresses[j])
+                    if j + 1 < addresses.count { line += ", " }
+                }
+                try writer.writeLine(line)
+                i = end
+            }
+            try writer.writeLine("  ]")
+        }
         try writer.writeLine("}")
         try writer.close()
     }
@@ -226,7 +253,7 @@ public enum StructAndJSONGenerator {
         try writer.writeLine("[")
         for (idx, sl) in stringLiterals.enumerated() {
             let comma = (idx + 1 < stringLiterals.count) ? "," : ""
-            let addrHex = String(format: "0x%llX", sl.address)
+            let addrHex = hex(sl.address)
             try writer.writeLine("  {\"index\": \(sl.index), \"address\": \"\(addrHex)\", \"value\": \"\(jsonEscape(sl.value))\"}\(comma)")
         }
         try writer.writeLine("]")
@@ -254,23 +281,23 @@ public enum StructAndJSONGenerator {
         for t in types {
             try writer.writeLine("[\(t.assemblyName)] \(t.fullName) (TypeDefIndex: \(t.typeDefIndex), Token: 0x\(String(t.token, radix: 16, uppercase: true)))")
             for f in t.fields {
-                let offHex = f.offset >= 0 ? String(format: "0x%X", f.offset) : "0x0"
+                let offHex = f.offset >= 0 ? hex32(f.offset) : "0x0"
                 let dv = f.defaultValue.map { " = \($0)" } ?? ""
                 try writer.writeLine("  FIELD  \(offHex) | \(f.typeName) \(f.name)\(dv)")
             }
             for p in t.properties {
-                let gRva = p.getRVA > 0 ? String(format: " get=0x%llX", p.getRVA) : ""
-                let sRva = p.setRVA > 0 ? String(format: " set=0x%llX", p.setRVA) : ""
+                let gRva = p.getRVA > 0 ? " get=\(hex(p.getRVA))" : ""
+                let sRva = p.setRVA > 0 ? " set=\(hex(p.setRVA))" : ""
                 try writer.writeLine("  PROP   \(p.typeName) \(p.name)\(gRva)\(sRva)")
             }
             for ev in t.events {
                 try writer.writeLine("  EVENT  \(ev.typeName) \(ev.name)")
             }
             for m in t.methods {
-                let rvaHex = String(format: "0x%llX", m.rva)
-                let vaHex = String(format: "0x%llX", m.va)
-                let fHex = String(format: "0x%llX", m.fileOffset)
-                let gen = m.genericInstRVAs.count > 1 ? " GEN=" + m.genericInstRVAs.map { String(format: "0x%llX", $0) }.joined(separator: ",") : ""
+                let rvaHex = hex(m.rva)
+                let vaHex = hex(m.va)
+                let fHex = hex(m.fileOffset)
+                let gen = m.genericInstRVAs.count > 1 ? " GEN=" + m.genericInstRVAs.map { hex($0) }.joined(separator: ",") : ""
                 let sem = m.arm64Semantics.isEmpty ? "" : " | \(m.arm64Semantics)"
                 try writer.writeLine("  METHOD RVA=\(rvaHex) VA=\(vaHex) OFF=\(fHex)\(gen) | \(m.returnTypeName) \(m.name)\(sem)")
             }
@@ -278,16 +305,16 @@ public enum StructAndJSONGenerator {
         }
 
         for bin in effectiveSnapshots {
-            try writer.writeLine("# Binary: \(bin.sourceName) [\(bin.architecture)] BaseVM=0x\(String(bin.baseVM, radix: 16, uppercase: true))")
+            try writer.writeLine("# Binary: \(bin.sourceName) [\(bin.architecture)] BaseVM=\(hex(bin.baseVM))")
             if !bin.objcClasses.isEmpty {
                 try writer.writeLine("# Objective-C Classes (\(bin.objcClasses.count))")
                 for cls in bin.objcClasses {
                     try writer.writeLine("[\(cls.name) : \(cls.superName)]")
                     for iv in cls.ivars {
-                        try writer.writeLine(String(format: "  IVAR   0x%X | %@ %@", iv.offset, iv.typeEncoding, iv.name))
+                        try writer.writeLine("  IVAR   \(hex32(iv.offset)) | \(iv.typeEncoding) \(iv.name)")
                     }
                     for m in cls.methods {
-                        try writer.writeLine(String(format: "  OBJC   RVA=0x%llX VA=0x%llX OFF=0x%llX | %@%@", m.rva, m.va, m.fileOffset, m.isClassMethod ? "+" : "-", m.name))
+                        try writer.writeLine("  OBJC   RVA=\(hex(m.rva)) VA=\(hex(m.va)) OFF=\(hex(m.fileOffset)) | \(m.isClassMethod ? "+" : "-")\(m.name)")
                     }
                 }
                 try writer.writeLine("")
@@ -296,26 +323,26 @@ public enum StructAndJSONGenerator {
                 try writer.writeLine("# Swift 5 Types (\(bin.swiftTypes.count))")
                 for st in bin.swiftTypes {
                     let fSuffix = st.fields.isEmpty ? "" : " { \(st.fields.joined(separator: ", ")) }"
-                    try writer.writeLine(String(format: "  SWIFT  RVA=0x%llX | %@ %@%@", st.descriptorRVA, st.kind, st.name, fSuffix))
+                    try writer.writeLine("  SWIFT  RVA=\(hex(st.descriptorRVA)) | \(st.kind) \(st.name)\(fSuffix)")
                 }
                 try writer.writeLine("")
             }
             if !bin.exportedSymbols.isEmpty {
                 try writer.writeLine("# Mach-O Exports (\(bin.exportedSymbols.count))")
                 for sym in bin.exportedSymbols {
-                    try writer.writeLine(String(format: "  EXPORT RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
+                    try writer.writeLine("  EXPORT RVA=\(hex(sym.rva)) VA=\(hex(sym.va)) OFF=\(hex(sym.fileOffset)) | \(sym.name)")
                 }
             }
             if !bin.symtabSymbols.isEmpty {
                 try writer.writeLine("# Symtab Symbols (\(bin.symtabSymbols.count))")
                 for sym in bin.symtabSymbols {
-                    try writer.writeLine(String(format: "  SYMTAB RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
+                    try writer.writeLine("  SYMTAB RVA=\(hex(sym.rva)) VA=\(hex(sym.va)) OFF=\(hex(sym.fileOffset)) | \(sym.name)")
                 }
             }
             if !bin.xrefFunctions.isEmpty {
                 try writer.writeLine("# ARM64 String XRefs (\(bin.xrefFunctions.count))")
                 for xr in bin.xrefFunctions {
-                    try writer.writeLine(String(format: "  XREF   RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", xr.rva, xr.va, xr.fileOffset, xr.name))
+                    try writer.writeLine("  XREF   RVA=\(hex(xr.rva)) VA=\(hex(xr.va)) OFF=\(hex(xr.fileOffset)) | \(xr.name)")
                 }
             }
             var covered = Set<UInt64>()
@@ -327,7 +354,7 @@ public enum StructAndJSONGenerator {
                 try writer.writeLine("# Function Starts (\(uncovered.count) additional)")
                 for rva in uncovered {
                     let va = bin.baseVM + rva
-                    try writer.writeLine(String(format: "  FUNC   RVA=0x%llX VA=0x%llX | sub_%llX", rva, va, rva))
+                    try writer.writeLine("  FUNC   RVA=\(hex(rva)) VA=\(hex(va)) | sub_\(String(rva, radix: 16, uppercase: true))")
                 }
             }
             try writer.writeLine("")
@@ -350,30 +377,30 @@ public enum StructAndJSONGenerator {
 
         for bin in snapshots {
             try writer.writeLine("============================================================")
-            try writer.writeLine("Binary: \(bin.sourceName) [\(bin.architecture)] BaseVM=0x\(String(bin.baseVM, radix: 16, uppercase: true)) FairPlay=\(bin.fairPlayEncrypted ? "Encrypted(cryptid=\(bin.cryptId))" : "Decrypted")")
+            try writer.writeLine("Binary: \(bin.sourceName) [\(bin.architecture)] BaseVM=\(hex(bin.baseVM)) FairPlay=\(bin.fairPlayEncrypted ? "Encrypted(cryptid=\(bin.cryptId))" : "Decrypted")")
             try writer.writeLine("Exports=\(bin.exportedSymbols.count) | Symtab=\(bin.symtabSymbols.count) | ObjC=\(bin.objcClasses.count) | Swift=\(bin.swiftTypes.count) | FuncStarts=\(bin.functionStartsRVA.count) | XRefs=\(bin.xrefFunctions.count)")
             try writer.writeLine("============================================================")
 
             for sym in bin.exportedSymbols {
-                try writer.writeLine(String(format: "EXPORT  RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
+                try writer.writeLine("EXPORT  RVA=\(hex(sym.rva)) VA=\(hex(sym.va)) OFF=\(hex(sym.fileOffset)) | \(sym.name)")
             }
             for sym in bin.symtabSymbols {
-                try writer.writeLine(String(format: "SYMTAB  RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
+                try writer.writeLine("SYMTAB  RVA=\(hex(sym.rva)) VA=\(hex(sym.va)) OFF=\(hex(sym.fileOffset)) | \(sym.name)")
             }
             for cls in bin.objcClasses {
                 for iv in cls.ivars {
-                    try writer.writeLine(String(format: "IVAR    OFF=0x%X | %@.%@ (%@)", iv.offset, cls.name, iv.name, iv.typeEncoding))
+                    try writer.writeLine("IVAR    OFF=\(hex32(iv.offset)) | \(cls.name).\(iv.name) (\(iv.typeEncoding))")
                 }
                 for m in cls.methods {
-                    try writer.writeLine(String(format: "OBJC    RVA=0x%llX VA=0x%llX OFF=0x%llX | %@[%@ %@]", m.rva, m.va, m.fileOffset, m.isClassMethod ? "+" : "-", cls.name, m.name))
+                    try writer.writeLine("OBJC    RVA=\(hex(m.rva)) VA=\(hex(m.va)) OFF=\(hex(m.fileOffset)) | \(m.isClassMethod ? "+" : "-")[\(cls.name) \(m.name)]")
                 }
             }
             for st in bin.swiftTypes {
                 let fSuffix = st.fields.isEmpty ? "" : " { \(st.fields.joined(separator: ", ")) }"
-                try writer.writeLine(String(format: "SWIFT   RVA=0x%llX | %@ %@%@", st.descriptorRVA, st.kind, st.name, fSuffix))
+                try writer.writeLine("SWIFT   RVA=\(hex(st.descriptorRVA)) | \(st.kind) \(st.name)\(fSuffix)")
             }
             for xr in bin.xrefFunctions {
-                try writer.writeLine(String(format: "XREF    RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", xr.rva, xr.va, xr.fileOffset, xr.name))
+                try writer.writeLine("XREF    RVA=\(hex(xr.rva)) VA=\(hex(xr.va)) OFF=\(hex(xr.fileOffset)) | \(xr.name)")
             }
 
             var covered = Set<UInt64>()
@@ -382,7 +409,7 @@ public enum StructAndJSONGenerator {
             for c in bin.objcClasses { for m in c.methods { covered.insert(m.rva) } }
             for rva in bin.functionStartsRVA where rva > 0 && !covered.contains(rva) {
                 let va = bin.baseVM + rva
-                try writer.writeLine(String(format: "FUNC    RVA=0x%llX VA=0x%llX | sub_%llX", rva, va, rva))
+                try writer.writeLine("FUNC    RVA=\(hex(rva)) VA=\(hex(va)) | sub_\(String(rva, radix: 16, uppercase: true))")
             }
             try writer.writeLine("")
         }

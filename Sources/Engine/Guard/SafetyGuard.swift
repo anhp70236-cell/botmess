@@ -48,37 +48,94 @@ public enum SafetyGuard {
 
     public static func normalizeTokens(_ raw: String) -> String {
         if raw.isEmpty { return "" }
-        var out = ""
-        out.reserveCapacity(raw.count + 8)
-        let scalars = Array(raw.unicodeScalars)
-        for i in 0..<scalars.count {
-            let c = scalars[i]
-            let isUpper = CharacterSet.uppercaseLetters.contains(c)
-            let isAlnum = CharacterSet.alphanumerics.contains(c)
+        var out: [UInt8] = []
+        out.reserveCapacity(raw.utf8.count + 8)
+        let bytes = Array(raw.utf8)
+
+        @inline(__always) func isUpperASCII(_ b: UInt8) -> Bool { b >= 65 && b <= 90 }
+        @inline(__always) func isLowerASCII(_ b: UInt8) -> Bool { b >= 97 && b <= 122 }
+        @inline(__always) func isDigitASCII(_ b: UInt8) -> Bool { b >= 48 && b <= 57 }
+
+        for i in 0..<bytes.count {
+            let b = bytes[i]
+            if b >= 0x80 {
+                // Non-ASCII UTF-8 byte: keep in word stream if valid
+                out.append(b)
+                continue
+            }
+            let isUpper = isUpperASCII(b)
+            let isAlnum = isUpper || isLowerASCII(b) || isDigitASCII(b)
             if !isAlnum {
-                if !out.hasSuffix(" ") { out.append(" ") }
+                if out.last != 32 && !out.isEmpty { out.append(32) }
                 continue
             }
             if isUpper && i > 0 {
-                let prev = scalars[i - 1]
-                let prevLowerOrDigit = CharacterSet.lowercaseLetters.contains(prev) || CharacterSet.decimalDigits.contains(prev)
-                let nextLower = (i + 1 < scalars.count) && CharacterSet.lowercaseLetters.contains(scalars[i + 1])
-                if prevLowerOrDigit || (CharacterSet.uppercaseLetters.contains(prev) && nextLower) {
-                    if !out.hasSuffix(" ") { out.append(" ") }
+                let prev = bytes[i - 1]
+                let prevLowerOrDigit = isLowerASCII(prev) || isDigitASCII(prev)
+                let nextLower = (i + 1 < bytes.count) && isLowerASCII(bytes[i + 1])
+                if prevLowerOrDigit || (isUpperASCII(prev) && nextLower) {
+                    if out.last != 32 && !out.isEmpty { out.append(32) }
                 }
             }
-            out.append(Character(c).lowercased())
+            out.append(isUpper ? (b + 32) : b)
         }
-        return out.trimmingCharacters(in: .whitespaces)
+        while out.last == 32 { out.removeLast() }
+        while out.first == 32 { out.removeFirst() }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    private static let triggerBytePatterns: [[UInt8]] = [
+        "iap", "inapp", "in_app", "store", "skp", "skr", "bill", "check",
+        "pay", "rec", "card", "money", "micro", "topup", "recharg", "vouch",
+        "coup", "invoic", "entitle", "monetiz", "subscr", "buy", "purch",
+        "spend", "gem", "diam", "gold", "coin", "cash", "curren", "vip",
+        "prem", "noads", "prod", "shop", "transact", "consum",
+        "add", "set", "get", "grant", "give", "unlock", "restore"
+    ].map { Array($0.utf8) }
+
+    private static func hasRealMoneyTrigger(_ raw: String) -> Bool {
+        let utf8 = Array(raw.utf8)
+        let n = utf8.count
+        guard n >= 3 else { return false }
+        var lower = [UInt8](repeating: 0, count: n)
+        for i in 0..<n {
+            let b = utf8[i]
+            lower[i] = (b >= 65 && b <= 90) ? (b + 32) : b
+        }
+        for pat in triggerBytePatterns {
+            let m = pat.count
+            if n < m { continue }
+            let p0 = pat[0]
+            var i = 0
+            let limit = n - m
+            while i <= limit {
+                if lower[i] == p0 {
+                    var matched = true
+                    var j = 1
+                    while j < m {
+                        if lower[i + j] != pat[j] {
+                            matched = false
+                            break
+                        }
+                        j += 1
+                    }
+                    if matched { return true }
+                }
+                i += 1
+            }
+        }
+        return false
     }
 
     /// Strict real-money / In-App Purchase / StoreKit / payment symbol filter.
     public static func isRealMoneyBlocked(_ name: String) -> Bool {
-        if name.isEmpty { return false }
-        if matches(iapSubstrRE, name) { return true }
-        let norm = normalizeTokens(name)
-        if norm.isEmpty { return false }
-        return matches(iapTokenRE, norm) || matches(iapPairRE, norm) || matches(iapShopPairRE, norm)
+        if name.isEmpty || !hasRealMoneyTrigger(name) { return false }
+        return autoreleasepool {
+            if matches(iapSubstrRE, name) { return true }
+            let norm = normalizeTokens(name)
+            if norm.isEmpty { return false }
+            return matches(iapTokenRE, norm) || matches(iapPairRE, norm) || matches(iapShopPairRE, norm)
+        }
     }
 
     /// Blocks banking, finance, e-wallet, crypto wallet, and government ID apps.

@@ -9,6 +9,7 @@ public enum Il2CppRegistrationFinder {
         totalMethodsCount: Int,
         metadataVersion: Int32,
         ctorPairsByImage: [String: [(typeDefIndex: Int, ridIndex: Int, globalIndex: Int)]],
+        isCancelled: () -> Bool = { false },
         log: (String) -> Void
     ) -> Il2CppRegistrationResult {
         var codeGenModules: [String: CodeGenModuleInfo] = [:]
@@ -27,22 +28,36 @@ public enum Il2CppRegistrationFinder {
         let sliceSize = macho.sliceSize
         let baseVM = macho.baseVM
 
-        let excludedSects: Set<String> = [
-            "__bss", "__common", "__text", "__stubs", "__cstring",
-            "__objc_methname", "__objc_classname", "__objc_methtype"
+        let excludedDataSects: Set<String> = [
+            "__bss", "__common", "__got", "__la_symbol_ptr", "__mod_init_func", "__mod_term_func"
         ]
         let dataSections = macho.sections.filter { sec in
-            !excludedSects.contains(sec.sectName)
-                && (sec.flags & 0xFF) != 0x01
-                && sec.size >= 24
-                && Int(sec.offset + sec.size) <= sliceSize
-                && !macho.isInEncryptedRange(sliceRelOffset: Int(sec.offset))
+            guard (sec.flags & 0xFF) != 0x01,
+                  sec.size >= 24,
+                  Int(sec.offset + sec.size) <= sliceSize,
+                  !macho.isInEncryptedRange(sliceRelOffset: Int(sec.offset)) else {
+                return false
+            }
+            if sec.segName == "__TEXT" {
+                return sec.sectName == "__const"
+            }
+            if sec.segName == "__LINKEDIT" || sec.segName == "__PAGEZERO" {
+                return false
+            }
+            if sec.sectName.hasPrefix("__objc_") || sec.sectName.hasPrefix("__swift5_") || excludedDataSects.contains(sec.sectName) {
+                return false
+            }
+            return true
         }
 
         func readModule(atRel modOff: Int, allowUnknownImage: Bool) -> CodeGenModuleInfo? {
             guard modOff >= 0 && modOff + 24 <= sliceSize && !macho.isInEncryptedRange(sliceRelOffset: modOff) else {
                 return nil
             }
+            let mCnt = Int(macho.readSliceUInt32(modOff + 8))
+            let mHi = macho.readSliceUInt32(modOff + 12)
+            guard mHi == 0 && mCnt >= 0 && mCnt <= 600_000 else { return nil }
+
             let namePtrVM = macho.decodePointer(atSliceRelOffset: modOff)
             guard namePtrVM != 0, let nameOff = macho.vmToSliceRelOffset(namePtrVM), !macho.isInEncryptedRange(sliceRelOffset: nameOff) else {
                 return nil
@@ -54,10 +69,6 @@ public enum Il2CppRegistrationFinder {
             if !allowUnknownImage && !wantedSet.isEmpty && !knownMatch {
                 return nil
             }
-
-            let mCnt = Int(macho.readSliceUInt32(modOff + 8))
-            let mHi = macho.readSliceUInt32(modOff + 12)
-            guard mHi == 0 && mCnt >= 0 && mCnt <= 600_000 else { return nil }
 
             var rvas: [UInt64] = []
             if mCnt > 0 {
@@ -515,12 +526,21 @@ public enum Il2CppRegistrationFinder {
         }
 
         // STRATEGY 2 & 3: Scan data/const sections structurally
-        if codeGenModules.count < imageNames.count || fieldOffsetsByType.isEmpty || (rawGenericMethodPairs.isEmpty && totalMethodsCount > 0) {
-            for ds in dataSections {
+        let needsModulesScan = imageNames.isEmpty ? codeGenModules.isEmpty : (codeGenModules.count < imageNames.count)
+        if (needsModulesScan && legacyMethodRVAs.isEmpty) || fieldOffsetsByType.isEmpty {
+            outerDataLoop: for ds in dataSections {
                 let start = Int(ds.offset)
                 let end = min(sliceSize - 24, start + Int(ds.size) - 24)
                 guard start <= end else { continue }
                 for p in stride(from: start, through: end, by: 8) {
+                    if ((p - start) & 0x3FFF8) == 0 && isCancelled() { break outerDataLoop }
+
+                    let needMoreModules = imageNames.isEmpty ? codeGenModules.isEmpty : (codeGenModules.count < imageNames.count)
+                    let haveAllCode = (!needMoreModules) || !legacyMethodRVAs.isEmpty
+                    if haveAllCode && !fieldOffsetsByType.isEmpty {
+                        break outerDataLoop
+                    }
+
                     if !imageNames.isEmpty && codeGenModules.count < imageNames.count {
                         let cgCnt = Int(macho.readSliceUInt32(p))
                         let cgHi = macho.readSliceUInt32(p + 4)
@@ -547,7 +567,8 @@ public enum Il2CppRegistrationFinder {
                         }
                     }
 
-                    if let mod = readModule(atRel: p, allowUnknownImage: false),
+                    if needMoreModules,
+                       let mod = readModule(atRel: p, allowUnknownImage: false),
                        codeGenModules[mod.imageName] == nil {
                         codeGenModules[mod.imageName] = mod
                         if strategyUsed == "None" { strategyUsed = "CodeGenModuleScan" }
@@ -640,12 +661,13 @@ public enum Il2CppRegistrationFinder {
                     }
                 }
             }
-            if bestGPtrsOff == nil {
-                for ds in dataSections {
+            if bestGPtrsOff == nil && foundCodeGenModulesOff == nil && foundCodeRegBaseOff == nil {
+                outerGenLoop: for ds in dataSections {
                     let start = Int(ds.offset)
                     let end = min(sliceSize - 16, start + Int(ds.size) - 16)
                     guard start <= end else { continue }
                     for gp in stride(from: start, through: end, by: 8) {
+                        if ((gp - start) & 0x3FFF8) == 0 && isCancelled() { break outerGenLoop }
                         probeGenericPtrPair(atRel: gp)
                     }
                 }

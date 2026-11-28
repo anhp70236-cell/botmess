@@ -154,8 +154,13 @@ public final class DumpCoordinator {
 
         let localMachO = tempDir.appendingPathComponent("target_macho")
         onProgress(DumpProgressUpdate(phase: .inspecting, progress: 0.12, message: "Giải nén streaming \(URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent) (\(formatSize(machoEntry.uncompressedSize)))..."))
+        var lastExtractPct = -5
         try reader.extractEntry(machoEntry, to: localMachO) { frac in
-            onProgress(DumpProgressUpdate(phase: .inspecting, progress: 0.12 + frac * 0.12, message: "Giải nén Mach-O: \(Int(frac * 100))%"))
+            let pct = Int(frac * 100)
+            if pct >= lastExtractPct + 5 || pct == 100 {
+                lastExtractPct = pct
+                onProgress(DumpProgressUpdate(phase: .inspecting, progress: 0.12 + frac * 0.12, message: "Giải nén Mach-O: \(pct)%"))
+            }
         }
         if isCancelled() { throw DumpCoordinatorError.cancelled }
 
@@ -169,47 +174,61 @@ public final class DumpCoordinator {
             }
         }
 
-        let nonBinaryExts: Set<String> = [
-            "plist", "nib", "png", "jpg", "jpeg", "webp", "gif", "car", "strings",
-            "mobileprovision", "json", "dat", "assets", "resource", "bank", "mp4",
-            "wav", "mp3", "ogg", "pak", "bundle", "txt", "xml", "html", "css", "js",
-            "ttf", "otf", "xcent", "entitlements", "metallib", "mom", "momd",
-            "lua", "luac", "unity3d", "ab", "prefab", "shader", "mat", "fbx",
-            "obj", "glb", "gltf", "zip", "gz", "bz2", "xz", "7z", "rar",
-            "sqlite", "db", "cer", "der", "pem", "p12", "svg", "pdf", "ico",
-            "bmp", "tga", "dds", "ktx", "pvr", "astc", "exr", "hdr", "m4a",
-            "aac", "flac", "mov", "avi", "webm", "h", "m", "mm", "swift",
-            "c", "cpp", "py", "sh", "md", "yaml", "yml", "ini", "cfg", "conf",
-            "log", "csv", "tsv", "bin", "raw", "idx", "map", "bplist", "storyboardc"
-        ]
+        onProgress(DumpProgressUpdate(phase: .inspecting, progress: 0.24, message: "Đang rà soát danh sách nhị phân Mach-O trong bundle..."))
+        let normPrimary = Self.normalizedZipPath(info.primaryMachOPath)
+        let normSecondary = info.secondaryMachOPath.map { Self.normalizedZipPath($0) }
+        let appRootPrefix: String = {
+            if let range = normPrimary.range(of: ".app/", options: .caseInsensitive) {
+                return String(normPrimary[..<range.upperBound])
+            }
+            return ""
+        }()
         let nonBinaryNames: Set<String> = ["pkginfo", "coderesources", "license", "readme", "notice", "authors", "copying"]
         let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xCAFEBABE, 0xBEBAFECA, 0xCAFEBABF, 0xBFBAFECA]
 
-        let extraBinaryEntries: [ZipEntry] = options.deepMachOScan ? reader.entries.filter { entry in
-            guard !entry.isDirectory, entry.uncompressedSize >= 4096 else { return false }
-            let np = Self.normalizedZipPath(entry.path)
-            if np == Self.normalizedZipPath(info.primaryMachOPath) { return false }
-            if let sp = info.secondaryMachOPath, np == Self.normalizedZipPath(sp) { return false }
-            guard np.range(of: #"(?:^|/)Payload/[^/]+\.app/"#, options: [.regularExpression, .caseInsensitive]) != nil else {
-                return false
+        var extraBinaryEntries: [ZipEntry] = []
+        if options.deepMachOScan && !appRootPrefix.isEmpty {
+            for entry in reader.entries {
+                if isCancelled() { throw DumpCoordinatorError.cancelled }
+                guard !entry.isDirectory, entry.uncompressedSize >= 4096 else { continue }
+                let np = Self.normalizedZipPath(entry.path)
+                if np == normPrimary || np == normSecondary { continue }
+                guard np.hasPrefix(appRootPrefix) else { continue }
+                let rel = String(np.dropFirst(appRootPrefix.count))
+                guard !rel.isEmpty else { continue }
+
+                let urlPath = URL(fileURLWithPath: rel)
+                let ext = urlPath.pathExtension.lowercased()
+                let fileName = urlPath.lastPathComponent
+                if nonBinaryNames.contains(fileName.lowercased()) { continue }
+
+                var isCandidate = false
+                if !rel.contains("/") {
+                    if ext.isEmpty { isCandidate = true }
+                } else if ext == "dylib" || ext == "so" {
+                    isCandidate = true
+                } else if rel.contains("Frameworks/") {
+                    let parent = urlPath.deletingLastPathComponent()
+                    if parent.pathExtension.lowercased() == "framework" && parent.deletingPathExtension().lastPathComponent == fileName {
+                        isCandidate = true
+                    }
+                } else if rel.contains("PlugIns/") {
+                    let parent = urlPath.deletingLastPathComponent()
+                    if parent.pathExtension.lowercased() == "appex" && parent.deletingPathExtension().lastPathComponent == fileName {
+                        isCandidate = true
+                    }
+                }
+                guard isCandidate, !SafetyGuard.isRealMoneyBlocked(np) else { continue }
+
+                if let prefix = reader.peekEntryPrefix(entry, maxBytes: 4), prefix.count >= 4 {
+                    let magic = UInt32(prefix[0]) | (UInt32(prefix[1]) << 8) | (UInt32(prefix[2]) << 16) | (UInt32(prefix[3]) << 24)
+                    let magicBE = (UInt32(prefix[0]) << 24) | (UInt32(prefix[1]) << 16) | (UInt32(prefix[2]) << 8) | UInt32(prefix[3])
+                    if machoMagics.contains(magic) || machoMagics.contains(magicBE) {
+                        extraBinaryEntries.append(entry)
+                    }
+                }
             }
-            guard !SafetyGuard.isRealMoneyBlocked(np) else { return false }
-            let lastName = URL(fileURLWithPath: np).lastPathComponent.lowercased()
-            if nonBinaryNames.contains(lastName) { return false }
-            let ext = URL(fileURLWithPath: np).pathExtension.lowercased()
-            if !ext.isEmpty && nonBinaryExts.contains(ext) { return false }
-
-            let isFwBin = np.range(of: #"/Frameworks/[^/]+\.framework/[^/]+$"#, options: [.regularExpression, .caseInsensitive]) != nil
-            let isDylibOrSo = ext == "dylib" || ext == "so"
-            let isPlugIn = np.range(of: #"/PlugIns/[^/]+\.appex/[^/]+$"#, options: [.regularExpression, .caseInsensitive]) != nil
-            let isExtensionless = ext.isEmpty
-            guard isFwBin || isDylibOrSo || isPlugIn || isExtensionless else { return false }
-
-            guard let prefix = reader.peekEntryPrefix(entry, maxBytes: 4), prefix.count >= 4 else { return false }
-            let magic = UInt32(prefix[0]) | (UInt32(prefix[1]) << 8) | (UInt32(prefix[2]) << 16) | (UInt32(prefix[3]) << 24)
-            let magicBE = (UInt32(prefix[0]) << 24) | (UInt32(prefix[1]) << 16) | (UInt32(prefix[2]) << 8) | UInt32(prefix[3])
-            return machoMagics.contains(magic) || machoMagics.contains(magicBE)
-        } : []
+        }
 
         var localMetadata: URL? = nil
         if let overrideMetadataURL = overrideMetadataURL {
@@ -346,14 +365,16 @@ public final class DumpCoordinator {
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
             defer { sem.signal(); group.leave() }
-            do {
-                let m = try MachOParser(url: machOURL, sourceName: URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent)
-                if options.deepMachOScan {
-                    m.runDeepNativeScan()
+            autoreleasepool {
+                do {
+                    let m = try MachOParser(url: machOURL, sourceName: URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent)
+                    if options.deepMachOScan {
+                        m.runDeepNativeScan(isCancelled: isCancelled)
+                    }
+                    lock.lock(); parsedMachO = m; lock.unlock()
+                } catch {
+                    lock.lock(); machoError = error; lock.unlock()
                 }
-                lock.lock(); parsedMachO = m; lock.unlock()
-            } catch {
-                lock.lock(); machoError = error; lock.unlock()
             }
         }
         group.wait()
@@ -397,7 +418,8 @@ public final class DumpCoordinator {
                 typeDefsCount: peek.totalTypes,
                 totalMethodsCount: peek.totalMethods,
                 metadataVersion: peek.version,
-                ctorPairsByImage: peek.ctorPairsByImage
+                ctorPairsByImage: peek.ctorPairsByImage,
+                isCancelled: isCancelled
             ) { msg in
                 onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.60, message: msg))
             }
@@ -405,7 +427,7 @@ public final class DumpCoordinator {
             if reg.codeGenModules.isEmpty && reg.legacyMethodRVAs.isEmpty,
                let secURL = secondaryMachOURL,
                let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent) {
-                if options.deepMachOScan { secMacho.runDeepNativeScan() }
+                if options.deepMachOScan { secMacho.runDeepNativeScan(isCancelled: isCancelled) }
                 let secReg = Il2CppRegistrationFinder.find(
                     in: secMacho,
                     imageNames: peek.imageNames,
@@ -413,7 +435,8 @@ public final class DumpCoordinator {
                     typeDefsCount: peek.totalTypes,
                     totalMethodsCount: peek.totalMethods,
                     metadataVersion: peek.version,
-                    ctorPairsByImage: peek.ctorPairsByImage
+                    ctorPairsByImage: peek.ctorPairsByImage,
+                    isCancelled: isCancelled
                 ) { msg in
                     onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.62, message: msg))
                 }
@@ -434,12 +457,11 @@ public final class DumpCoordinator {
                     if aHint != bHint { return aHint }
                     return a.uncompressedSize > b.uncompressedSize
                 }
-                for (cIdx, entry) in prioritized.enumerated() {
+                for (cIdx, entry) in prioritized.prefix(3).enumerated() {
                     if isCancelled() { throw DumpCoordinatorError.cancelled }
                     let candDest = tDir.appendingPathComponent("cand_il2cpp_\(cIdx)")
                     if (try? reader.extractEntry(entry, to: candDest, progress: nil)) != nil,
                        let candMacho = try? MachOParser(url: candDest, sourceName: URL(fileURLWithPath: entry.path).lastPathComponent) {
-                        if options.deepMachOScan { candMacho.runDeepNativeScan() }
                         let candReg = Il2CppRegistrationFinder.find(
                             in: candMacho,
                             imageNames: peek.imageNames,
@@ -447,11 +469,13 @@ public final class DumpCoordinator {
                             typeDefsCount: peek.totalTypes,
                             totalMethodsCount: peek.totalMethods,
                             metadataVersion: peek.version,
-                            ctorPairsByImage: peek.ctorPairsByImage
+                            ctorPairsByImage: peek.ctorPairsByImage,
+                            isCancelled: isCancelled
                         ) { msg in
                             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.63, message: msg))
                         }
                         if !candReg.codeGenModules.isEmpty || !candReg.legacyMethodRVAs.isEmpty {
+                            if options.deepMachOScan { candMacho.runDeepNativeScan(isCancelled: isCancelled) }
                             reg = candReg
                             macho = candMacho
                             promotedExtraPath = entry.path
@@ -462,14 +486,18 @@ public final class DumpCoordinator {
                 }
             }
 
+            if isCancelled() { throw DumpCoordinatorError.cancelled }
             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.65, message: "Giải mã toàn bộ Types, Fields, Properties, Events, Methods & Attributes..."))
-            fullMeta = try Il2CppMetadataParser.inspectAndParse(
-                url: metaURL,
-                registration: reg,
-                macho: macho,
-                options: options
-            ) { msg in
-                onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.72, message: msg))
+            fullMeta = try autoreleasepool {
+                try Il2CppMetadataParser.inspectAndParse(
+                    url: metaURL,
+                    registration: reg,
+                    macho: macho,
+                    options: options,
+                    isCancelled: isCancelled
+                ) { msg in
+                    onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.72, message: msg))
+                }
             }
         } else if metadataURL != nil {
             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.62, message: "Chuyển sang chế độ Mach-O Multi-Binary (Obj-C: \(macho.objcClasses.count), Swift: \(macho.swiftTypes.count), Exports: \(macho.exportedSymbols.count))..."))
@@ -479,21 +507,27 @@ public final class DumpCoordinator {
         var allNativeSnapshots: [NativeBinarySnapshot] = [macho.makeSnapshot()]
         if !secondaryConsumed, let secURL = secondaryMachOURL,
            let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent) {
-            if options.deepMachOScan { secMacho.runDeepNativeScan() }
+            if options.deepMachOScan { secMacho.runDeepNativeScan(isCancelled: isCancelled) }
             if !allNativeSnapshots.contains(where: { $0.sourceName == secMacho.sourceName }) {
                 allNativeSnapshots.append(secMacho.makeSnapshot())
             }
         }
         if options.deepMachOScan, let reader = extraMachOReader, let tDir = tempDir, !extraMachOEntries.isEmpty {
+            let totalExtra = extraMachOEntries.count
             for (idx, entry) in extraMachOEntries.enumerated() {
                 if entry.path == promotedExtraPath { continue }
                 if isCancelled() { throw DumpCoordinatorError.cancelled }
-                let tmpBin = tDir.appendingPathComponent("extra_bin_\(idx)")
-                defer { try? FileManager.default.removeItem(at: tmpBin) }
-                if (try? reader.extractEntry(entry, to: tmpBin, progress: nil)) != nil,
-                   let fwMacho = try? MachOParser(url: tmpBin, sourceName: URL(fileURLWithPath: entry.path).lastPathComponent) {
-                    fwMacho.runDeepNativeScan()
-                    allNativeSnapshots.append(fwMacho.makeSnapshot())
+                let binName = URL(fileURLWithPath: entry.path).lastPathComponent
+                let frac = Double(idx + 1) / Double(max(1, totalExtra))
+                onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.72 + frac * 0.04, message: "Quét binary phụ \(idx + 1)/\(totalExtra): \(binName)..."))
+                autoreleasepool {
+                    let tmpBin = tDir.appendingPathComponent("extra_bin_\(idx)")
+                    defer { try? FileManager.default.removeItem(at: tmpBin) }
+                    if (try? reader.extractEntry(entry, to: tmpBin, progress: nil)) != nil,
+                       let fwMacho = try? MachOParser(url: tmpBin, sourceName: binName) {
+                        fwMacho.runDeepNativeScan(isCancelled: isCancelled)
+                        allNativeSnapshots.append(fwMacho.makeSnapshot())
+                    }
                 }
             }
         }
@@ -522,18 +556,20 @@ public final class DumpCoordinator {
             genSem.wait(); genGroup.enter()
             DispatchQueue.global(qos: .userInitiated).async {
                 defer { genSem.signal(); genGroup.leave() }
-                do {
-                    try DumpCSGenerator.generate(
-                        to: outDir.appendingPathComponent("dump.cs"),
-                        images: fullMeta.images,
-                        types: fullMeta.types,
-                        macho: macho,
-                        snapshots: allNativeSnapshots,
-                        diagnostics: diagnostics,
-                        options: options
-                    )
-                } catch {
-                    lock.lock(); if genError == nil { genError = error }; lock.unlock()
+                autoreleasepool {
+                    do {
+                        try DumpCSGenerator.generate(
+                            to: outDir.appendingPathComponent("dump.cs"),
+                            images: fullMeta.images,
+                            types: fullMeta.types,
+                            macho: macho,
+                            snapshots: allNativeSnapshots,
+                            diagnostics: diagnostics,
+                            options: options
+                        )
+                    } catch {
+                        lock.lock(); if genError == nil { genError = error }; lock.unlock()
+                    }
                 }
             }
         }
@@ -542,61 +578,72 @@ public final class DumpCoordinator {
             genSem.wait(); genGroup.enter()
             DispatchQueue.global(qos: .userInitiated).async {
                 defer { genSem.signal(); genGroup.leave() }
-                do {
-                    try StructAndJSONGenerator.generateIl2CppHeader(
-                        to: outDir.appendingPathComponent("il2cpp.h"),
-                        types: fullMeta.types,
-                        macho: macho,
-                        snapshots: allNativeSnapshots
-                    )
-                    try StructAndJSONGenerator.generateScriptJSON(
-                        to: outDir.appendingPathComponent("script.json"),
-                        types: fullMeta.types,
-                        stringLiterals: fullMeta.stringLiterals,
-                        macho: macho,
-                        snapshots: allNativeSnapshots
-                    )
-                    try StructAndJSONGenerator.generateStringLiteralJSON(
-                        to: outDir.appendingPathComponent("stringliteral.json"),
-                        stringLiterals: fullMeta.stringLiterals
-                    )
-                } catch {
-                    lock.lock(); if genError == nil { genError = error }; lock.unlock()
+                autoreleasepool {
+                    do {
+                        try StructAndJSONGenerator.generateIl2CppHeader(
+                            to: outDir.appendingPathComponent("il2cpp.h"),
+                            types: fullMeta.types,
+                            macho: macho,
+                            snapshots: allNativeSnapshots
+                        )
+                        try StructAndJSONGenerator.generateScriptJSON(
+                            to: outDir.appendingPathComponent("script.json"),
+                            types: fullMeta.types,
+                            stringLiterals: fullMeta.stringLiterals,
+                            macho: macho,
+                            snapshots: allNativeSnapshots
+                        )
+                        try StructAndJSONGenerator.generateStringLiteralJSON(
+                            to: outDir.appendingPathComponent("stringliteral.json"),
+                            stringLiterals: fullMeta.stringLiterals
+                        )
+                    } catch {
+                        lock.lock(); if genError == nil { genError = error }; lock.unlock()
+                    }
                 }
-            }
-        }
-
-        try StructAndJSONGenerator.generateOffsetsSummary(
-            to: outDir.appendingPathComponent("offsets_summary.txt"),
-            images: fullMeta.images,
-            types: fullMeta.types,
-            macho: macho,
-            snapshots: allNativeSnapshots,
-            diagnostics: diagnostics
-        )
-        try StructAndJSONGenerator.generateNativeFunctionsReport(
-            to: outDir.appendingPathComponent("native_functions.txt"),
-            snapshots: allNativeSnapshots
-        )
-
-        if options.generateDummyDLLs && !fullMeta.images.isEmpty {
-            let dllDir = outDir.appendingPathComponent("DummyDll")
-            do {
-                dummyDllCount = try DummyDLLGenerator.generateAll(
-                    to: dllDir,
-                    images: fullMeta.images,
-                    types: fullMeta.types,
-                    options: options
-                ) { msg in
-                    onProgress(DumpProgressUpdate(phase: .generating, progress: 0.88, message: msg))
-                }
-            } catch {
-                lock.lock(); if genError == nil { genError = error }; lock.unlock()
             }
         }
 
         genGroup.wait()
         if let err = genError { throw err }
+        if isCancelled() { throw DumpCoordinatorError.cancelled }
+
+        onProgress(DumpProgressUpdate(phase: .generating, progress: 0.84, message: "Đang xuất offsets_summary.txt..."))
+        try autoreleasepool {
+            try StructAndJSONGenerator.generateOffsetsSummary(
+                to: outDir.appendingPathComponent("offsets_summary.txt"),
+                images: fullMeta.images,
+                types: fullMeta.types,
+                macho: macho,
+                snapshots: allNativeSnapshots,
+                diagnostics: diagnostics
+            )
+        }
+        if isCancelled() { throw DumpCoordinatorError.cancelled }
+
+        onProgress(DumpProgressUpdate(phase: .generating, progress: 0.87, message: "Đang xuất native_functions.txt..."))
+        try autoreleasepool {
+            try StructAndJSONGenerator.generateNativeFunctionsReport(
+                to: outDir.appendingPathComponent("native_functions.txt"),
+                snapshots: allNativeSnapshots
+            )
+        }
+        if isCancelled() { throw DumpCoordinatorError.cancelled }
+
+        if options.generateDummyDLLs && !fullMeta.images.isEmpty {
+            onProgress(DumpProgressUpdate(phase: .generating, progress: 0.89, message: "Đang dựng Dummy DLLs cho dnSpy/ILSpy..."))
+            let dllDir = outDir.appendingPathComponent("DummyDll")
+            dummyDllCount = try autoreleasepool {
+                try DummyDLLGenerator.generateAll(
+                    to: dllDir,
+                    images: fullMeta.images,
+                    types: fullMeta.types,
+                    options: options
+                ) { msg in
+                    onProgress(DumpProgressUpdate(phase: .generating, progress: 0.90, message: msg))
+                }
+            }
+        }
 
         let summaryURL = outDir.appendingPathComponent("report.txt")
         try writeSummaryReport(to: summaryURL, info: info, diagnostics: diagnostics, macho: macho, meta: fullMeta, dummyDllCount: dummyDllCount, snapshots: allNativeSnapshots)
@@ -720,8 +767,8 @@ public final class DumpCoordinator {
 
     private func buildExplorerRows(meta: ParsedMetadataResult, snapshots: [NativeBinarySnapshot]) -> [ExplorerRow] {
         var rows: [ExplorerRow] = []
-        let rowCap = 300_000
-        rows.reserveCapacity(min(80_000, meta.types.count * 4))
+        let rowCap = 50_000
+        rows.reserveCapacity(min(rowCap, meta.types.count * 4))
         var nextId = 1
 
         for t in meta.types {

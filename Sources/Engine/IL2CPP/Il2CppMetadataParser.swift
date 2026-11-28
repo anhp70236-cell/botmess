@@ -20,6 +20,7 @@ public enum Il2CppMetadataParser {
         registration: Il2CppRegistrationResult? = nil,
         macho: MachOParser? = nil,
         options: DumpOptions = .default,
+        isCancelled: () -> Bool = { false },
         log: (String) -> Void = { _ in }
     ) throws -> ParsedMetadataResult {
         let mapped = try MappedFile(url: url)
@@ -148,9 +149,8 @@ public enum Il2CppMetadataParser {
 
         func isGoodIdent(_ idx: UInt32) -> Bool {
             if idx == 0 || Int(idx) >= stringSize { return false }
-            if mapped.readUInt8(at: stringOff + Int(idx) - 1) != 0 { return false }
             let s = readMetaString(idx)
-            guard !s.isEmpty else { return false }
+            guard !s.isEmpty && s.utf8.count <= 256 else { return false }
             for u in s.unicodeScalars {
                 let v = u.value
                 if v < 0x20 || v == 0x7F || v == 0xFFFD { return false }
@@ -444,6 +444,7 @@ public enum Il2CppMetadataParser {
         var ctorPairsByImage: [String: [(typeDefIndex: Int, ridIndex: Int, globalIndex: Int)]] = [:]
 
         for ti in 0..<totalTypes {
+            if (ti & 0xFFF) == 0 && isCancelled() { break }
             let tp = typeDefsOff + ti * typeStride
             let name = readMetaString(mapped.readUInt32(at: tp))
             let ns = readMetaString(mapped.readUInt32(at: tp + 4))
@@ -583,6 +584,7 @@ public enum Il2CppMetadataParser {
         parsedTypes.reserveCapacity(totalTypes)
 
         for ti in 0..<totalTypes {
+            if (ti & 0xFFF) == 0 && isCancelled() { break }
             let tp = typeDefsOff + ti * typeStride
             let img = images[typeToImage[ti]]
             let typeName = rawTypeNames[ti]

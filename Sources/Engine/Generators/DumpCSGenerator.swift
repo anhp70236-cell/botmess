@@ -173,14 +173,14 @@ public enum DumpCSGenerator {
                             }
                         }
                         if options.writeMethodOffsets {
-                            let rvaStr = String(format: "0x%llX", m.rva)
-                            let offStr = String(format: "0x%llX", m.fileOffset)
-                            let vaStr = String(format: "0x%llX", m.va)
+                            let rvaStr = "0x" + String(m.rva, radix: 16, uppercase: true)
+                            let offStr = "0x" + String(m.fileOffset, radix: 16, uppercase: true)
+                            let vaStr = "0x" + String(m.va, radix: 16, uppercase: true)
                             let slotStr = m.slot != 0xFFFF ? " Slot: \(m.slot)" : ""
                             let semStr = m.arm64Semantics.isEmpty ? "" : " | \(m.arm64Semantics)"
                             try writer.writeLine("\t// RVA: \(rvaStr) Offset: \(offStr) VA: \(vaStr)\(slotStr)\(semStr)")
                             if m.genericInstRVAs.count > 1 {
-                                let genList = m.genericInstRVAs.map { String(format: "0x%llX", $0) }.joined(separator: ", ")
+                                let genList = m.genericInstRVAs.map { "0x" + String($0, radix: 16, uppercase: true) }.joined(separator: ", ")
                                 try writer.writeLine("\t// GenericInst RVAs (\(m.genericInstRVAs.count)): \(genList)")
                             }
                         }
@@ -228,7 +228,7 @@ public enum DumpCSGenerator {
                         try writer.writeLine("{")
                         if options.includeFields {
                             for iv in cls.ivars {
-                                let offStr = options.writeFieldOffsets ? String(format: " // 0x%X", iv.offset) : ""
+                                let offStr = options.writeFieldOffsets ? (" // 0x" + String(UInt32(bitPattern: iv.offset), radix: 16, uppercase: true)) : ""
                                 try writer.writeLine("\tprivate \(iv.typeEncoding.isEmpty ? "IntPtr" : iv.typeEncoding) \(iv.name);\(offStr)")
                             }
                         }
@@ -240,7 +240,7 @@ public enum DumpCSGenerator {
                         if options.includeMethods {
                             for m in cls.methods {
                                 if options.writeMethodOffsets {
-                                    try writer.writeLine(String(format: "\t// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX", m.rva, m.fileOffset, m.va))
+                                    try writer.writeLine("\t// RVA: 0x\(String(m.rva, radix: 16, uppercase: true)) Offset: 0x\(String(m.fileOffset, radix: 16, uppercase: true)) VA: 0x\(String(m.va, radix: 16, uppercase: true))")
                                 }
                                 let prefix = m.isClassMethod ? "static " : ""
                                 try writer.writeLine("\tpublic \(prefix)void \(m.name)() { } // \(m.types)")
@@ -273,21 +273,21 @@ public enum DumpCSGenerator {
                     if !bin.exportedSymbols.isEmpty {
                         try writer.writeLine("// --- DYLD Exports (\(bin.exportedSymbols.count)) ---")
                         for sym in bin.exportedSymbols {
-                            try writer.writeLine(String(format: "// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX | %@", sym.rva, sym.fileOffset, sym.va, sym.name))
+                            try writer.writeLine("// RVA: 0x\(String(sym.rva, radix: 16, uppercase: true)) Offset: 0x\(String(sym.fileOffset, radix: 16, uppercase: true)) VA: 0x\(String(sym.va, radix: 16, uppercase: true)) | \(sym.name)")
                         }
                         try writer.writeLine("")
                     }
                     if !bin.symtabSymbols.isEmpty {
                         try writer.writeLine("// --- Symtab Symbols (\(bin.symtabSymbols.count)) ---")
                         for sym in bin.symtabSymbols {
-                            try writer.writeLine(String(format: "// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX | %@", sym.rva, sym.fileOffset, sym.va, sym.name))
+                            try writer.writeLine("// RVA: 0x\(String(sym.rva, radix: 16, uppercase: true)) Offset: 0x\(String(sym.fileOffset, radix: 16, uppercase: true)) VA: 0x\(String(sym.va, radix: 16, uppercase: true)) | \(sym.name)")
                         }
                         try writer.writeLine("")
                     }
                     if !bin.xrefFunctions.isEmpty {
                         try writer.writeLine("// --- ARM64 String XRefs (\(bin.xrefFunctions.count)) ---")
                         for xr in bin.xrefFunctions {
-                            try writer.writeLine(String(format: "// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX | %@", xr.rva, xr.fileOffset, xr.va, xr.name))
+                            try writer.writeLine("// RVA: 0x\(String(xr.rva, radix: 16, uppercase: true)) Offset: 0x\(String(xr.fileOffset, radix: 16, uppercase: true)) VA: 0x\(String(xr.va, radix: 16, uppercase: true)) | \(xr.name)")
                         }
                         try writer.writeLine("")
                     }
@@ -300,7 +300,9 @@ public enum DumpCSGenerator {
                         try writer.writeLine("// --- Uncovered Function Starts (\(uncovered.count)) ---")
                         for rva in uncovered {
                             let va = bin.baseVM + rva
-                            try writer.writeLine(String(format: "// RVA: 0x%llX VA: 0x%llX | sub_%llX", rva, va, rva))
+                            let rHex = String(rva, radix: 16, uppercase: true)
+                            let vHex = String(va, radix: 16, uppercase: true)
+                            try writer.writeLine("// RVA: 0x\(rHex) VA: 0x\(vHex) | sub_\(rHex)")
                         }
                         try writer.writeLine("")
                     }

@@ -252,19 +252,21 @@ struct EngineTests {
         for (i, b) in Array("ChainedObjCClass\0".utf8).enumerated() { macho[0x1400 + i] = b }
         for (i, b) in Array("MultiStartClass\0".utf8).enumerated() { macho[0x1420 + i] = b }
 
-        // __objc_classlist at 0x2000: 2 entries rebased with format-2 (DYLD_CHAINED_PTR_64)
-        // encoded via DYLD_CHAINED_PTR_START_MULTI overflow chains
-        putU64(&macho, 0x2000, baseVM + 0x2100) // format 2 rebase: next=0, bind=0, target=baseVM+0x2100
-        putU64(&macho, 0x2008, baseVM + 0x2200) // format 2 rebase: next=0, bind=0, target=baseVM+0x2200
-        // Note: make upper bits differ from raw VM so ONLY chained fixups resolve Class1/Class2:
-        putU64(&macho, 0x2000, (baseVM + 0x2100) | (UInt64(1) << 44)) // reserved bits set; format 2 uses bits 0..35 + high8
-        putU64(&macho, 0x2008, (baseVM + 0x2200) | (UInt64(1) << 44))
+        // __DATA has a +0x2000 VM gap after __TEXT (vmAddr = baseVM + 0x4000, fileOffset = 0x2000)
+        // so segment_offset (0x4000) differs from fileOffset (0x2000), testing VM-to-file mapping!
+        let dataVM: UInt64 = baseVM + 0x4000
+        let linkeditVM: UInt64 = baseVM + 0x6000
 
-        // Class 1 at 0x2100 -> ro1 at 0x2140 -> name at 0x1400
-        putU64(&macho, 0x2100 + 32, baseVM + 0x2140)
+        // __objc_classlist at file 0x2000 (vm dataVM + 0x0000): 2 entries rebased with format-2 (DYLD_CHAINED_PTR_64)
+        // encoded via DYLD_CHAINED_PTR_START_MULTI overflow chains
+        putU64(&macho, 0x2000, (dataVM + 0x0100) | (UInt64(1) << 44)) // reserved bits set; format 2 uses bits 0..35 + high8
+        putU64(&macho, 0x2008, (dataVM + 0x0200) | (UInt64(1) << 44))
+
+        // Class 1 at file 0x2100 -> ro1 at file 0x2140 -> name at 0x1400
+        putU64(&macho, 0x2100 + 32, dataVM + 0x0140)
         putU64(&macho, 0x2140 + 24, baseVM + 0x1400)
-        // Class 2 at 0x2200 -> ro2 at 0x2240 -> name at 0x1420
-        putU64(&macho, 0x2200 + 32, baseVM + 0x2240)
+        // Class 2 at file 0x2200 -> ro2 at file 0x2240 -> name at 0x1420
+        putU64(&macho, 0x2200 + 32, dataVM + 0x0240)
         putU64(&macho, 0x2240 + 24, baseVM + 0x1420)
 
         // LC_DYLD_CHAINED_FIXUPS payload at 0x4000
@@ -278,7 +280,7 @@ struct EngineTests {
         putU32(&macho, 0x4030, 64)            // size
         putU16(&macho, 0x4034, 0x1000)        // page_size = 4096
         putU16(&macho, 0x4036, 2)             // DYLD_CHAINED_PTR_64
-        putU64(&macho, 0x4038, 0x2000)        // segment_offset = 0x2000
+        putU64(&macho, 0x4038, 0x4000)        // segment_offset = dataVM - baseVM = 0x4000 (not raw file offset 0x2000!)
         putU16(&macho, 0x4044, 2)             // page_count = 2
         putU16(&macho, 0x4046, 0x8002)        // page_start[0]: START_MULTI | ovIdx 2
         putU16(&macho, 0x4048, 0xFFFF)        // page_start[1]: START_NONE
@@ -319,15 +321,15 @@ struct EngineTests {
         c += 80
 
         putU32(&macho, c, 0x19); putU32(&macho, c + 4, segDataSz); writeFixed(&macho, c + 8, "__DATA")
-        putU64(&macho, c + 24, baseVM + 0x2000); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x2000); putU64(&macho, c + 48, 0x2000)
+        putU64(&macho, c + 24, dataVM); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x2000); putU64(&macho, c + 48, 0x2000)
         putU32(&macho, c + 56, 3); putU32(&macho, c + 60, 3); putU32(&macho, c + 64, 1)
         c += 72
         writeFixed(&macho, c, "__objc_classlist"); writeFixed(&macho, c + 16, "__DATA")
-        putU64(&macho, c + 32, baseVM + 0x2000); putU64(&macho, c + 40, 16); putU32(&macho, c + 48, 0x2000); putU32(&macho, c + 64, 0)
+        putU64(&macho, c + 32, dataVM); putU64(&macho, c + 40, 16); putU32(&macho, c + 48, 0x2000); putU32(&macho, c + 64, 0)
         c += 80
 
         putU32(&macho, c, 0x19); putU32(&macho, c + 4, segLinkSz); writeFixed(&macho, c + 8, "__LINKEDIT")
-        putU64(&macho, c + 24, baseVM + 0x4000); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x4000); putU64(&macho, c + 48, 0x2000)
+        putU64(&macho, c + 24, linkeditVM); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x4000); putU64(&macho, c + 48, 0x2000)
         putU32(&macho, c + 56, 1); putU32(&macho, c + 60, 1); putU32(&macho, c + 64, 0)
         c += 72
 
@@ -374,14 +376,17 @@ struct EngineTests {
         let appURL = tmp.appendingPathComponent("GameApp")
         let dylibURL = tmp.appendingPathComponent("HelperKit.dylib")
         let plistURL = tmp.appendingPathComponent("Info.plist")
+        let assetURL = tmp.appendingPathComponent("sharedassets0")
         try macho.write(to: appURL)
         try dylib.write(to: dylibURL)
         try plistData.write(to: plistURL)
+        try Data(repeating: 0x55, count: 8192).write(to: assetURL)
 
         let ipaURL = tmp.appendingPathComponent("NativeMulti.ipa")
         let zw = try StreamingZipWriter(destinationURL: ipaURL)
         try zw.addFile(at: plistURL, entryName: "Payload/GameApp.app/Info.plist")
         try zw.addFile(at: appURL, entryName: "Payload/GameApp.app/GameApp")
+        try zw.addFile(at: assetURL, entryName: "Payload/GameApp.app/Data/sharedassets0")
         try zw.addFile(at: dylibURL, entryName: "Payload/GameApp.app/Frameworks/HelperKit.dylib")
         try zw.finalize()
 
@@ -392,7 +397,10 @@ struct EngineTests {
         let dumpCS = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("dump.cs"), encoding: .utf8)
         let summaryText = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("offsets_summary.txt"), encoding: .utf8)
         let nativeText = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("native_functions.txt"), encoding: .utf8)
-        let scriptText = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("script.json"), encoding: .utf8)
+        let scriptURL = result.outputDirectoryURL.appendingPathComponent("script.json")
+        let scriptText = try String(contentsOf: scriptURL, encoding: .utf8)
+        let scriptJSON = try JSONSerialization.jsonObject(with: try Data(contentsOf: scriptURL)) as? [String: Any]
+        assertTrue(scriptJSON?["ScriptMethod"] != nil && scriptJSON?["Addresses"] != nil, "Streaming script.json must be valid JSON")
 
         assertTrue(dumpCS.contains("ChainedObjCClass"), "Format-2 chained pointer Obj-C class missing")
         assertTrue(dumpCS.contains("MultiStartClass"), "DYLD_CHAINED_PTR_START_MULTI Obj-C class missing")
@@ -426,7 +434,8 @@ struct EngineTests {
         let sNs = addStr("CoreGame")
         let sClass = addStr("ChiếnBinh_战士")
         let sField = addStr("power")
-        let sMethod = addStr("GenericAttack")
+        let sPrefixed = addStr("Prefix_GenericAttack")
+        let sMethod = sPrefixed + 7 // suffix-shared string where prev byte != 0!
 
         var images = Data(repeating: 0, count: 40)
         putU32(&images, 0, sAsm); putU32(&images, 8, 0); putU32(&images, 12, 1)
