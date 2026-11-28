@@ -20,6 +20,8 @@ final class DumpViewModel: ObservableObject {
     @Published var inputMode: InputMode = .ipa
     @Published var activeTab: Int = 0
     @Published var selectedIPAURL: URL?
+    @Published var overrideMetadataURL: URL?
+    @Published var localDocumentsIPAs: [URL] = []
     @Published var selectedMachOURL: URL?
     @Published var selectedMetadataURL: URL?
     @Published var inspectionInfo: IPAInspectionInfo?
@@ -51,10 +53,13 @@ final class DumpViewModel: ObservableObject {
     private let cancellation = CancellationFlag()
     private let optionsKey = "dip_options_v2"
 
-    var outputsRootURL: URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+    var documentsRootURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return docs.appendingPathComponent("IPADumperOutputs", isDirectory: true)
+    }
+
+    var outputsRootURL: URL {
+        documentsRootURL.appendingPathComponent("IPADumperOutputs", isDirectory: true)
     }
 
     init() {
@@ -71,6 +76,7 @@ final class DumpViewModel: ObservableObject {
             self.selectedTheme = .obsidianDark
         }
         loadSavedSessions()
+        refreshLocalDocumentsIPAs()
     }
 
     deinit {
@@ -86,21 +92,61 @@ final class DumpViewModel: ObservableObject {
     }
 
     private func acquireSecurityAccess(for url: URL) {
-        if url.startAccessingSecurityScopedResource() {
+        if !activeSecurityURLs.contains(url), url.startAccessingSecurityScopedResource() {
             activeSecurityURLs.append(url)
         }
     }
 
+    nonisolated static func withCoordinatedRead<T>(url: URL, _ body: (URL) throws -> T) throws -> T {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+        var coordError: NSError?
+        var innerResult: Result<T, Error>?
+        let coordinator = NSFileCoordinator()
+        coordinator.coordinate(readingItemAt: url, options: .withoutChanges, error: &coordError) { actualURL in
+            do {
+                innerResult = .success(try body(actualURL))
+            } catch {
+                innerResult = .failure(error)
+            }
+        }
+        if let res = innerResult {
+            return try res.get()
+        }
+        if FileManager.default.isReadableFile(atPath: url.path) {
+            return try body(url)
+        }
+        if let err = coordError {
+            throw err
+        }
+        return try body(url)
+    }
+
+    func refreshLocalDocumentsIPAs() {
+        let fm = FileManager.default
+        let items = (try? fm.contentsOfDirectory(at: documentsRootURL, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey])) ?? []
+        localDocumentsIPAs = items.filter { url in
+            let ext = url.pathExtension.lowercased()
+            return ext == "ipa" || ext == "tipa" || ext == "zip"
+        }.sorted { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
+    }
+
     func handleIncomingFileURL(_ url: URL) {
         acquireSecurityAccess(for: url)
+        activeTab = 0
         let ext = url.pathExtension.lowercased()
-        if ext == "ipa" || ext == "zip" {
+        if ext == "ipa" || ext == "tipa" || ext == "zip" {
             inputMode = .ipa
             setIPAFile(url)
-        } else if ext == "dat" {
-            inputMode = .standalone
-            selectedMetadataURL = url
-            appendLog("[Input] Đã chọn metadata: \(url.lastPathComponent)")
+        } else if ext == "dat" || url.lastPathComponent.lowercased().contains("global-metadata") {
+            if inputMode == .ipa {
+                setOverrideMetadataFile(url)
+            } else {
+                selectedMetadataURL = url
+                appendLog("[Input] Đã chọn metadata: \(url.lastPathComponent)")
+            }
         } else {
             inputMode = .standalone
             selectedMachOURL = url
@@ -118,7 +164,9 @@ final class DumpViewModel: ObservableObject {
 
         Task.detached(priority: .userInitiated) {
             do {
-                let info = try DumpCoordinator.inspectIPA(at: url)
+                let info = try Self.withCoordinatedRead(url: url) { actualURL in
+                    try DumpCoordinator.inspectIPA(at: actualURL)
+                }
                 await MainActor.run {
                     if info.fileSizeBytes > 10 * 1024 * 1024 * 1024 {
                         self.errorMessage = "Tệp IPA vượt quá giới hạn tối đa 10 GB."
@@ -137,6 +185,17 @@ final class DumpViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    func setOverrideMetadataFile(_ url: URL) {
+        acquireSecurityAccess(for: url)
+        overrideMetadataURL = url
+        errorMessage = nil
+        appendLog("[IPA] Đã gắn global-metadata.dat rời: \(url.lastPathComponent)")
+    }
+
+    func clearOverrideMetadata() {
+        overrideMetadataURL = nil
     }
 
     func setMachOFile(_ url: URL) {
@@ -166,6 +225,7 @@ final class DumpViewModel: ObservableObject {
 
         let mode = inputMode
         let ipaURL = selectedIPAURL
+        let overrideMetaURL = overrideMetadataURL
         let machoURL = selectedMachOURL
         let metaURL = selectedMetadataURL
         let opts = options
@@ -192,25 +252,56 @@ final class DumpViewModel: ObservableObject {
                     guard let ipa = ipaURL else {
                         throw DumpCoordinatorError.noMachOFound
                     }
-                    result = try coordinator.runIPA(
-                        ipaURL: ipa,
-                        outputsRootURL: rootURL,
-                        options: opts,
-                        isCancelled: checkCancelled,
-                        onProgress: emitProgress
-                    )
+                    result = try Self.withCoordinatedRead(url: ipa) { coordIPA in
+                        if let om = overrideMetaURL {
+                            return try Self.withCoordinatedRead(url: om) { coordMeta in
+                                try coordinator.runIPA(
+                                    ipaURL: coordIPA,
+                                    overrideMetadataURL: coordMeta,
+                                    outputsRootURL: rootURL,
+                                    options: opts,
+                                    isCancelled: checkCancelled,
+                                    onProgress: emitProgress
+                                )
+                            }
+                        } else {
+                            return try coordinator.runIPA(
+                                ipaURL: coordIPA,
+                                overrideMetadataURL: nil,
+                                outputsRootURL: rootURL,
+                                options: opts,
+                                isCancelled: checkCancelled,
+                                onProgress: emitProgress
+                            )
+                        }
+                    }
                 } else {
                     guard let m = machoURL else {
                         throw DumpCoordinatorError.noMachOFound
                     }
-                    result = try coordinator.runStandalone(
-                        machOURL: m,
-                        metadataURL: metaURL,
-                        outputsRootURL: rootURL,
-                        options: opts,
-                        isCancelled: checkCancelled,
-                        onProgress: emitProgress
-                    )
+                    result = try Self.withCoordinatedRead(url: m) { coordMachO in
+                        if let sm = metaURL {
+                            return try Self.withCoordinatedRead(url: sm) { coordMeta in
+                                try coordinator.runStandalone(
+                                    machOURL: coordMachO,
+                                    metadataURL: coordMeta,
+                                    outputsRootURL: rootURL,
+                                    options: opts,
+                                    isCancelled: checkCancelled,
+                                    onProgress: emitProgress
+                                )
+                            }
+                        } else {
+                            return try coordinator.runStandalone(
+                                machOURL: coordMachO,
+                                metadataURL: nil,
+                                outputsRootURL: rootURL,
+                                options: opts,
+                                isCancelled: checkCancelled,
+                                onProgress: emitProgress
+                            )
+                        }
+                    }
                 }
 
                 await MainActor.run {

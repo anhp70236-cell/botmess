@@ -20,6 +20,7 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.apple.itunes.ipa</string>
+				<string>com.botmess.tipa</string>
 				<string>public.zip-archive</string>
 			</array>
 		</dict>
@@ -85,6 +86,24 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>ipa</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>TrollStore App Package (.tipa)</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.botmess.tipa</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>tipa</string>
 				</array>
 			</dict>
 		</dict>

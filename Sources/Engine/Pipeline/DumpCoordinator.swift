@@ -23,10 +23,20 @@ public enum DumpCoordinatorError: Error, LocalizedError {
 public final class DumpCoordinator {
     public init() {}
 
+    private static func normalizedZipPath(_ raw: String) -> String {
+        var p = raw.replacingOccurrences(of: "\\", with: "/")
+        while p.hasPrefix("./") {
+            p.removeFirst(2)
+        }
+        return p
+    }
+
     public static func inspectIPA(at url: URL) throws -> IPAInspectionInfo {
         let reader = try StreamingZipReader(url: url)
         let entries = reader.entries
-        let infoPlistEntry = entries.first { $0.path.range(of: #"^Payload/[^/]+\.app/Info\.plist$"#, options: .regularExpression) != nil }
+        let infoPlistEntry = entries.first {
+            normalizedZipPath($0.path).range(of: #"(?:^|/)Payload/[^/]+\.app/Info\.plist$"#, options: [.regularExpression, .caseInsensitive]) != nil
+        }
 
         var appName = url.deletingPathExtension().lastPathComponent
         var bundleId = ""
@@ -60,15 +70,35 @@ public final class DumpCoordinator {
             throw DumpCoordinatorError.restrictedApp(safety.reason)
         }
 
-        let unityFw = entries.first { $0.path.range(of: #"^Payload/[^/]+\.app/Frameworks/UnityFramework\.framework/UnityFramework$"#, options: .regularExpression) != nil }
+        let unityFw = entries.first {
+            normalizedZipPath($0.path).range(of: #"(?:^|/)Payload/[^/]+\.app/Frameworks/UnityFramework\.framework/UnityFramework$"#, options: [.regularExpression, .caseInsensitive]) != nil
+        }
+
+        let ignoredExts: Set<String> = [
+            "plist", "nib", "png", "jpg", "jpeg", "webp", "gif", "car", "strings",
+            "mobileprovision", "json", "dat", "assets", "resource", "bank", "mp4",
+            "wav", "mp3", "ogg", "pak", "bundle", "txt", "xml", "html", "css", "js",
+            "ttf", "otf", "xcent", "entitlements", "metallib", "mom", "momd"
+        ]
+
         let appExec: ZipEntry?
         if !execName.isEmpty {
-            appExec = entries.first { $0.path.range(of: #"^Payload/[^/]+\.app/"# + NSRegularExpression.escapedPattern(for: execName) + "$", options: .regularExpression) != nil }
-        } else {
-            appExec = entries.first { e in
-                !e.isDirectory && e.path.range(of: #"^Payload/[^/]+\.app/[^/]+$"#, options: .regularExpression) != nil
-                    && !e.path.hasSuffix(".plist") && !e.path.hasSuffix(".nib") && !e.path.hasSuffix(".png") && !e.path.hasSuffix(".mobileprovision")
+            let escaped = NSRegularExpression.escapedPattern(for: execName)
+            appExec = entries.first {
+                normalizedZipPath($0.path).range(of: "(?:^|/)Payload/[^/]+\\.app/" + escaped + "$", options: [.regularExpression, .caseInsensitive]) != nil
             }
+        } else {
+            appExec = entries
+                .filter { e in
+                    let np = normalizedZipPath(e.path)
+                    guard !e.isDirectory,
+                          np.range(of: #"(?:^|/)Payload/[^/]+\.app/[^/]+$"#, options: [.regularExpression, .caseInsensitive]) != nil else {
+                        return false
+                    }
+                    let ext = URL(fileURLWithPath: np).pathExtension.lowercased()
+                    return ext.isEmpty || !ignoredExts.contains(ext)
+                }
+                .max { $0.uncompressedSize < $1.uncompressedSize }
         }
 
         let primaryMachO = unityFw ?? appExec
@@ -77,8 +107,11 @@ public final class DumpCoordinator {
         }
         let secondaryPath: String? = (unityFw != nil && appExec != nil && appExec?.path != unityFw?.path) ? appExec?.path : nil
 
-        let metaEntry = entries.first { $0.path.hasSuffix("Data/Managed/Metadata/global-metadata.dat") }
-            ?? entries.first { $0.path.lowercased().hasSuffix("global-metadata.dat") }
+        let metaEntry = entries.first {
+            normalizedZipPath($0.path).lowercased().hasSuffix("data/managed/metadata/global-metadata.dat")
+        } ?? entries.first {
+            normalizedZipPath($0.path).lowercased().hasSuffix("global-metadata.dat")
+        }
 
         return IPAInspectionInfo(
             fileName: url.lastPathComponent,
@@ -98,6 +131,7 @@ public final class DumpCoordinator {
 
     public func runIPA(
         ipaURL: URL,
+        overrideMetadataURL: URL? = nil,
         outputsRootURL: URL,
         options: DumpOptions,
         isCancelled: () -> Bool = { false },
@@ -136,8 +170,11 @@ public final class DumpCoordinator {
         }
 
         var localMetadata: URL? = nil
-        if let metaPath = info.metadataPath,
-           let metaEntry = reader.entries.first(where: { $0.path == metaPath }) {
+        if let overrideMetadataURL = overrideMetadataURL {
+            localMetadata = overrideMetadataURL
+            onProgress(DumpProgressUpdate(phase: .inspecting, progress: 0.25, message: "[Metadata] Đang dùng tệp global-metadata.dat rời do người dùng gắn kèm."))
+        } else if let metaPath = info.metadataPath,
+                  let metaEntry = reader.entries.first(where: { $0.path == metaPath }) {
             let metaDest = tempDir.appendingPathComponent("global-metadata.dat")
             onProgress(DumpProgressUpdate(phase: .inspecting, progress: 0.25, message: "Giải nén streaming global-metadata.dat (\(formatSize(metaEntry.uncompressedSize)))..."))
             try reader.extractEntry(metaEntry, to: metaDest, progress: nil)

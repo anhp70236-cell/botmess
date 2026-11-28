@@ -8,6 +8,7 @@ struct EngineTests {
         try testStreamingZipRoundTrip()
         try testFullIL2CPPAndMachOPipeline()
         try testEncryptedMetadataFallback()
+        try testPrefixedPathAndMetadataOverride()
         print("ALL ENGINE TESTS PASSED!")
     }
 
@@ -177,6 +178,50 @@ struct EngineTests {
         let report = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("report.txt"), encoding: .utf8)
         assertTrue(report.contains("Protected/Encrypted"), "report.txt must note protected metadata")
         print("[PASS] Encrypted Metadata Detection + Mach-O Fallback")
+    }
+
+    static func testPrefixedPathAndMetadataOverride() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("prefixed_test_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let (plainMetaData, machoData, plistData) = buildSyntheticIL2CPPAssets()
+        let plainMetaURL = tmp.appendingPathComponent("plain_global-metadata.dat")
+        let encMetaURL = tmp.appendingPathComponent("enc_global-metadata.dat")
+        let machoURL = tmp.appendingPathComponent("UnityFramework")
+        let plistURL = tmp.appendingPathComponent("Info.plist")
+
+        var encBytes = [UInt8](repeating: 0xAA, count: 4096)
+        for i in 0..<encBytes.count { encBytes[i] = UInt8((i * 73 + 19) & 0xFF) }
+
+        try plainMetaData.write(to: plainMetaURL)
+        try Data(encBytes).write(to: encMetaURL)
+        try machoData.write(to: machoURL)
+        try plistData.write(to: plistURL)
+
+        let ipaURL = tmp.appendingPathComponent("WrappedHero.tipa")
+        let zw = try StreamingZipWriter(destinationURL: ipaURL)
+        try zw.addFile(at: plistURL, entryName: "./Payload/WrappedApp.app/Info.plist")
+        try zw.addFile(at: machoURL, entryName: "./Payload/WrappedApp.app/Frameworks/UnityFramework.framework/UnityFramework")
+        try zw.addFile(at: encMetaURL, entryName: "./Payload/WrappedApp.app/Data/Managed/Metadata/global-metadata.dat")
+        try zw.finalize()
+
+        let inspected = try DumpCoordinator.inspectIPA(at: ipaURL)
+        assertTrue(inspected.appName == "OfflineHero", "Should parse Info.plist inside ./Payload/")
+        assertTrue(inspected.metadataPath != nil, "Should find metadata inside ./Payload/")
+
+        let result = try DumpCoordinator().runIPA(
+            ipaURL: ipaURL,
+            overrideMetadataURL: plainMetaURL,
+            outputsRootURL: tmp.appendingPathComponent("out"),
+            options: .default
+        ) { _ in }
+
+        assertTrue(result.session.diagnostics.metadataStatus.isValid, "Override metadata should yield valid IL2CPP status")
+        let dumpCS = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("dump.cs"), encoding: .utf8)
+        assertTrue(dumpCS.contains("class PlayerStats<T>"), "Override dump.cs missing PlayerStats<T>")
+        assertTrue(!dumpCS.contains("IAPManager"), "Override dump.cs leaked IAPManager")
+        print("[PASS] Prefixed ./Payload/ IPA + External Metadata Override")
     }
 
     static func validateECMA335DLL(at url: URL) throws {

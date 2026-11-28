@@ -1,24 +1,18 @@
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 struct AnalyzerView: View {
+    enum PickerKind: Int, Identifiable {
+        case ipa, overrideMetadata, macho, metadata
+        var id: Int { rawValue }
+    }
+
     @EnvironmentObject var vm: DumpViewModel
-    @State private var showIPAPicker = false
-    @State private var showMachOPicker = false
-    @State private var showMetaPicker = false
+    @State private var activePicker: PickerKind?
     @State private var showOptionsSheet = false
     @State private var showOptionsDetails = false
     @State private var showLogs = false
     @State private var quickShareZipURL: URL?
-
-    private var ipaContentTypes: [UTType] {
-        var types: [UTType] = [.zip, .data]
-        if let ipa = UTType(filenameExtension: "ipa") {
-            types.insert(ipa, at: 0)
-        }
-        return types
-    }
 
     private var enabledOptionCount: Int {
         let flags = [
@@ -82,25 +76,39 @@ struct AnalyzerView: View {
                 OptionsSheetView()
                     .environmentObject(vm)
             }
+            .sheet(item: $activePicker) { kind in
+                DocumentPickerSheet(
+                    onPick: { url in
+                        activePicker = nil
+                        switch kind {
+                        case .ipa:
+                            vm.setIPAFile(url)
+                        case .overrideMetadata:
+                            vm.setOverrideMetadataFile(url)
+                        case .macho:
+                            vm.setMachOFile(url)
+                        case .metadata:
+                            vm.setMetadataFile(url)
+                        }
+                    },
+                    onCancel: {
+                        activePicker = nil
+                    }
+                )
+            }
             .sheet(item: Binding(
                 get: { quickShareZipURL.map { AnalyzerShareURL(url: $0) } },
                 set: { quickShareZipURL = $0?.url }
             )) { wrapper in
                 AnalyzerActivitySheet(activityItems: [wrapper.url])
             }
-            .fileImporter(isPresented: $showIPAPicker, allowedContentTypes: ipaContentTypes) { res in
-                if case let .success(url) = res { vm.setIPAFile(url) }
-            }
-            .fileImporter(isPresented: $showMachOPicker, allowedContentTypes: [.data, .item]) { res in
-                if case let .success(url) = res { vm.setMachOFile(url) }
-            }
-            .fileImporter(isPresented: $showMetaPicker, allowedContentTypes: [.data, .item]) { res in
-                if case let .success(url) = res { vm.setMetadataFile(url) }
-            }
             .onChange(of: vm.isRunning) { running in
                 if running {
                     showLogs = true
                 }
+            }
+            .onAppear {
+                vm.refreshLocalDocumentsIPAs()
             }
         }
         .navigationViewStyle(.stack)
@@ -141,18 +149,18 @@ struct AnalyzerView: View {
 
             if vm.inputMode == .ipa {
                 Button {
-                    showIPAPicker = true
+                    activePicker = .ipa
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "doc.zipper")
                             .font(.title2)
                             .foregroundColor(theme.accent)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(vm.selectedIPAURL?.lastPathComponent ?? "Chọn tệp .IPA (tối đa 10 GB)")
+                            Text(vm.selectedIPAURL?.lastPathComponent ?? "Chọn tệp .IPA / .TIPA (tối đa 10 GB)")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(theme.primaryText)
                                 .lineLimit(1)
-                            Text("Đọc trực tiếp qua ZIP64 streaming, không tràn RAM")
+                            Text("Mở trực tiếp từ Tệp / iCloud / Share Sheet")
                                 .font(.caption)
                                 .foregroundColor(theme.secondaryText)
                         }
@@ -164,10 +172,75 @@ struct AnalyzerView: View {
                     .background(theme.elevatedBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
+
+                // Optional external plaintext global-metadata.dat override
+                HStack(spacing: 8) {
+                    Button {
+                        activePicker = .overrideMetadata
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "doc.badge.plus")
+                                .foregroundColor(theme.accent)
+                            Text(vm.overrideMetadataURL?.lastPathComponent ?? "Gắn global-metadata.dat rời (tuỳ chọn)")
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(vm.overrideMetadataURL != nil ? theme.primaryText : theme.secondaryText)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                        .padding(10)
+                        .background(theme.elevatedBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    if vm.overrideMetadataURL != nil {
+                        Button {
+                            vm.clearOverrideMetadata()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(theme.secondaryText)
+                        }
+                    }
+                }
+
+                if !vm.localDocumentsIPAs.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("IPA trong thư mục Tệp của app")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(theme.secondaryText)
+                            Spacer()
+                            Button {
+                                vm.refreshLocalDocumentsIPAs()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.caption)
+                                    .foregroundColor(theme.accent)
+                            }
+                        }
+                        ForEach(vm.localDocumentsIPAs, id: \.self) { url in
+                            Button {
+                                vm.setIPAFile(url)
+                            } label: {
+                                HStack {
+                                    Image(systemName: vm.selectedIPAURL == url ? "checkmark.circle.fill" : "doc.zipper")
+                                        .foregroundColor(vm.selectedIPAURL == url ? theme.success : theme.accent)
+                                    Text(url.lastPathComponent)
+                                        .font(.caption.weight(.medium))
+                                        .foregroundColor(theme.primaryText)
+                                        .lineLimit(1)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(theme.elevatedBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                        }
+                    }
+                }
             } else {
                 VStack(spacing: 8) {
                     Button {
-                        showMachOPicker = true
+                        activePicker = .macho
                     } label: {
                         fileRowLabel(
                             icon: "terminal.fill",
@@ -177,7 +250,7 @@ struct AnalyzerView: View {
                         )
                     }
                     Button {
-                        showMetaPicker = true
+                        activePicker = .metadata
                     } label: {
                         fileRowLabel(
                             icon: "doc.text.magnifyingglass",
@@ -232,7 +305,11 @@ struct AnalyzerView: View {
                 .foregroundColor(theme.secondaryText)
             HStack(spacing: 6) {
                 BadgeChip(text: URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent, color: theme.accent)
-                BadgeChip(text: info.metadataPath != nil ? "Metadata OK" : "Mach-O Only", color: info.metadataPath != nil ? theme.success : theme.warning)
+                if vm.overrideMetadataURL != nil {
+                    BadgeChip(text: "Metadata rời", color: theme.success)
+                } else {
+                    BadgeChip(text: info.metadataPath != nil ? "Metadata OK" : "Mach-O Only", color: info.metadataPath != nil ? theme.success : theme.warning)
+                }
             }
         }
         .dipCard(theme)
