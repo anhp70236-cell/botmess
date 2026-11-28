@@ -401,15 +401,18 @@ struct EngineTests {
         putU64(&macho, 0x2120, baseVM + 0x2100)
 
         putU32(&macho, 0x2140, 0x18)
+        putU32(&macho, 0x2148, 0x0)
+        putU32(&macho, 0x214C, 0x0)
         putU64(&macho, 0x2150, baseVM + 0x2140)
-        putU32(&macho, 0x2170, 0x20)
+        putU64(&macho, 0x2160, baseVM + 0x2148)
+        putU32(&macho, 0x2180, 0x20)
 
         putU64(&macho, 0x21E0, 1)
         putU64(&macho, 0x21E8, baseVM + 0x2120)
         putU64(&macho, 0x2200, 5)
         putU64(&macho, 0x2208, baseVM + 0x2150)
         putU64(&macho, 0x2210, 5)
-        putU64(&macho, 0x2218, baseVM + 0x2170)
+        putU64(&macho, 0x2218, baseVM + 0x2180)
 
         let segTextCmdSize: UInt32 = 72 + 2 * 80
         let segDataCmdSize: UInt32 = 72 + 1 * 80

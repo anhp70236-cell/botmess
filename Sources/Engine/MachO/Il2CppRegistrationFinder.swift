@@ -125,12 +125,10 @@ public enum Il2CppRegistrationFinder {
                         let v = macho.readSliceInt32(arrOff)
                         if v >= 0 && v <= 0x40000 {
                             hits += 1
-                            if hits >= 2 { pointerMode = true; break }
+                            pointerMode = true
+                            break
                         }
                     }
-                }
-                if !pointerMode && tested > 0 && hits >= min(2, tested) {
-                    pointerMode = true
                 }
             }
 
