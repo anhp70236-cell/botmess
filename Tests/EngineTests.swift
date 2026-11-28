@@ -11,6 +11,7 @@ struct EngineTests {
         try testPrefixedPathAndMetadataOverride()
         try testChainedFixupsAndDyldInfoOnlyAndMultiBinary()
         try testIL2CPPv24CodeGenModulesAndGenericMethodsAndUnicode()
+        try testUnityFrameworkBaseVMZeroAndCFString()
         print("ALL ENGINE TESTS PASSED!")
     }
 
@@ -853,6 +854,164 @@ struct EngineTests {
         let plistData = try! PropertyListSerialization.data(fromPropertyList: plistDict, format: .xml, options: 0)
 
         return (meta, macho, plistData)
+    }
+
+    static func testUnityFrameworkBaseVMZeroAndCFString() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("unityfw_zero_vm_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        var strBlob = Data([0])
+        var strOffsets: [String: UInt32] = [:]
+        func addStr(_ s: String) -> UInt32 {
+            if let v = strOffsets[s] { return v }
+            let off = UInt32(strBlob.count)
+            strBlob.append(contentsOf: s.utf8)
+            strBlob.append(0)
+            strOffsets[s] = off
+            return off
+        }
+
+        let sAsm0 = addStr("AbstractMod.dll")
+        let sAsm1 = addStr("GameLogic.dll")
+        let sNs = addStr("Battle")
+        let sType0 = addStr("IAbstractActor")
+        let sType1 = addStr("HeroController")
+        let sMeth = addStr("UpdateHero")
+
+        // Images (40 bytes * 2): AbstractMod.dll (typeStart=0, cnt=1) + GameLogic.dll (typeStart=1, cnt=1)
+        var images = Data(repeating: 0, count: 80)
+        putU32(&images, 0, sAsm0); putU32(&images, 8, 0); putU32(&images, 12, 1)
+        putU32(&images, 16, 0xFFFF_FFFF); putU32(&images, 20, 0x2000_0001)
+        putU32(&images, 40, sAsm1); putU32(&images, 48, 1); putU32(&images, 52, 1)
+        putU32(&images, 56, 0xFFFF_FFFF); putU32(&images, 60, 0x2000_0002)
+
+        // TypeDefs (88 * 2): [0] has 0 methods; [1] has methodStart=0, count=1
+        var typeDefs = Data(repeating: 0, count: 88 * 2)
+        putU32(&typeDefs, 0, sType0); putU32(&typeDefs, 4, sNs)
+        putU32(&typeDefs, 12, 0xFFFF_FFFF); putU32(&typeDefs, 16, 0xFFFF_FFFF)
+        putU32(&typeDefs, 24, 0xFFFF_FFFF); putU32(&typeDefs, 28, 0x0000_0021) // interface
+        putU32(&typeDefs, 32, 0xFFFF_FFFF); putU32(&typeDefs, 36, 0xFFFF_FFFF)
+        putU32(&typeDefs, 40, 0xFFFF_FFFF); putU32(&typeDefs, 44, 0xFFFF_FFFF)
+        putU32(&typeDefs, 84, 0x0200_0002)
+
+        putU32(&typeDefs, 88 + 0, sType1); putU32(&typeDefs, 88 + 4, sNs)
+        putU32(&typeDefs, 88 + 12, 0xFFFF_FFFF); putU32(&typeDefs, 88 + 16, 0xFFFF_FFFF)
+        putU32(&typeDefs, 88 + 24, 0xFFFF_FFFF); putU32(&typeDefs, 88 + 28, 0x0010_0001)
+        putU32(&typeDefs, 88 + 32, 0xFFFF_FFFF); putU32(&typeDefs, 88 + 36, 0)
+        putU32(&typeDefs, 88 + 40, 0xFFFF_FFFF); putU32(&typeDefs, 88 + 44, 0xFFFF_FFFF)
+        putU16(&typeDefs, 88 + 64, 1); putU32(&typeDefs, 88 + 84, 0x0200_0003)
+
+        var methods = Data(repeating: 0, count: 32)
+        putU32(&methods, 0, sMeth); putU32(&methods, 4, 1); putU32(&methods, 8, 0)
+        putU32(&methods, 12, 0xFFFF_FFFF); putU32(&methods, 16, 0xFFFF_FFFF)
+        putU32(&methods, 20, 0x0600_0001); putU16(&methods, 24, 0x0086); putU16(&methods, 28, 0xFFFF)
+
+        var meta = Data(repeating: 0, count: 288)
+        func appendSec(_ blob: Data, offHdr: Int, szHdr: Int) {
+            let off = UInt32(meta.count); let sz = UInt32(blob.count)
+            meta.append(blob); while meta.count % 4 != 0 { meta.append(0) }
+            putU32(&meta, offHdr, off); putU32(&meta, szHdr, sz)
+        }
+        putU32(&meta, 0, 0xFAB1_1BAF); putU32(&meta, 4, 29)
+        appendSec(strBlob, offHdr: 24, szHdr: 28)
+        appendSec(methods, offHdr: 48, szHdr: 52)
+        appendSec(typeDefs, offHdr: 160, szHdr: 164)
+        appendSec(images, offHdr: 168, szHdr: 172)
+
+        // UnityFramework MH_DYLIB with baseVM = 0!
+        var macho = Data(repeating: 0, count: 0x4000)
+        // __text at 0x1000: ADRP X0, page(0x2300) (=0x2000 -> imm21 = +1 page -> 0x90000000 | (1 << 29) = 0xB0000000),
+        // ADD X0, X0, #0x300 (0x910C0000) -> references CFString at 0x2300! Then RET (0xD65F03C0)
+        putU32(&macho, 0x1000, 0xB000_0000) // ADRP X0, #0x1000 (0x1000 + 0x1000 = 0x2000)
+        putU32(&macho, 0x1004, 0x910C_0000) // ADD X0, X0, #0x300 -> 0x2300 (__cfstring[0])
+        putU32(&macho, 0x1008, 0xD65F_03C0) // RET
+
+        for (i, b) in Array("AbstractMod.dll\0".utf8).enumerated() { macho[0x1200 + i] = b }
+        for (i, b) in Array("GameLogic.dll\0".utf8).enumerated() { macho[0x1220 + i] = b }
+        for (i, b) in Array("BossSpawnedCFString\0".utf8).enumerated() { macho[0x1240 + i] = b }
+
+        // Put small non-pointer integer values 1 and 2 in __data (must decode as 0 on baseVM = 0!)
+        putU64(&macho, 0x2000, 1)
+        putU64(&macho, 0x2008, 2)
+
+        // Module 0 ("AbstractMod.dll"): 4 NULL method pointers at 0x2020 (tests abstract-module acceptance!)
+        // 0x2020..0x203F are all 0
+        // Module 1 ("GameLogic.dll"): 1 concrete method pointer -> 0x1000 at 0x2040
+        putU64(&macho, 0x2040, 0x1000)
+
+        // CodeGenModule 0 @ 0x2060: name=0x1200, mCnt=4, ptrs=0x2020
+        putU64(&macho, 0x2060, 0x1200); putU64(&macho, 0x2068, 4); putU64(&macho, 0x2070, 0x2020)
+        // CodeGenModule 1 @ 0x2080: name=0x1220, mCnt=1, ptrs=0x2040
+        putU64(&macho, 0x2080, 0x1220); putU64(&macho, 0x2088, 1); putU64(&macho, 0x2090, 0x2040)
+        // CodeGenModules* array @ 0x20A0
+        putU64(&macho, 0x20A0, 0x2060); putU64(&macho, 0x20A8, 0x2080)
+        // CodeRegistration.codeGenModulesCount = 2, ptr = 0x20A0 @ 0x20B0
+        putU64(&macho, 0x20B0, 2); putU64(&macho, 0x20B8, 0x20A0)
+
+        // MetaReg @ 0x2100: fieldOffsetsCount=2 @ 0x2100, fieldOffsetsTable=0x2120, tdSizesCnt=2, tdSizes=0x2130
+        putU64(&macho, 0x2100, 2); putU64(&macho, 0x2108, 0x2120)
+        putU64(&macho, 0x2110, 2); putU64(&macho, 0x2118, 0x2130)
+        putU32(&macho, 0x2120, 0x10)
+        putU32(&macho, 0x2130, 0x20)
+
+        // __cfstring entry (32 bytes) @ 0x2300: +16 cstring ptr -> 0x1240 ("BossSpawnedCFString")
+        putU64(&macho, 0x2300 + 16, 0x1240)
+
+        let segTextSz: UInt32 = 72 + 2 * 80
+        let segDataSz: UInt32 = 72 + 2 * 80
+        putU32(&macho, 0, 0xFEED_FACF); putU32(&macho, 4, 0x0100_000C)
+        putU32(&macho, 12, 6); putU32(&macho, 16, 2); putU32(&macho, 20, segTextSz + segDataSz)
+        var c = 32
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segTextSz); writeFixed(&macho, c + 8, "__TEXT")
+        putU64(&macho, c + 24, 0); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0); putU64(&macho, c + 48, 0x2000)
+        putU32(&macho, c + 56, 5); putU32(&macho, c + 60, 5); putU32(&macho, c + 64, 2)
+        c += 72
+        writeFixed(&macho, c, "__text"); writeFixed(&macho, c + 16, "__TEXT")
+        putU64(&macho, c + 32, 0x1000); putU64(&macho, c + 40, 0x200); putU32(&macho, c + 48, 0x1000); putU32(&macho, c + 64, 0x8000_0400)
+        c += 80
+        writeFixed(&macho, c, "__cstring"); writeFixed(&macho, c + 16, "__TEXT")
+        putU64(&macho, c + 32, 0x1200); putU64(&macho, c + 40, 0x200); putU32(&macho, c + 48, 0x1200); putU32(&macho, c + 64, 0x02)
+        c += 80
+
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segDataSz); writeFixed(&macho, c + 8, "__DATA")
+        putU64(&macho, c + 24, 0x2000); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x2000); putU64(&macho, c + 48, 0x2000)
+        putU32(&macho, c + 56, 3); putU32(&macho, c + 60, 3); putU32(&macho, c + 64, 2)
+        c += 72
+        writeFixed(&macho, c, "__data"); writeFixed(&macho, c + 16, "__DATA")
+        putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x300); putU32(&macho, c + 48, 0x2000); putU32(&macho, c + 64, 0)
+        c += 80
+        writeFixed(&macho, c, "__cfstring"); writeFixed(&macho, c + 16, "__DATA")
+        putU64(&macho, c + 32, 0x2300); putU64(&macho, c + 40, 32); putU32(&macho, c + 48, 0x2300); putU32(&macho, c + 64, 0)
+
+        let plistDict: [String: Any] = ["CFBundleDisplayName": "ZeroVMUnity", "CFBundleIdentifier": "com.indie.zerovm", "CFBundleExecutable": "ZeroVMUnity"]
+        let plistData = try PropertyListSerialization.data(fromPropertyList: plistDict, format: .xml, options: 0)
+
+        let mURL = tmp.appendingPathComponent("global-metadata.dat")
+        let fwURL = tmp.appendingPathComponent("UnityFramework")
+        let pURL = tmp.appendingPathComponent("Info.plist")
+        try meta.write(to: mURL); try macho.write(to: fwURL); try plistData.write(to: pURL)
+
+        let parsedMachO = try MachOParser(url: fwURL, sourceName: "UnityFramework")
+        assertTrue(parsedMachO.baseVM == 0, "Expected UnityFramework dylib baseVM == 0")
+        assertTrue(parsedMachO.vmToSliceRelOffset(0) == nil, "vmToSliceRelOffset(0) must return nil, never Mach-O header")
+        assertTrue(parsedMachO.decodePointer(atSliceRelOffset: 0x2000) == 0, "Small int 1 must NOT decode as pointer on baseVM==0")
+        assertTrue(parsedMachO.decodePointer(atSliceRelOffset: 0x20B8) == 0x20A0, "Valid pointer 0x20A0 must decode on baseVM==0")
+
+        let ipaURL = tmp.appendingPathComponent("ZeroVMUnity.ipa")
+        let zw = try StreamingZipWriter(destinationURL: ipaURL)
+        try zw.addFile(at: pURL, entryName: "Payload/ZeroVMUnity.app/Info.plist")
+        try zw.addFile(at: fwURL, entryName: "Payload/ZeroVMUnity.app/Frameworks/UnityFramework.framework/UnityFramework")
+        try zw.addFile(at: mURL, entryName: "Payload/ZeroVMUnity.app/Data/Managed/Metadata/global-metadata.dat")
+        try zw.finalize()
+
+        let res = try DumpCoordinator().runIPA(ipaURL: ipaURL, outputsRootURL: tmp.appendingPathComponent("out"), options: .default) { _ in }
+        let dumpCS = try String(contentsOf: res.outputDirectoryURL.appendingPathComponent("dump.cs"), encoding: .utf8)
+        let nativeText = try String(contentsOf: res.outputDirectoryURL.appendingPathComponent("native_functions.txt"), encoding: .utf8)
+
+        assertTrue(dumpCS.contains("UpdateHero") && dumpCS.contains("RVA: 0x1000"), "Module 1 method RVA 0x1000 must survive Module 0 having all-NULL abstract pointers")
+        assertTrue(nativeText.contains("BossSpawnedCFString"), "ARM64 XRef to __cfstring entry missing")
+        print("[PASS] UnityFramework baseVM==0 + Abstract Module + __cfstring XRef")
     }
 
     static func readU32(_ d: Data, _ o: Int) -> UInt32 {

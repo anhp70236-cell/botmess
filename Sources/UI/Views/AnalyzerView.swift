@@ -35,7 +35,18 @@ struct AnalyzerView: View {
                     VStack(spacing: 14) {
                         headerHero(theme)
                         inputSelectorCard(theme)
-                        if let info = vm.inspectionInfo {
+                        if vm.isInspecting {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                    .tint(theme.accent)
+                                Text(vm.statusMessage)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundColor(theme.primaryText)
+                                    .lineLimit(2)
+                                Spacer()
+                            }
+                            .dipCard(theme)
+                        } else if let info = vm.inspectionInfo {
                             ipaInfoCard(info, theme: theme)
                         }
                         optionsDisclosureCard(theme)
@@ -391,7 +402,7 @@ struct AnalyzerView: View {
     }
 
     private func actionAndProgressCard(_ theme: AppThemeStyle) -> some View {
-        let canStart = !vm.isRunning && ((vm.inputMode == .ipa && vm.selectedIPAURL != nil) || (vm.inputMode == .standalone && vm.selectedMachOURL != nil))
+        let canStart = !vm.isRunning && !vm.isInspecting && ((vm.inputMode == .ipa && vm.selectedIPAURL != nil) || (vm.inputMode == .standalone && vm.selectedMachOURL != nil))
         return VStack(alignment: .leading, spacing: 10) {
             Button {
                 if vm.isRunning { vm.cancelAnalysis() }
@@ -399,7 +410,7 @@ struct AnalyzerView: View {
             } label: {
                 HStack {
                     Image(systemName: vm.isRunning ? "stop.circle.fill" : "play.fill")
-                    Text(vm.isRunning ? "Huỷ phân tích" : "Bắt đầu Dump")
+                    Text(vm.isRunning ? "Huỷ phân tích" : (vm.isInspecting ? "Đang đọc IPA..." : "Bắt đầu Dump"))
                         .fontWeight(.semibold)
                 }
                 .frame(maxWidth: .infinity)
@@ -410,19 +421,30 @@ struct AnalyzerView: View {
             }
             .disabled(!vm.isRunning && !canStart)
 
-            if vm.isRunning || vm.progress > 0 {
+            if vm.isRunning || vm.isInspecting || vm.progress > 0 {
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(vm.currentPhase.rawValue)
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(theme.accent)
-                        Spacer()
-                        Text("\(Int(vm.progress * 100))%")
-                            .font(.caption.monospacedDigit())
-                            .foregroundColor(theme.primaryText)
+                    if vm.isRunning || vm.progress > 0 {
+                        HStack {
+                            Text(vm.currentPhase.rawValue)
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(theme.accent)
+                            Spacer()
+                            Text("\(Int(vm.progress * 100))%")
+                                .font(.caption.monospacedDigit())
+                                .foregroundColor(theme.primaryText)
+                        }
+                        ProgressView(value: vm.progress)
+                            .tint(theme.accent)
+                    } else {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.85)
+                                .tint(theme.accent)
+                            Text("Đang kiểm tra cấu trúc ZIP64...")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(theme.accent)
+                        }
                     }
-                    ProgressView(value: vm.progress)
-                        .tint(theme.accent)
                     Text(vm.statusMessage)
                         .font(.caption2)
                         .foregroundColor(theme.secondaryText)

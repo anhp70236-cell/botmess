@@ -6,6 +6,7 @@ public final class MachOParser {
     public let sliceOffset: Int
     public let sliceSize: Int
     public let baseVM: UInt64
+    public let minValidVM: UInt64
     public let maxVM: UInt64
     public let architecture: String
 
@@ -237,6 +238,7 @@ public final class MachOParser {
             self.baseVM = segments.first(where: { $0.vmSize > 0 && $0.name != "__PAGEZERO" })?.vmAddr ?? 0x1_0000_0000
         }
         self.maxVM = max(computedMaxVM, self.baseVM + UInt64(chosenSize))
+        self.minValidVM = sections.map(\.addr).filter { $0 > self.baseVM }.min() ?? (self.baseVM + 0x1000)
         self.sortedSegments = segments.filter { $0.fileSize > 0 && $0.vmSize > 0 }.sorted { $0.vmAddr < $1.vmAddr }
 
         if let cf = chainedFixupsCmd {
@@ -282,7 +284,7 @@ public final class MachOParser {
 
     /// Converts a VM address to a slice-relative file offset (without sliceOffset added).
     public func vmToSliceRelOffset(_ vm: UInt64) -> Int? {
-        guard vm >= baseVM else { return nil }
+        guard vm != 0 && vm >= baseVM else { return nil }
         for seg in sortedSegments {
             if vm >= seg.vmAddr && vm < seg.vmAddr + seg.vmSize {
                 let delta = vm - seg.vmAddr
@@ -318,16 +320,17 @@ public final class MachOParser {
         let absOff = sliceOffset + rel
         let raw = mapped.readUInt64(at: absOff)
         if raw == 0 { return 0 }
-        if raw >= baseVM && raw < maxVM { return raw }
+        if raw >= minValidVM && raw < maxVM { return raw }
         // Strip PAC / high tag bits (bits 48..63) if tagged pointer
         let masked = raw & 0x0000_FFFF_FFFF_FFFF
-        if masked >= baseVM && masked < maxVM {
+        if masked >= minValidVM && masked < maxVM {
             return masked
         }
         // Relative offset form (rare dyld chained fallback)
         let low36 = raw & 0x000F_FFFF_FFFF
-        if low36 > 0 && baseVM + low36 < maxVM && (raw >> 63) == 0 && (raw & 0x00FF_0000_0000_0000) != 0 {
-            return baseVM + low36
+        let relTarget = baseVM + low36
+        if low36 > 0 && relTarget >= minValidVM && relTarget < maxVM && (raw >> 63) == 0 && (raw & 0x00FF_0000_0000_0000) != 0 {
+            return relTarget
         }
         return 0
     }
@@ -408,15 +411,15 @@ public final class MachOParser {
                             if isAuth == 1 {
                                 let targetLow = raw & 0xFFFF_FFFF
                                 let targetVM = baseVM + targetLow
-                                if targetVM >= baseVM && targetVM < maxVM { fixups[curRel] = targetVM }
+                                if targetVM >= minValidVM && targetVM < maxVM { fixups[curRel] = targetVM }
                                 nextStride = Int((raw >> 51) & 0x7FF)
                             } else {
                                 let targetLow = raw & 0x07FF_FFFF_FFFF
                                 let high8 = (raw >> 43) & 0xFF
                                 let absTarget = (high8 << 56) | targetLow
-                                if absTarget >= baseVM && absTarget < maxVM {
+                                if absTarget >= minValidVM && absTarget < maxVM {
                                     fixups[curRel] = absTarget
-                                } else if baseVM + targetLow < maxVM {
+                                } else if baseVM + targetLow >= minValidVM && baseVM + targetLow < maxVM {
                                     fixups[curRel] = baseVM + targetLow
                                 }
                                 nextStride = Int((raw >> 51) & 0x7FF)
@@ -431,11 +434,11 @@ public final class MachOParser {
                             let targetLow = raw & 0x000F_FFFF_FFFF
                             let high8 = (raw >> 36) & 0xFF
                             let absTarget = (high8 << 56) | targetLow
-                            if absTarget >= baseVM && absTarget < maxVM {
+                            if absTarget >= minValidVM && absTarget < maxVM {
                                 fixups[curRel] = absTarget
-                            } else if targetLow >= baseVM && targetLow < maxVM {
+                            } else if targetLow >= minValidVM && targetLow < maxVM {
                                 fixups[curRel] = targetLow
-                            } else if baseVM + targetLow < maxVM {
+                            } else if baseVM + targetLow >= minValidVM && baseVM + targetLow < maxVM {
                                 fixups[curRel] = baseVM + targetLow
                             }
                         }
@@ -446,7 +449,7 @@ public final class MachOParser {
                         if isBind == 0 {
                             let targetLow = raw & 0x000F_FFFF_FFFF
                             let targetVM = baseVM + targetLow
-                            if targetVM >= baseVM && targetVM < maxVM {
+                            if targetVM >= minValidVM && targetVM < maxVM {
                                 fixups[curRel] = targetVM
                             }
                         }
@@ -458,7 +461,7 @@ public final class MachOParser {
                         if isBind == 0 {
                             let targetOff = isAuth == 1 ? (raw & 0xFFFF_FFFF) : (raw & 0x07FF_FFFF_FFFF)
                             let targetVM = baseVM + targetOff
-                            if targetVM >= baseVM && targetVM < maxVM {
+                            if targetVM >= minValidVM && targetVM < maxVM {
                                 fixups[curRel] = targetVM
                             }
                         }
@@ -470,7 +473,7 @@ public final class MachOParser {
                         if isBind == 0 {
                             let targetOff = isAuth == 1 ? (raw & 0xFFFF_FFFF) : (raw & 0x07FF_FFFF_FFFF)
                             let targetVM = baseVM + targetOff
-                            if targetVM >= baseVM && targetVM < maxVM {
+                            if targetVM >= minValidVM && targetVM < maxVM {
                                 fixups[curRel] = targetVM
                             }
                         }
@@ -675,6 +678,25 @@ public final class MachOParser {
                 }
                 strCount += 1
                 p += len + 1
+            }
+        }
+
+        for sec in sections where sec.sectName == "__cfstring" {
+            let start = Int(sec.offset)
+            let cnt = Int(sec.size / 32)
+            guard start >= 0 && start + cnt * 32 <= sliceSize && !isInEncryptedRange(sliceRelOffset: start) else { continue }
+            for i in 0..<cnt {
+                if (i & 0xFFF) == 0 && isCancelled() { return }
+                let entryOff = start + i * 32
+                let cstrPtrVM = decodePointer(atSliceRelOffset: entryOff + 16)
+                if let str = cstringByVM[cstrPtrVM] {
+                    cstringByVM[sec.addr + UInt64(i * 32)] = str
+                } else if let strOff = vmToSliceRelOffset(cstrPtrVM), !isInEncryptedRange(sliceRelOffset: strOff) {
+                    let s = readSliceCString(strOff, maxLength: 256)
+                    if !s.isEmpty {
+                        cstringByVM[sec.addr + UInt64(i * 32)] = s
+                    }
+                }
             }
         }
 
@@ -1221,6 +1243,31 @@ public final class MachOParser {
                     let pcVM = textSec.addr + UInt64(p - start)
                     let pageBase = (pcVM & ~0xFFF) &+ UInt64(bitPattern: imm21 &* 4096)
 
+                    func emitXRef(str s: String, targetVM: UInt64, pcVM: UInt64, fileOff: Int) {
+                        guard s.count >= 4 && s.count <= 96 else { return }
+                        let rva = pcVM >= baseVM ? (pcVM - baseVM) : 0
+                        let enclosing = enclosingFunctionStartRVA(forRVA: rva)
+                        let key = XRefKey(f: enclosing ?? rva, t: targetVM)
+                        guard seenXRefs.insert(key).inserted else { return }
+                        if SafetyGuard.isRealMoneyBlocked(s) {
+                            filteredRealMoneyCount += 1
+                            return
+                        }
+                        let label: String
+                        if let fRVA = enclosing {
+                            label = "sub_" + String(fRVA, radix: 16, uppercase: true) + " -> \"" + s + "\""
+                        } else {
+                            label = "XRef -> \"" + s + "\""
+                        }
+                        out.append(NativeSymbolEntry(
+                            name: label,
+                            rva: rva,
+                            va: pcVM,
+                            fileOffset: UInt64(fileOff),
+                            source: "ARM64_XREF"
+                        ))
+                    }
+
                     let maxLook = min(4, (end - p) / 4 - 1)
                     if maxLook >= 1 {
                         for step in 1...maxLook {
@@ -1228,29 +1275,17 @@ public final class MachOParser {
                             if ((w2 & 0xFFC0_0000) == 0x9100_0000) && Int((w2 >> 5) & 0x1F) == rd {
                                 let addImm = UInt64((w2 >> 10) & 0xFFF)
                                 let targetVM = pageBase + addImm
-                                if let s = cstringByVM[targetVM], s.count >= 4 && s.count <= 96 {
-                                    let rva = pcVM >= baseVM ? (pcVM - baseVM) : 0
-                                    let enclosing = enclosingFunctionStartRVA(forRVA: rva)
-                                    let key = XRefKey(f: enclosing ?? rva, t: targetVM)
-                                    if seenXRefs.insert(key).inserted {
-                                        if SafetyGuard.isRealMoneyBlocked(s) {
-                                            filteredRealMoneyCount += 1
-                                        } else {
-                                            let label: String
-                                            if let fRVA = enclosing {
-                                                label = "sub_" + String(fRVA, radix: 16, uppercase: true) + " -> \"" + s + "\""
-                                            } else {
-                                                label = "XRef -> \"" + s + "\""
-                                            }
-                                            out.append(NativeSymbolEntry(
-                                                name: label,
-                                                rva: rva,
-                                                va: pcVM,
-                                                fileOffset: UInt64(p),
-                                                source: "ARM64_XREF"
-                                            ))
-                                        }
-                                    }
+                                if let s = cstringByVM[targetVM] {
+                                    emitXRef(str: s, targetVM: targetVM, pcVM: pcVM, fileOff: p)
+                                }
+                                break
+                            } else if ((w2 & 0xFFC0_0000) == 0xF940_0000) && Int((w2 >> 5) & 0x1F) == rd {
+                                let ldrImm = UInt64((w2 >> 10) & 0xFFF) * 8
+                                let targetVM = pageBase + ldrImm
+                                if let s = selRefByVM[targetVM] {
+                                    emitXRef(str: s, targetVM: targetVM, pcVM: pcVM, fileOff: p)
+                                } else if let s = cstringByVM[targetVM] {
+                                    emitXRef(str: s, targetVM: targetVM, pcVM: pcVM, fileOff: p)
                                 }
                                 break
                             }

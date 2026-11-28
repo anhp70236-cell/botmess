@@ -24,6 +24,9 @@ public final class DumpCoordinator {
     public init() {}
 
     private static func normalizedZipPath(_ raw: String) -> String {
+        if !raw.contains("\\") && !raw.hasPrefix("./") {
+            return raw
+        }
         var p = raw.replacingOccurrences(of: "\\", with: "/")
         while p.hasPrefix("./") {
             p.removeFirst(2)
@@ -31,11 +34,63 @@ public final class DumpCoordinator {
         return p
     }
 
+    /// Extracts `<prefix>Payload/<App>.app/` and the relative subpath inside `.app/` without regexes.
+    private static func splitPayloadAppRelative(_ np: String) -> (appRoot: String, rel: String)? {
+        guard let dotApp = np.range(of: ".app/", options: .caseInsensitive) else {
+            return nil
+        }
+        let appDirEnd = dotApp.upperBound
+        let beforeApp = np[..<dotApp.lowerBound]
+        guard let lastSlashBeforeApp = beforeApp.lastIndex(of: "/") else {
+            return nil
+        }
+        let beforeSlash = beforeApp[..<lastSlashBeforeApp]
+        let payloadComp: Substring
+        if let prevSlash = beforeSlash.lastIndex(of: "/") {
+            payloadComp = beforeSlash[beforeSlash.index(after: prevSlash)...]
+        } else {
+            payloadComp = beforeSlash
+        }
+        guard payloadComp.compare("Payload", options: .caseInsensitive) == .orderedSame else {
+            return nil
+        }
+        return (String(np[..<appDirEnd]), String(np[appDirEnd...]))
+    }
+
     public static func inspectIPA(at url: URL) throws -> IPAInspectionInfo {
         let reader = try StreamingZipReader(url: url)
         let entries = reader.entries
-        let infoPlistEntry = entries.first {
-            normalizedZipPath($0.path).range(of: #"(?:^|/)Payload/[^/]+\.app/Info\.plist$"#, options: [.regularExpression, .caseInsensitive]) != nil
+
+        var infoPlistEntry: ZipEntry? = nil
+        var unityFw: ZipEntry? = nil
+        var directAppFiles: [(relLower: String, entry: ZipEntry)] = []
+        var metaPreferred: ZipEntry? = nil
+        var metaFallback: ZipEntry? = nil
+        var frameworkPaths: [String] = []
+
+        for entry in entries {
+            guard !entry.isDirectory else { continue }
+            let np = normalizedZipPath(entry.path)
+            if np.contains("/Frameworks/") {
+                frameworkPaths.append(entry.path)
+            }
+            if np.count >= 19 {
+                let low = np.lowercased()
+                if metaPreferred == nil && low.hasSuffix("data/managed/metadata/global-metadata.dat") {
+                    metaPreferred = entry
+                } else if metaFallback == nil && low.hasSuffix("global-metadata.dat") {
+                    metaFallback = entry
+                }
+            }
+            guard let (_, rel) = splitPayloadAppRelative(np), !rel.isEmpty else { continue }
+            let relLow = rel.lowercased()
+            if infoPlistEntry == nil && relLow == "info.plist" {
+                infoPlistEntry = entry
+            } else if unityFw == nil && relLow == "frameworks/unityframework.framework/unityframework" {
+                unityFw = entry
+            } else if !rel.contains("/") {
+                directAppFiles.append((relLow, entry))
+            }
         }
 
         var appName = url.deletingPathExtension().lastPathComponent
@@ -64,14 +119,10 @@ public final class DumpCoordinator {
             appName: appName,
             executableName: execName,
             urlSchemes: urlSchemes,
-            entryPaths: entries.map { $0.path }
+            entryPaths: frameworkPaths
         )
         if safety.isBlocked {
             throw DumpCoordinatorError.restrictedApp(safety.reason)
-        }
-
-        let unityFw = entries.first {
-            normalizedZipPath($0.path).range(of: #"(?:^|/)Payload/[^/]+\.app/Frameworks/UnityFramework\.framework/UnityFramework$"#, options: [.regularExpression, .caseInsensitive]) != nil
         }
 
         let ignoredExts: Set<String> = [
@@ -83,22 +134,15 @@ public final class DumpCoordinator {
 
         let appExec: ZipEntry?
         if !execName.isEmpty {
-            let escaped = NSRegularExpression.escapedPattern(for: execName)
-            appExec = entries.first {
-                normalizedZipPath($0.path).range(of: "(?:^|/)Payload/[^/]+\\.app/" + escaped + "$", options: [.regularExpression, .caseInsensitive]) != nil
-            }
+            let execLow = execName.lowercased()
+            appExec = directAppFiles.first(where: { $0.relLower == execLow })?.entry
         } else {
-            appExec = entries
-                .filter { e in
-                    let np = normalizedZipPath(e.path)
-                    guard !e.isDirectory,
-                          np.range(of: #"(?:^|/)Payload/[^/]+\.app/[^/]+$"#, options: [.regularExpression, .caseInsensitive]) != nil else {
-                        return false
-                    }
-                    let ext = URL(fileURLWithPath: np).pathExtension.lowercased()
+            appExec = directAppFiles
+                .filter { pair in
+                    let ext = URL(fileURLWithPath: pair.relLower).pathExtension
                     return ext.isEmpty || !ignoredExts.contains(ext)
                 }
-                .max { $0.uncompressedSize < $1.uncompressedSize }
+                .max { $0.entry.uncompressedSize < $1.entry.uncompressedSize }?.entry
         }
 
         let primaryMachO = unityFw ?? appExec
@@ -106,12 +150,7 @@ public final class DumpCoordinator {
             throw DumpCoordinatorError.noMachOFound
         }
         let secondaryPath: String? = (unityFw != nil && appExec != nil && appExec?.path != unityFw?.path) ? appExec?.path : nil
-
-        let metaEntry = entries.first {
-            normalizedZipPath($0.path).lowercased().hasSuffix("data/managed/metadata/global-metadata.dat")
-        } ?? entries.first {
-            normalizedZipPath($0.path).lowercased().hasSuffix("global-metadata.dat")
-        }
+        let metaEntry = metaPreferred ?? metaFallback
 
         return IPAInspectionInfo(
             fileName: url.lastPathComponent,
@@ -155,7 +194,7 @@ public final class DumpCoordinator {
         let localMachO = tempDir.appendingPathComponent("target_macho")
         onProgress(DumpProgressUpdate(phase: .inspecting, progress: 0.12, message: "Giải nén streaming \(URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent) (\(formatSize(machoEntry.uncompressedSize)))..."))
         var lastExtractPct = -5
-        try reader.extractEntry(machoEntry, to: localMachO) { frac in
+        try reader.extractEntry(machoEntry, to: localMachO, isCancelled: isCancelled) { frac in
             let pct = Int(frac * 100)
             if pct >= lastExtractPct + 5 || pct == 100 {
                 lastExtractPct = pct

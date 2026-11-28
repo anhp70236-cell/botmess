@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Darwin
 
 private final class CancellationFlag: @unchecked Sendable {
     private let lock = NSLock()
@@ -35,10 +36,11 @@ final class DumpViewModel: ObservableObject {
     }
     @Published var useInPlacePicker: Bool {
         didSet {
-            UserDefaults.standard.set(useInPlacePicker, forKey: "dip_inplace_picker_v2")
+            UserDefaults.standard.set(useInPlacePicker, forKey: "dip_inplace_picker_v3")
         }
     }
 
+    @Published var isInspecting = false
     @Published var isRunning = false
     @Published var currentPhase: DumpPhase = .idle
     @Published var progress: Double = 0
@@ -56,6 +58,7 @@ final class DumpViewModel: ObservableObject {
 
     private var activeSecurityURLs: [URL] = []
     private var copiedTempURLs: [URL] = []
+    private var inspectTask: Task<Void, Never>?
     private let cancellation = CancellationFlag()
     private let optionsKey = "dip_options_v2"
 
@@ -85,7 +88,11 @@ final class DumpViewModel: ObservableObject {
         } else {
             self.selectedTheme = .obsidianDark
         }
-        self.useInPlacePicker = UserDefaults.standard.bool(forKey: "dip_inplace_picker_v2")
+        if UserDefaults.standard.object(forKey: "dip_inplace_picker_v3") == nil {
+            self.useInPlacePicker = true
+        } else {
+            self.useInPlacePicker = UserDefaults.standard.bool(forKey: "dip_inplace_picker_v3")
+        }
         try? FileManager.default.removeItem(at: Self.importsRootURL)
         loadSavedSessions()
         refreshLocalDocumentsIPAs()
@@ -157,6 +164,9 @@ final class DumpViewModel: ObservableObject {
         let accessed = url.startAccessingSecurityScopedResource()
         defer {
             if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+        if Darwin.access(url.path, R_OK) == 0 {
+            return try body(url)
         }
         var coordError: NSError?
         var innerResult: Result<T, Error>?
@@ -257,18 +267,22 @@ final class DumpViewModel: ObservableObject {
         trackTempURL(url)
         cleanupOldCopiedTemps(keeping: url)
 
+        inspectTask?.cancel()
         selectedIPAURL = url
+        isInspecting = true
         errorMessage = nil
         inspectionInfo = nil
         statusMessage = "Đang đọc cấu trúc ZIP64 của \(url.lastPathComponent)..."
         appendLog("[IPA] Đang kiểm tra tệp: \(url.lastPathComponent)")
 
-        Task.detached(priority: .userInitiated) {
+        inspectTask = Task.detached(priority: .userInitiated) {
             do {
                 let info = try Self.withCoordinatedRead(url: url) { actualURL in
                     try DumpCoordinator.inspectIPA(at: actualURL)
                 }
                 await MainActor.run {
+                    guard !Task.isCancelled, self.selectedIPAURL == url else { return }
+                    self.isInspecting = false
                     if info.fileSizeBytes > 10 * 1024 * 1024 * 1024 {
                         self.errorMessage = "Tệp IPA vượt quá giới hạn tối đa 10 GB."
                         self.appendLog("[Cảnh báo] Tệp IPA > 10 GB.")
@@ -280,6 +294,8 @@ final class DumpViewModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    guard !Task.isCancelled, self.selectedIPAURL == url else { return }
+                    self.isInspecting = false
                     self.errorMessage = error.localizedDescription
                     self.statusMessage = "Lỗi kiểm tra IPA"
                     self.appendLog("[Lỗi] \(error.localizedDescription)")

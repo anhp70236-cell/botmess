@@ -308,7 +308,12 @@ public final class StreamingZipReader {
         return try Data(contentsOf: tempURL)
     }
 
-    public func extractEntry(_ entry: ZipEntry, to destinationURL: URL, progress: ((Double) -> Void)? = nil) throws {
+    public func extractEntry(
+        _ entry: ZipEntry,
+        to destinationURL: URL,
+        isCancelled: () -> Bool = { false },
+        progress: ((Double) -> Void)? = nil
+    ) throws {
         let fm = FileManager.default
         let parent = destinationURL.deletingLastPathComponent()
         if !fm.fileExists(atPath: parent.path) {
@@ -334,6 +339,7 @@ public final class StreamingZipReader {
             var remaining = compTotal
             var cursor = startOffset
             while remaining > 0 {
+                if isCancelled() { throw ZipReaderError.ioFailed("Đã huỷ giải nén") }
                 let toRead = Int(min(UInt64(chunkSize), remaining))
                 let chunk = try preadExact(offset: cursor, length: toRead)
                 try outHandle.write(contentsOf: Data(chunk))
@@ -372,6 +378,7 @@ public final class StreamingZipReader {
         var done = false
 
         while !done {
+            if isCancelled() { throw ZipReaderError.ioFailed("Đã huỷ giải nén") }
             let toRead = Int(min(UInt64(chunkSize), remaining))
             let inBuf = toRead > 0 ? try preadExact(offset: cursor, length: toRead) : []
             cursor += UInt64(toRead)
@@ -388,6 +395,8 @@ public final class StreamingZipReader {
                 }
 
                 while !done {
+                    if isCancelled() { throw ZipReaderError.ioFailed("Đã huỷ giải nén") }
+                    let prevSrc = streamPtr.pointee.src_size
                     streamPtr.pointee.dst_ptr = dstBuffer
                     streamPtr.pointee.dst_size = chunkSize
 
@@ -405,7 +414,8 @@ public final class StreamingZipReader {
                         throw ZipReaderError.decompressFailed(-2, entry.path)
                     }
                     if toRead > 0 {
-                        if streamPtr.pointee.src_size == 0 && produced == 0 {
+                        if (streamPtr.pointee.src_size == 0 && streamPtr.pointee.dst_size > 0)
+                            || (produced == 0 && streamPtr.pointee.src_size == prevSrc) {
                             break
                         }
                     } else {

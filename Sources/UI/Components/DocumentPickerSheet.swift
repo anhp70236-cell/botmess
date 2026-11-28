@@ -1,5 +1,9 @@
 import UIKit
 import UniformTypeIdentifiers
+import Darwin
+
+@_silgen_name("clonefile")
+private func swift_clonefile(_ src: UnsafePointer<CChar>, _ dst: UnsafePointer<CChar>, _ flags: UInt32) -> Int32
 
 @MainActor
 final class NativeDocumentPicker: NSObject, UIDocumentPickerDelegate {
@@ -14,8 +18,8 @@ final class NativeDocumentPicker: NSObject, UIDocumentPickerDelegate {
     }
 
     /// Synchronously relocates files picked into iOS `-Inbox` or root `tmp/` into a dedicated
-    /// `tmp/IPADumperImports/<UUID>/` folder before `didPickDocumentsAt` returns, so iOS does
-    /// not purge the `-Inbox` copy before async ZIP64 / Mach-O inspection opens it.
+    /// `tmp/IPADumperImports/<UUID>/` folder before `didPickDocumentsAt` returns, using only
+    /// instant zero-copy filesystem metadata operations (`move`/`link`/`clonefile`) on main thread.
     nonisolated static func preservePickedFileIfNeeded(_ url: URL) -> URL {
         guard !url.hasDirectoryPath else { return url }
 
@@ -48,13 +52,26 @@ final class NativeDocumentPicker: NSObject, UIDocumentPickerDelegate {
             if fm.fileExists(atPath: destURL.path) {
                 try? fm.removeItem(at: destURL)
             }
-            do {
-                try fm.moveItem(at: url, to: destURL)
+            if (try? fm.moveItem(at: url, to: destURL)) != nil {
                 return destURL
-            } catch {
+            }
+            if Darwin.link(url.path, destURL.path) == 0 {
+                return destURL
+            }
+            let cloned = url.path.withCString { srcPtr in
+                destURL.path.withCString { dstPtr in
+                    swift_clonefile(srcPtr, dstPtr, 0) == 0
+                }
+            }
+            if cloned {
+                return destURL
+            }
+            let fileSize = (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? UInt64.max
+            if fileSize <= 32 * 1024 * 1024 {
                 try fm.copyItem(at: url, to: destURL)
                 return destURL
             }
+            return url
         } catch {
             return url
         }

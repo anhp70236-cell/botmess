@@ -79,15 +79,22 @@ public enum Il2CppRegistrationFinder {
                     return nil
                 }
                 var validCount = 0
+                var badNonZeroCount = 0
                 let step = max(1, mCnt / 64)
                 for k in stride(from: 0, to: mCnt, by: step) {
                     let p = macho.decodePointer(atSliceRelOffset: ptrsOff + k * 8)
-                    if p > 0 && macho.isInTextCode(p) {
+                    if p == 0 { continue }
+                    if macho.isInTextCode(p) {
                         validCount += 1
+                    } else {
+                        badNonZeroCount += 1
                     }
-                    if validCount >= 4 { break }
+                    if validCount >= 4 && badNonZeroCount == 0 { break }
                 }
-                if validCount == 0 && mCnt >= 4 {
+                if badNonZeroCount > 0 {
+                    return nil
+                }
+                if validCount == 0 && mCnt >= 4 && !knownMatch {
                     return nil
                 }
                 rvas = [UInt64](repeating: 0, count: mCnt)
@@ -549,9 +556,16 @@ public enum Il2CppRegistrationFinder {
                             if let tblOff = macho.vmToSliceRelOffset(tblVM),
                                tblOff + cgCnt * 8 <= sliceSize,
                                !macho.isInEncryptedRange(sliceRelOffset: tblOff) {
-                                let m0VM = macho.decodePointer(atSliceRelOffset: tblOff)
-                                if let m0Off = macho.vmToSliceRelOffset(m0VM),
-                                   readModule(atRel: m0Off, allowUnknownImage: true) != nil {
+                                var probeHits = 0
+                                for k in 0..<min(cgCnt, 8) {
+                                    let mVM = macho.decodePointer(atSliceRelOffset: tblOff + k * 8)
+                                    if let mOff = macho.vmToSliceRelOffset(mVM),
+                                       readModule(atRel: mOff, allowUnknownImage: true) != nil {
+                                        probeHits += 1
+                                        break
+                                    }
+                                }
+                                if probeHits > 0 {
                                     for k in 0..<cgCnt {
                                         let mVM = macho.decodePointer(atSliceRelOffset: tblOff + k * 8)
                                         if let mOff = macho.vmToSliceRelOffset(mVM),
