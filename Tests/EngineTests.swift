@@ -101,10 +101,10 @@ struct EngineTests {
         let coordinator = DumpCoordinator()
         let result = try coordinator.runIPA(ipaURL: ipaURL, outputsRootURL: outRoot, options: opts) { _ in }
 
-        assertTrue(result.diagnostics.metadataStatus.isValid, "Metadata must be detected as valid")
-        assertTrue(result.stats.filteredRealMoneyCount >= 2, "Real-money symbols must be filtered")
-        assertTrue(result.stats.dummyDllsCount == 2, "Should create Il2CppDummyDll.dll + Assembly-CSharp.dll")
-        assertTrue(result.stats.eventsCount >= 1, "Should parse event OnDamage")
+        assertTrue(result.session.diagnostics.metadataStatus.isValid, "Metadata must be detected as valid")
+        assertTrue(result.session.stats.filteredRealMoneyCount >= 2, "Real-money symbols must be filtered")
+        assertTrue(result.session.stats.dummyDllsCount == 2, "Should create Il2CppDummyDll.dll + Assembly-CSharp.dll")
+        assertTrue(result.session.stats.eventsCount >= 1, "Should parse event OnDamage")
 
         let dumpCS = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("dump.cs"), encoding: .utf8)
         assertTrue(dumpCS.contains("class PlayerStats<T>"), "dump.cs missing generic class PlayerStats<T>")
@@ -169,7 +169,7 @@ struct EngineTests {
             options: .default
         ) { _ in }
 
-        if case .encryptedOrProtected = result.diagnostics.metadataStatus {
+        if case .encryptedOrProtected = result.session.diagnostics.metadataStatus {
             // Expected
         } else {
             assertTrue(false, "Expected encryptedOrProtected status")
