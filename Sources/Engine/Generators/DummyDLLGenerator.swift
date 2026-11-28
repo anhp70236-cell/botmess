@@ -14,12 +14,10 @@ public enum DummyDLLGenerator {
             try fm.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         }
 
-        // 1. Always write Il2CppDummyDll.dll defining Token/Address/FieldOffset/Attribute custom attribute classes
         let dummyRuntimeURL = directoryURL.appendingPathComponent("Il2CppDummyDll.dll")
         let dummyBytes = buildIl2CppDummySupportDLL()
         try dummyBytes.write(to: dummyRuntimeURL, options: .atomic)
 
-        // Group types by imageIndex
         var typesByImage: [Int: [Il2CppTypeInfo]] = [:]
         for t in types {
             typesByImage[t.imageIndex, default: []].append(t)
@@ -120,8 +118,8 @@ public enum DummyDLLGenerator {
     private struct FieldRow { var flags: UInt16; var name: UInt32; var sig: UInt32 }
     private struct MethodDefRow { var rva: UInt32; var implFlags: UInt16; var flags: UInt16; var name: UInt32; var sig: UInt32; var paramList: UInt32 }
     private struct ParamRow { var flags: UInt16; var seq: UInt16; var name: UInt32 }
-    private struct InterfaceImplRow { var klass: UInt32; var iface: UInt32 }
     private struct MemberRefRow { var klass: UInt32; var name: UInt32; var sig: UInt32 }
+    private struct ConstantRow { var type: UInt8; var parent: UInt32; var value: UInt32 }
     private struct CustomAttrRow { var parent: UInt32; var type: UInt32; var value: UInt32 }
     private struct PropertyMapRow { var parent: UInt32; var propList: UInt32 }
     private struct PropertyRow { var flags: UInt16; var name: UInt32; var sig: UInt32 }
@@ -153,17 +151,20 @@ public enum DummyDLLGenerator {
             }
             let ctor = Il2CppMethodInfo(
                 index: idx, name: ".ctor", returnTypeIndex: -1, returnTypeName: "void",
+                genericParamNames: [],
                 parameters: [], token: UInt32(0x0600_0001 + idx), flags: 0x1886, iflags: 0,
                 slot: 0xFFFF, rva: 0, va: 0, fileOffset: 0, arm64Semantics: "", attributes: []
             )
             types.append(Il2CppTypeInfo(
                 typeDefIndex: idx, imageIndex: 0, assemblyName: "Il2CppDummyDll.dll",
                 namespace: "Il2CppDummyDll", name: pair.0, fullName: "Il2CppDummyDll.\(pair.0)",
+                genericParamNames: [],
                 flags: 0x0010_0001, token: UInt32(0x0200_0002 + idx),
                 parentTypeIndex: -1, parentName: "System.Attribute", declaringTypeIndex: -1,
+                declaringTypeName: nil, nestedTypeNames: [],
                 interfaceTypeIndices: [], interfaceNames: [],
                 isValueType: false, isEnum: false, isInterface: false, isAbstract: false, isSealed: false,
-                fields: fields, methods: [ctor], properties: [], attributes: []
+                fields: fields, methods: [ctor], properties: [], events: [], attributes: []
             ))
         }
         return buildAssemblyDLL(image: img, types: types, options: DumpOptions(
@@ -184,13 +185,11 @@ public enum DummyDLLGenerator {
         let modNameIdx = heaps.addString(image.name.isEmpty ? "\(asmNameStr).dll" : image.name)
         let asmNameIdx = heaps.addString(asmNameStr)
 
-        // AssemblyRefs: [1]=mscorlib, [2]=Il2CppDummyDll (if not support DLL itself)
         let mscorlibRefIdx: UInt32 = 1
         let dummyRefIdx: UInt32 = 2
         let mscorlibNameIdx = heaps.addString("mscorlib")
         let dummyDllNameIdx = heaps.addString("Il2CppDummyDll")
 
-        // TypeRefs
         var typeRefs: [TypeRefRow] = []
         var typeRefIndexMap: [String: UInt32] = [:]
         func ensureTypeRef(scope: UInt32, ns: String, name: String) -> UInt32 {
@@ -202,7 +201,6 @@ public enum DummyDLLGenerator {
             return idx
         }
 
-        // Standard TypeRefs in mscorlib (ResolutionScope tag 2 = AssemblyRef)
         let objTypeRef = ensureTypeRef(scope: (mscorlibRefIdx << 2) | 2, ns: "System", name: "Object")
         let valTypeRef = ensureTypeRef(scope: (mscorlibRefIdx << 2) | 2, ns: "System", name: "ValueType")
         let enumTypeRef = ensureTypeRef(scope: (mscorlibRefIdx << 2) | 2, ns: "System", name: "Enum")
@@ -211,36 +209,37 @@ public enum DummyDLLGenerator {
         var tokenAttrCtorMemberRef: UInt32 = 0
         var addrAttrCtorMemberRef: UInt32 = 0
         var fieldOffAttrCtorMemberRef: UInt32 = 0
+        var attrAttrCtorMemberRef: UInt32 = 0
         var memberRefs: [MemberRefRow] = []
 
-        let voidCtorSig = heaps.addBlob([0x20, 0x00, 0x01]) // HASTHIS, 0 params, ELEMENT_TYPE_VOID
+        let voidCtorSig = heaps.addBlob([0x20, 0x00, 0x01])
 
         if !isSupportDummyDll {
             let dummyScope = (dummyRefIdx << 2) | 2
             let tokTR = ensureTypeRef(scope: dummyScope, ns: "Il2CppDummyDll", name: "TokenAttribute")
             let adrTR = ensureTypeRef(scope: dummyScope, ns: "Il2CppDummyDll", name: "AddressAttribute")
             let offTR = ensureTypeRef(scope: dummyScope, ns: "Il2CppDummyDll", name: "FieldOffsetAttribute")
+            let attTR = ensureTypeRef(scope: dummyScope, ns: "Il2CppDummyDll", name: "AttributeAttribute")
             let ctorName = heaps.addString(".ctor")
-            // MemberRefParent tag 1 = TypeRef
             memberRefs.append(MemberRefRow(klass: (tokTR << 3) | 1, name: ctorName, sig: voidCtorSig))
             tokenAttrCtorMemberRef = UInt32(memberRefs.count)
             memberRefs.append(MemberRefRow(klass: (adrTR << 3) | 1, name: ctorName, sig: voidCtorSig))
             addrAttrCtorMemberRef = UInt32(memberRefs.count)
             memberRefs.append(MemberRefRow(klass: (offTR << 3) | 1, name: ctorName, sig: voidCtorSig))
             fieldOffAttrCtorMemberRef = UInt32(memberRefs.count)
+            memberRefs.append(MemberRefRow(klass: (attTR << 3) | 1, name: ctorName, sig: voidCtorSig))
+            attrAttrCtorMemberRef = UInt32(memberRefs.count)
         }
 
-        // TypeDefs (row 1 is always <Module>)
         var typeDefs: [TypeDefRow] = []
         var fieldsTable: [FieldRow] = []
         var methodsTable: [MethodDefRow] = []
         var paramsTable: [ParamRow] = []
+        var constantsTable: [ConstantRow] = []
         var propMaps: [PropertyMapRow] = []
         var propsTable: [PropertyRow] = []
         var customAttrs: [CustomAttrRow] = []
-        let ifaceImpls: [InterfaceImplRow] = []
 
-        // Row 1: <Module>
         typeDefs.append(TypeDefRow(
             flags: 0,
             name: heaps.addString("<Module>"),
@@ -270,19 +269,18 @@ public enum DummyDLLGenerator {
             case "string", "System.String": return 0x0E
             case "System.IntPtr", "IntPtr": return 0x18
             case "System.UIntPtr", "UIntPtr": return 0x19
-            default: return 0x1C // ELEMENT_TYPE_OBJECT
+            default: return 0x1C
             }
         }
 
         func buildNamedArgAttrBlob(_ args: [(String, String)]) -> UInt32 {
-            // ECMA-335 II.23.3 CustomAttrib: Prolog(0x0001) + NumNamed(UInt16) + NamedArgs(FIELD=0x53, Type=STRING(0x0E), Name(SerString), Value(SerString))
             var b: [UInt8] = [0x01, 0x00]
             let cnt = UInt16(args.count)
             b.append(UInt8(cnt & 0xFF))
             b.append(UInt8((cnt >> 8) & 0xFF))
             for (name, val) in args {
                 b.append(0x53) // FIELD
-                b.append(0x0E) // ELEMENT_TYPE_STRING
+                b.append(0x0E) // STRING
                 appendSerString(&b, name)
                 appendSerString(&b, val)
             }
@@ -290,7 +288,7 @@ public enum DummyDLLGenerator {
         }
 
         for t in types {
-            let tdRowIndex = UInt32(typeDefs.count + 1) // 1-based TypeDef row
+            let tdRowIndex = UInt32(typeDefs.count + 1)
             let fieldListStart = UInt32(fieldsTable.count + 1)
             let methodListStart = UInt32(methodsTable.count + 1)
 
@@ -317,7 +315,6 @@ public enum DummyDLLGenerator {
                 methodList: methodListStart
             ))
 
-            // TypeDef Token CustomAttribute (HasCustomAttribute tag 3 = TypeDef)
             if !isSupportDummyDll && options.restoreDummyDllTokens && t.token != 0 {
                 let blobIdx = buildNamedArgAttrBlob([("Token", String(format: "0x%X", t.token))])
                 customAttrs.append(CustomAttrRow(
@@ -326,15 +323,38 @@ public enum DummyDLLGenerator {
                     value: blobIdx
                 ))
             }
+            if !isSupportDummyDll && options.restoreAttributes {
+                for attr in t.attributes {
+                    let blobIdx = buildNamedArgAttrBlob([("Name", attr.name)])
+                    customAttrs.append(CustomAttrRow(
+                        parent: (tdRowIndex << 5) | 3,
+                        type: (attrAttrCtorMemberRef << 3) | 3,
+                        value: blobIdx
+                    ))
+                }
+            }
 
-            // Fields
             for f in t.fields {
                 let fRowIdx = UInt32(fieldsTable.count + 1)
                 let fSig = heaps.addBlob([0x06, encodeElemType(f.typeName)])
-                let fFlags: UInt16 = f.typeAttrs != 0 ? (f.typeAttrs & ~0x0020) : 0x0006
+                var fFlags: UInt16 = f.typeAttrs != 0 ? (f.typeAttrs & ~0x0020) : 0x0006
+                if let dv = f.defaultValue, (f.isConst || (t.isEnum && f.name != "value__")),
+                   let intVal = Int32(dv) {
+                    fFlags |= 0x8050 // HasDefault | Literal | Static
+                    var bytes = [UInt8](repeating: 0, count: 4)
+                    let u = UInt32(bitPattern: intVal)
+                    bytes[0] = UInt8(u & 0xFF)
+                    bytes[1] = UInt8((u >> 8) & 0xFF)
+                    bytes[2] = UInt8((u >> 16) & 0xFF)
+                    bytes[3] = UInt8((u >> 24) & 0xFF)
+                    constantsTable.append(ConstantRow(
+                        type: 0x08, // ELEMENT_TYPE_I4
+                        parent: (fRowIdx << 2) | 0, // HasConstant tag 0 = Field
+                        value: heaps.addBlob(bytes)
+                    ))
+                }
                 fieldsTable.append(FieldRow(flags: fFlags, name: heaps.addString(f.name), sig: fSig))
 
-                // HasCustomAttribute tag 1 = Field
                 if !isSupportDummyDll && options.restoreDummyDllTokens && f.token != 0 {
                     let blobIdx = buildNamedArgAttrBlob([("Token", String(format: "0x%X", f.token))])
                     customAttrs.append(CustomAttrRow(
@@ -353,18 +373,17 @@ public enum DummyDLLGenerator {
                 }
             }
 
-            // Properties
             if options.includeProperties && !t.properties.isEmpty {
                 let propListStart = UInt32(propsTable.count + 1)
                 propMaps.append(PropertyMapRow(parent: tdRowIndex, propList: propListStart))
                 for p in t.properties {
                     let pRowIdx = UInt32(propsTable.count + 1)
-                    let pSig = heaps.addBlob([0x28, 0x00, encodeElemType(p.typeName)]) // PROPERTY, 0 params, retType
+                    let pSig = heaps.addBlob([0x28, 0x00, encodeElemType(p.typeName)])
                     propsTable.append(PropertyRow(flags: UInt16(p.attrs & 0xFFFF), name: heaps.addString(p.name), sig: pSig))
                     if !isSupportDummyDll && options.restoreDummyDllTokens && p.token != 0 {
                         let blobIdx = buildNamedArgAttrBlob([("Token", String(format: "0x%X", p.token))])
                         customAttrs.append(CustomAttrRow(
-                            parent: (pRowIdx << 5) | 9, // tag 9 = Property
+                            parent: (pRowIdx << 5) | 9,
                             type: (tokenAttrCtorMemberRef << 3) | 3,
                             value: blobIdx
                         ))
@@ -372,13 +391,12 @@ public enum DummyDLLGenerator {
                 }
             }
 
-            // Methods
             for m in t.methods {
                 let mRowIdx = UInt32(methodsTable.count + 1)
                 let pListStart = UInt32(paramsTable.count + 1)
 
                 let isStatic = (m.flags & 0x0010) != 0
-                var mSigBytes: [UInt8] = [isStatic ? 0x00 : 0x20] // DEFAULT / HASTHIS
+                var mSigBytes: [UInt8] = [isStatic ? 0x00 : 0x20]
                 let pCnt = min(m.parameters.count, 127)
                 mSigBytes.append(UInt8(pCnt))
                 mSigBytes.append(encodeElemType(m.returnTypeName))
@@ -402,7 +420,6 @@ public enum DummyDLLGenerator {
                     paramList: pListStart
                 ))
 
-                // HasCustomAttribute tag 0 = MethodDef
                 if !isSupportDummyDll && options.restoreDummyDllTokens && m.token != 0 {
                     let blobIdx = buildNamedArgAttrBlob([("Token", String(format: "0x%X", m.token))])
                     customAttrs.append(CustomAttrRow(
@@ -430,11 +447,10 @@ public enum DummyDLLGenerator {
             }
         }
 
-        // Sort tables per ECMA-335 II.22!
+        constantsTable.sort { $0.parent < $1.parent }
         customAttrs.sort { $0.parent < $1.parent }
         propMaps.sort { $0.parent < $1.parent }
 
-        // Determine index sizes (2 vs 4 bytes)
         let str4 = heaps.strings.count > 65_535
         let guid4 = (heaps.guid.count / 16) > 65_535
         let blob4 = heaps.blob.count > 65_535
@@ -448,34 +464,33 @@ public enum DummyDLLGenerator {
         let typeDefOrRef4 = max(typeDefs.count, typeRefs.count) >= 16_384
         let resScope4 = max(1, typeRefs.count) >= 16_384
         let memberRefParent4 = max(typeDefs.count, max(typeRefs.count, methodsTable.count)) >= 8_192
+        let hasConstant4 = max(fieldsTable.count, max(paramsTable.count, propsTable.count)) >= 16_384
         let hasCustomAttr4 = max(methodsTable.count, max(fieldsTable.count, max(typeDefs.count, max(typeRefs.count, propsTable.count)))) >= 2_048
         let customAttrType4 = max(methodsTable.count, memberRefs.count) >= 8_192
 
-        // Build #~ stream
         var tilde = Data()
-        appendU32(&tilde, 0) // Reserved
-        tilde.append(2)      // MajorVersion
-        tilde.append(0)      // MinorVersion
+        appendU32(&tilde, 0)
+        tilde.append(2)
+        tilde.append(0)
         var heapSizes: UInt8 = 0
         if str4 { heapSizes |= 0x01 }
         if guid4 { heapSizes |= 0x02 }
         if blob4 { heapSizes |= 0x04 }
         tilde.append(heapSizes)
-        tilde.append(1) // Reserved
+        tilde.append(1)
 
-        // Valid mask (UInt64)
         var validMask: UInt64 = (1 << 0x00) | (1 << 0x02) | (1 << 0x20) | (1 << 0x23)
         if !typeRefs.isEmpty { validMask |= (1 << 0x01) }
         if !fieldsTable.isEmpty { validMask |= (1 << 0x04) }
         if !methodsTable.isEmpty { validMask |= (1 << 0x06) }
         if !paramsTable.isEmpty { validMask |= (1 << 0x08) }
-        if !ifaceImpls.isEmpty { validMask |= (1 << 0x09) }
         if !memberRefs.isEmpty { validMask |= (1 << 0x0A) }
+        if !constantsTable.isEmpty { validMask |= (1 << 0x0B) }
         if !customAttrs.isEmpty { validMask |= (1 << 0x0C) }
         if !propMaps.isEmpty { validMask |= (1 << 0x15) }
         if !propsTable.isEmpty { validMask |= (1 << 0x17) }
 
-        let sortedMask: UInt64 = (1 << 0x09) | (1 << 0x0C) | (1 << 0x15)
+        let sortedMask: UInt64 = (1 << 0x0B) | (1 << 0x0C) | (1 << 0x15)
         appendU64(&tilde, validMask)
         appendU64(&tilde, sortedMask)
 
@@ -487,8 +502,8 @@ public enum DummyDLLGenerator {
             (0x04, fieldsTable.count),
             (0x06, methodsTable.count),
             (0x08, paramsTable.count),
-            (0x09, ifaceImpls.count),
             (0x0A, memberRefs.count),
+            (0x0B, constantsTable.count),
             (0x0C, customAttrs.count),
             (0x15, propMaps.count),
             (0x17, propsTable.count),
@@ -558,6 +573,14 @@ public enum DummyDLLGenerator {
             putBlob(mr.sig)
         }
 
+        // 0x0B Constant
+        for c in constantsTable {
+            tilde.append(c.type)
+            tilde.append(0)
+            putIdx(&tilde, c.parent, is4: hasConstant4)
+            putBlob(c.value)
+        }
+
         // 0x0C CustomAttribute
         for ca in customAttrs {
             putIdx(&tilde, ca.parent, is4: hasCustomAttr4)
@@ -579,7 +602,7 @@ public enum DummyDLLGenerator {
         }
 
         // 0x20 Assembly
-        appendU32(&tilde, 0x8004) // SHA1
+        appendU32(&tilde, 0x8004)
         appendU16(&tilde, 1); appendU16(&tilde, 0); appendU16(&tilde, 0); appendU16(&tilde, 0)
         appendU32(&tilde, 0)
         putBlob(0)
@@ -608,7 +631,6 @@ public enum DummyDLLGenerator {
         pad4(&heaps.guid)
         pad4(&heaps.blob)
 
-        // Assemble BSJB Metadata Root
         let streams: [(String, Data)] = [
             ("#~", tilde),
             ("#Strings", heaps.strings),
@@ -618,11 +640,11 @@ public enum DummyDLLGenerator {
         ]
 
         var metaHeader = Data()
-        appendU32(&metaHeader, 0x424A_5342) // BSJB
+        appendU32(&metaHeader, 0x424A_5342)
         appendU16(&metaHeader, 1)
         appendU16(&metaHeader, 1)
         appendU32(&metaHeader, 0)
-        let verBytes: [UInt8] = Array("v4.0.30319\0\0".utf8) // 12 bytes
+        let verBytes: [UInt8] = Array("v4.0.30319\0\0".utf8)
         appendU32(&metaHeader, UInt32(verBytes.count))
         metaHeader.append(contentsOf: verBytes)
         appendU16(&metaHeader, 0)
@@ -650,16 +672,13 @@ public enum DummyDLLGenerator {
             metadataBlob.append(sData)
         }
 
-        // Build PE32 image (.text starts at raw 0x200, RVA 0x2000)
         var textSection = Data(repeating: 0, count: 0x60)
-        // IMAGE_COR20_HEADER at offset 0x08 (RVA 0x2008)
-        writeU32(&textSection, at: 0x08, 72) // cb
-        writeU16(&textSection, at: 0x0C, 2)  // MajorRuntimeVersion
-        writeU16(&textSection, at: 0x0E, 5)  // MinorRuntimeVersion
-        writeU32(&textSection, at: 0x10, 0x2060) // MetaData RVA
+        writeU32(&textSection, at: 0x08, 72)
+        writeU16(&textSection, at: 0x0C, 2)
+        writeU16(&textSection, at: 0x0E, 5)
+        writeU32(&textSection, at: 0x10, 0x2060)
         writeU32(&textSection, at: 0x14, UInt32(metadataBlob.count))
-        writeU32(&textSection, at: 0x18, 1)  // COMIMAGE_FLAGS_ILONLY
-        // Shared Tiny IL body at offset 0x50 (RVA 0x2050): ldnull; throw
+        writeU32(&textSection, at: 0x18, 1)
         textSection[0x50] = 0x0A
         textSection[0x51] = 0x14
         textSection[0x52] = 0x7A
@@ -673,57 +692,48 @@ public enum DummyDLLGenerator {
         let virtTextSize = alignUp(textSection.count, to: 0x2000)
 
         var pe = Data(repeating: 0, count: 0x200)
-        // DOS Header
-        pe[0] = 0x4D; pe[1] = 0x5A // MZ
-        writeU32(&pe, at: 0x3C, 0x80) // e_lfanew
-        // PE Signature
-        writeU32(&pe, at: 0x80, 0x0000_4550) // PE\0\0
-        // COFF Header (at 0x84)
-        writeU16(&pe, at: 0x84, 0x014C) // IMAGE_FILE_MACHINE_I386
-        writeU16(&pe, at: 0x86, 1)      // NumberOfSections
-        writeU32(&pe, at: 0x88, 0x6700_0000) // TimeDateStamp
-        writeU16(&pe, at: 0x94, 0x00E0) // SizeOfOptionalHeader
-        writeU16(&pe, at: 0x96, 0x2102) // EXECUTABLE_IMAGE | 32BIT_MACHINE | DLL
+        pe[0] = 0x4D; pe[1] = 0x5A
+        writeU32(&pe, at: 0x3C, 0x80)
+        writeU32(&pe, at: 0x80, 0x0000_4550)
+        writeU16(&pe, at: 0x84, 0x014C)
+        writeU16(&pe, at: 0x86, 1)
+        writeU32(&pe, at: 0x88, 0x6700_0000)
+        writeU16(&pe, at: 0x94, 0x00E0)
+        writeU16(&pe, at: 0x96, 0x2102)
 
-        // PE32 Optional Header (at 0x98, size 0xE0 = 224 bytes, ends at 0x178)
-        writeU16(&pe, at: 0x98, 0x010B) // Magic PE32
-        pe[0x9A] = 48                   // MajorLinkerVersion
-        writeU32(&pe, at: 0x9C, UInt32(rawTextSize)) // SizeOfCode
-        writeU32(&pe, at: 0xA8, 0)      // AddressOfEntryPoint (0 for pure IL DLL)
-        writeU32(&pe, at: 0xAC, 0x2000) // BaseOfCode
-        writeU32(&pe, at: 0xB0, 0x4000) // BaseOfData
-        writeU32(&pe, at: 0xB4, 0x1000_0000) // ImageBase
-        writeU32(&pe, at: 0xB8, 0x2000) // SectionAlignment
-        writeU32(&pe, at: 0xBC, 0x0200) // FileAlignment
-        writeU16(&pe, at: 0xC0, 4)      // MajorOSVersion
-        writeU16(&pe, at: 0xC8, 4)      // MajorSubsystemVersion
-        writeU32(&pe, at: 0xD0, UInt32(0x2000 + virtTextSize)) // SizeOfImage
-        writeU32(&pe, at: 0xD4, 0x0200) // SizeOfHeaders
-        writeU16(&pe, at: 0xDC, 3)      // Subsystem CUI
-        writeU16(&pe, at: 0xDE, 0x8540) // DllCharacteristics
+        writeU16(&pe, at: 0x98, 0x010B)
+        pe[0x9A] = 48
+        writeU32(&pe, at: 0x9C, UInt32(rawTextSize))
+        writeU32(&pe, at: 0xAC, 0x2000)
+        writeU32(&pe, at: 0xB0, 0x4000)
+        writeU32(&pe, at: 0xB4, 0x1000_0000)
+        writeU32(&pe, at: 0xB8, 0x2000)
+        writeU32(&pe, at: 0xBC, 0x0200)
+        writeU16(&pe, at: 0xC0, 4)
+        writeU16(&pe, at: 0xC8, 4)
+        writeU32(&pe, at: 0xD0, UInt32(0x2000 + virtTextSize))
+        writeU32(&pe, at: 0xD4, 0x0200)
+        writeU16(&pe, at: 0xDC, 3)
+        writeU16(&pe, at: 0xDE, 0x8540)
         writeU32(&pe, at: 0xE0, 0x10_0000)
         writeU32(&pe, at: 0xE4, 0x1000)
         writeU32(&pe, at: 0xE8, 0x10_0000)
         writeU32(&pe, at: 0xEC, 0x1000)
-        writeU32(&pe, at: 0xF4, 16)     // NumberOfRvaAndSizes
-        // DataDirectory[14] (CLR Runtime Header) at 0xF8 + 14*8 = 0x168
+        writeU32(&pe, at: 0xF4, 16)
         writeU32(&pe, at: 0x168, 0x2008)
         writeU32(&pe, at: 0x16C, 72)
 
-        // Section Header ".text" at 0x178 (40 bytes)
         let secNameBytes = Array(".text\0\0\0".utf8)
         for i in 0..<8 { pe[0x178 + i] = secNameBytes[i] }
-        writeU32(&pe, at: 0x180, UInt32(textSection.count)) // VirtualSize
-        writeU32(&pe, at: 0x184, 0x2000)                    // VirtualAddress
-        writeU32(&pe, at: 0x188, UInt32(rawTextSize))       // SizeOfRawData
-        writeU32(&pe, at: 0x18C, 0x0200)                    // PointerToRawData
-        writeU32(&pe, at: 0x19C, 0x6000_0020)               // CODE | EXECUTE | READ
+        writeU32(&pe, at: 0x180, UInt32(textSection.count))
+        writeU32(&pe, at: 0x184, 0x2000)
+        writeU32(&pe, at: 0x188, UInt32(rawTextSize))
+        writeU32(&pe, at: 0x18C, 0x0200)
+        writeU32(&pe, at: 0x19C, 0x6000_0020)
 
         pe.append(textSection)
         return pe
     }
-
-    // MARK: - Helpers
 
     private static func deterministicGUID(for name: String) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: 16)

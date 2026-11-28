@@ -12,8 +12,6 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: Sources
-    dependencies:
-      - sdk: libz.tbd
     settings:
       base:
         SWIFT_VERSION: "5.0"

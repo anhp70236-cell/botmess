@@ -30,6 +30,9 @@ public enum DumpCSGenerator {
         if !types.isEmpty {
             for t in types {
                 try writer.writeLine("// Namespace: \(t.namespace)")
+                if let decl = t.declaringTypeName, !decl.isEmpty {
+                    try writer.writeLine("// DeclaringType: \(decl)")
+                }
                 if options.restoreAttributes {
                     for attr in t.attributes {
                         try writer.writeLine("[\(attr.name)]")
@@ -50,23 +53,50 @@ public enum DumpCSGenerator {
                     else if t.isSealed { mods += "sealed " }
                 }
 
-                var inheritList: [String] = []
-                if let parent = t.parentName,
-                   !parent.isEmpty,
-                   parent != "System.Object",
-                   parent != "object",
-                   parent != "System.ValueType",
-                   parent != "System.Enum" {
-                    inheritList.append(parent)
+                var displayName = t.name
+                if !t.genericParamNames.isEmpty {
+                    if let tick = displayName.range(of: "`", options: .backwards) {
+                        displayName = String(displayName[..<tick.lowerBound])
+                    }
+                    displayName += "<\(t.genericParamNames.joined(separator: ", "))>"
                 }
-                for iface in t.interfaceNames where !iface.isEmpty {
-                    inheritList.append(iface)
+
+                var inheritList: [String] = []
+                if t.isEnum {
+                    if let valField = t.fields.first(where: { $0.name == "value__" }) {
+                        inheritList.append(valField.typeName)
+                    }
+                } else {
+                    if let parent = t.parentName,
+                       !parent.isEmpty,
+                       parent != "System.Object",
+                       parent != "object",
+                       parent != "System.ValueType",
+                       parent != "System.Enum" {
+                        inheritList.append(parent)
+                    }
+                    for iface in t.interfaceNames where !iface.isEmpty {
+                        inheritList.append(iface)
+                    }
                 }
                 let inheritSuffix = inheritList.isEmpty ? "" : " : " + inheritList.joined(separator: ", ")
                 let tdComment = options.writeTypeDefIndexes ? " // TypeDefIndex: \(t.typeDefIndex)" : ""
 
-                try writer.writeLine("\(vis) \(mods)\(kindWord) \(t.name)\(inheritSuffix)\(tdComment)")
+                try writer.writeLine("\(vis) \(mods)\(kindWord) \(displayName)\(inheritSuffix)\(tdComment)")
                 try writer.writeLine("{")
+
+                if t.isEnum {
+                    if options.includeFields {
+                        let enumMembers = t.fields.filter { $0.name != "value__" }
+                        for (idx, f) in enumMembers.enumerated() {
+                            let val = f.defaultValue ?? "\(idx)"
+                            try writer.writeLine("\tpublic const \(t.name) \(f.name) = \(val); // 0x0")
+                        }
+                    }
+                    try writer.writeLine("}")
+                    try writer.writeLine("")
+                    continue
+                }
 
                 if options.includeFields && !t.fields.isEmpty {
                     try writer.writeLine("\t// Fields")
@@ -78,15 +108,7 @@ public enum DumpCSGenerator {
                         }
                         let fVis = fieldVisibility(f.typeAttrs)
                         let fMod = f.isConst ? "const " : (f.isStatic ? "static " : "")
-                        let valPart: String
-                        if let dv = f.defaultValue {
-                            valPart = " = \(dv)"
-                        } else if let ci = f.ctorInitValue {
-                            valPart = ""
-                            _ = ci
-                        } else {
-                            valPart = ""
-                        }
+                        let valPart = f.defaultValue.map { " = \($0)" } ?? ""
                         var offComment = ""
                         if options.writeFieldOffsets {
                             if f.offset >= 0 {
@@ -113,11 +135,30 @@ public enum DumpCSGenerator {
                                 try writer.writeLine("\t[\(attr.name)]")
                             }
                         }
+                        if options.writeMethodOffsets && (p.getRVA > 0 || p.setRVA > 0) {
+                            var rvaNotes: [String] = []
+                            if p.getRVA > 0 { rvaNotes.append(String(format: "get RVA: 0x%llX", p.getRVA)) }
+                            if p.setRVA > 0 { rvaNotes.append(String(format: "set RVA: 0x%llX", p.setRVA)) }
+                            try writer.writeLine("\t// \(rvaNotes.joined(separator: " | "))")
+                        }
                         var accessors: [String] = []
                         if p.getMethodIndex >= 0 { accessors.append("get;") }
                         if p.setMethodIndex >= 0 { accessors.append("set;") }
                         if accessors.isEmpty { accessors.append("get;") }
                         try writer.writeLine("\tpublic \(p.typeName) \(p.name) { \(accessors.joined(separator: " ")) }")
+                    }
+                    try writer.writeLine("")
+                }
+
+                if !t.events.isEmpty {
+                    try writer.writeLine("\t// Events")
+                    for ev in t.events {
+                        if options.restoreAttributes {
+                            for attr in ev.attributes {
+                                try writer.writeLine("\t[\(attr.name)]")
+                            }
+                        }
+                        try writer.writeLine("\tpublic event \(ev.typeName) \(ev.name);")
                     }
                     try writer.writeLine("")
                 }
@@ -143,6 +184,7 @@ public enum DumpCSGenerator {
                         if (m.flags & 0x0010) != 0 { mMods += "static " }
                         else if (m.flags & 0x0400) != 0 { mMods += "abstract " }
                         else if (m.flags & 0x0040) != 0 { mMods += "virtual " }
+                        let genSuffix = m.genericParamNames.isEmpty ? "" : "<\(m.genericParamNames.joined(separator: ", "))>"
                         let paramText = m.parameters.map { p in
                             var prefix = ""
                             if p.isOut { prefix = "out " }
@@ -150,7 +192,7 @@ public enum DumpCSGenerator {
                             let def = p.defaultValue.map { " = \($0)" } ?? ""
                             return "\(prefix)\(p.typeName) \(p.name)\(def)"
                         }.joined(separator: ", ")
-                        try writer.writeLine("\t\(mVis) \(mMods)\(m.returnTypeName) \(m.name)(\(paramText)) { }")
+                        try writer.writeLine("\t\(mVis) \(mMods)\(m.returnTypeName) \(m.name)\(genSuffix)(\(paramText)) { }")
                         try writer.writeLine("")
                     }
                 }
@@ -160,11 +202,11 @@ public enum DumpCSGenerator {
             }
         }
 
-        // Plaintext Mach-O Obj-C / Swift fallback section (always useful when metadata is encrypted or for native classes)
+        // Plaintext Mach-O Obj-C / Swift fallback section
         if let macho = macho, options.deepMachOScan {
             if !macho.objcClasses.isEmpty {
                 try writer.writeLine("// ============================================================")
-                try writer.writeLine("// Objective-C Classes (Plaintext Mach-O Fallback)")
+                try writer.writeLine("// Objective-C Classes (Plaintext Mach-O)")
                 try writer.writeLine("// ============================================================")
                 for cls in macho.objcClasses {
                     try writer.writeLine("// Obj-C Class: \(cls.name) : \(cls.superName)")

@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: build-ipa-main
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -28,7 +32,7 @@ jobs:
           ICON_PATH="Sources/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
           if [ ! -f "$ICON_PATH" ]; then
             python3 - <<'PY'
-          import os, struct, zlib
+          import struct, zlib
           w, h = 1024, 1024
           rows = []
           for y in range(h):
@@ -51,9 +55,23 @@ jobs:
 
       - name: Run Pure-Swift Core Engine Unit Tests
         run: |
+          set -o pipefail
           ENGINE_FILES=$(find Sources/Engine -name '*.swift' | sort)
-          swiftc -O -lz -o EngineTests $ENGINE_FILES Tests/EngineTests.swift
-          ./EngineTests
+          if ! swiftc -O -parse-as-library -o EngineTests $ENGINE_FILES Tests/EngineTests.swift 2>&1 | tee test_build.log; then
+            grep -E "error:|fatal error:" test_build.log | head -n 30 | while IFS= read -r line; do
+              echo "::error title=EngineTestBuild::$line"
+            done
+            tail -n 20 test_build.log | while IFS= read -r line; do
+              echo "::error title=EngineTestBuildTail::$line"
+            done
+            exit 1
+          fi
+          if ! ./EngineTests 2>&1 | tee test_run.log; then
+            tail -n 30 test_run.log | while IFS= read -r line; do
+              echo "::error title=EngineTestRun::$line"
+            done
+            exit 1
+          fi
 
       - name: Install XcodeGen & Generate Xcode Project
         run: |
@@ -62,7 +80,8 @@ jobs:
 
       - name: Build Unsigned Release arm64 App
         run: |
-          xcodebuild \
+          set -o pipefail
+          if ! xcodebuild \
             -project IPADumperPro.xcodeproj \
             -scheme IPADumperPro \
             -configuration Release \
@@ -75,7 +94,15 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             SYMROOT="$PWD/build" \
-            build
+            build 2>&1 | tee xcodebuild.log; then
+            grep -E "error:|fatal error:" xcodebuild.log | head -n 30 | while IFS= read -r line; do
+              echo "::error title=XcodeBuild::$line"
+            done
+            tail -n 20 xcodebuild.log | while IFS= read -r line; do
+              echo "::error title=XcodeBuildTail::$line"
+            done
+            exit 1
+          fi
 
       - name: Package IPADumperPro.ipa
         run: |

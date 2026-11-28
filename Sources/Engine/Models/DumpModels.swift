@@ -56,6 +56,7 @@ public struct IPAInspectionInfo: Codable, Equatable, Sendable {
     public var bundleVersion: String
     public var executableName: String
     public var primaryMachOPath: String
+    public var secondaryMachOPath: String?
     public var unityFrameworkPath: String?
     public var metadataPath: String?
     public var totalZipEntries: Int
@@ -69,6 +70,7 @@ public struct IPAInspectionInfo: Codable, Equatable, Sendable {
         bundleVersion: String,
         executableName: String,
         primaryMachOPath: String,
+        secondaryMachOPath: String? = nil,
         unityFrameworkPath: String? = nil,
         metadataPath: String? = nil,
         totalZipEntries: Int = 0,
@@ -81,6 +83,7 @@ public struct IPAInspectionInfo: Codable, Equatable, Sendable {
         self.bundleVersion = bundleVersion
         self.executableName = executableName
         self.primaryMachOPath = primaryMachOPath
+        self.secondaryMachOPath = secondaryMachOPath
         self.unityFrameworkPath = unityFrameworkPath
         self.metadataPath = metadataPath
         self.totalZipEntries = totalZipEntries
@@ -150,28 +153,6 @@ public struct NativeSymbolEntry: Codable, Equatable, Sendable {
     public var source: String
 }
 
-public struct MachOBinaryInfo: Codable, Equatable, Sendable {
-    public var sourceName: String
-    public var architecture: String
-    public var baseVM: UInt64
-    public var sliceOffsetInFat: UInt64
-    public var sliceSize: UInt64
-    public var hasChainedFixups: Bool
-    public var chainedFixupsCount: Int
-    public var fairPlayEncrypted: Bool
-    public var cryptId: UInt32
-    public var cryptOffset: UInt32
-    public var cryptSize: UInt32
-    public var segments: [SegmentInfo]
-    public var sections: [SectionInfo]
-    public var functionStartsRVA: [UInt64]
-    public var objcClasses: [ObjCClassInfo]
-    public var swiftTypes: [SwiftTypeInfo]
-    public var exportedSymbols: [NativeSymbolEntry]
-    public var symtabSymbols: [NativeSymbolEntry]
-    public var xrefFunctions: [NativeSymbolEntry]
-}
-
 public struct Il2CppImageInfo: Codable, Equatable, Sendable {
     public var index: Int
     public var name: String
@@ -219,6 +200,7 @@ public struct Il2CppMethodInfo: Codable, Equatable, Sendable {
     public var name: String
     public var returnTypeIndex: Int32
     public var returnTypeName: String
+    public var genericParamNames: [String]
     public var parameters: [Il2CppParameterInfo]
     public var token: UInt32
     public var flags: UInt16
@@ -236,8 +218,21 @@ public struct Il2CppPropertyInfo: Codable, Equatable, Sendable {
     public var name: String
     public var getMethodIndex: Int32
     public var setMethodIndex: Int32
+    public var getRVA: UInt64
+    public var setRVA: UInt64
     public var typeName: String
     public var attrs: UInt32
+    public var token: UInt32
+    public var attributes: [Il2CppAttributeInfo]
+}
+
+public struct Il2CppEventInfo: Codable, Equatable, Sendable {
+    public var index: Int
+    public var name: String
+    public var typeName: String
+    public var addMethodIndex: Int32
+    public var removeMethodIndex: Int32
+    public var raiseMethodIndex: Int32
     public var token: UInt32
     public var attributes: [Il2CppAttributeInfo]
 }
@@ -249,11 +244,14 @@ public struct Il2CppTypeInfo: Codable, Equatable, Sendable {
     public var namespace: String
     public var name: String
     public var fullName: String
+    public var genericParamNames: [String]
     public var flags: UInt32
     public var token: UInt32
     public var parentTypeIndex: Int32
     public var parentName: String?
     public var declaringTypeIndex: Int32
+    public var declaringTypeName: String?
+    public var nestedTypeNames: [String]
     public var interfaceTypeIndices: [Int32]
     public var interfaceNames: [String]
     public var isValueType: Bool
@@ -264,6 +262,7 @@ public struct Il2CppTypeInfo: Codable, Equatable, Sendable {
     public var fields: [Il2CppFieldInfo]
     public var methods: [Il2CppMethodInfo]
     public var properties: [Il2CppPropertyInfo]
+    public var events: [Il2CppEventInfo]
     public var attributes: [Il2CppAttributeInfo]
 }
 
@@ -308,6 +307,7 @@ public enum ExplorerItemKind: String, Codable, CaseIterable, Sendable {
     case method = "Method"
     case field = "Field"
     case property = "Property"
+    case event = "Event"
     case type = "Type"
     case native = "Obj-C/Swift"
 }
@@ -336,6 +336,7 @@ public struct DumpStats: Codable, Equatable, Sendable {
     public var methodsCount: Int
     public var fieldsCount: Int
     public var propertiesCount: Int
+    public var eventsCount: Int
     public var stringLiteralsCount: Int
     public var dummyDllsCount: Int
     public var nativeSymbolsCount: Int

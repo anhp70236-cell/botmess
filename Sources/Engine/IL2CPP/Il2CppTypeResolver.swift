@@ -11,17 +11,35 @@ public struct Il2CppTypeResolver: Sendable {
         self.typeNamespaces = typeNamespaces
     }
 
-    public func resolveTypeName(typeIndex: Int32) -> String {
+    public func resolveTypeName(typeIndex: Int32, depth: Int = 0) -> String {
+        guard depth < 6 else { return "object" }
         let idx = Int(typeIndex)
         guard idx >= 0 && idx < il2cppTypes.count else {
             return "object"
         }
         let t = il2cppTypes[idx]
-        let base = resolveEnum(t.typeEnum, dataIndex: t.dataIndex, elemEnum: t.elementEnum, elemDataIndex: t.elementDataIndex, rank: t.arrayRank)
+        let base: String
+        if t.typeEnum == 0x15 { // GENERICINST
+            var rawBase = t.dataIndex >= 0 ? resolveTypeDefName(t.dataIndex) : (t.genericBaseTypeIndex >= 0 ? resolveTypeName(typeIndex: t.genericBaseTypeIndex, depth: depth + 1) : "object")
+            if !t.genericArgTypeIndices.isEmpty {
+                if let tick = rawBase.range(of: "`", options: .backwards) {
+                    let suffix = rawBase[tick.upperBound...]
+                    if suffix.allSatisfy({ $0.isNumber }) {
+                        rawBase = String(rawBase[..<tick.lowerBound])
+                    }
+                }
+                let args = t.genericArgTypeIndices.map { resolveTypeName(typeIndex: $0, depth: depth + 1) }.joined(separator: ", ")
+                base = "\(rawBase)<\(args)>"
+            } else {
+                base = rawBase
+            }
+        } else {
+            base = resolveEnum(t.typeEnum, dataIndex: t.dataIndex, elemEnum: t.elementEnum, elemDataIndex: t.elementDataIndex, rank: t.arrayRank)
+        }
         return t.isByRef ? "ref \(base)" : base
     }
 
-    private func resolveTypeDefName(_ tdIdx: Int32) -> String {
+    public func resolveTypeDefName(_ tdIdx: Int32) -> String {
         let idx = Int(tdIdx)
         guard idx >= 0 && idx < typeNames.count else { return "Il2CppObject" }
         let nm = typeNames[idx]

@@ -128,7 +128,6 @@ public enum StructAndJSONGenerator {
         try writer.writeLine("  ],")
 
         try writer.writeLine("  \"ScriptString\": [")
-        var strCount = 0
         let addressableStrings = stringLiterals.filter { $0.address > 0 }
         for (idx, sl) in addressableStrings.enumerated() {
             let comma = (idx + 1 < addressableStrings.count) ? "," : ""
@@ -136,12 +135,22 @@ public enum StructAndJSONGenerator {
             try writer.writeLine("      \"Address\": \(sl.address),")
             try writer.writeLine("      \"Value\": \"\(jsonEscape(sl.value))\"")
             try writer.writeLine("    }\(comma)")
-            strCount += 1
         }
-        _ = strCount
         try writer.writeLine("  ],")
 
-        try writer.writeLine("  \"ScriptMetadata\": [],")
+        try writer.writeLine("  \"ScriptMetadata\": [")
+        let metaTypes = Array(types.prefix(50_000))
+        for (idx, t) in metaTypes.enumerated() {
+            let comma = (idx + 1 < metaTypes.count) ? "," : ""
+            let cIdent = Il2CppTypeResolver.sanitizeCIdentifier(t.fullName)
+            try writer.writeLine("    {")
+            try writer.writeLine("      \"Address\": 0,")
+            try writer.writeLine("      \"Name\": \"\(jsonEscape(t.fullName))_TypeInfo\",")
+            try writer.writeLine("      \"Signature\": \"\(cIdent)_c*\"")
+            try writer.writeLine("    }\(comma)")
+        }
+        try writer.writeLine("  ],")
+
         try writer.writeLine("  \"ScriptMetadataMethod\": [],")
         let addrList = addresses.map { String($0) }.joined(separator: ", ")
         try writer.writeLine("  \"Addresses\": [\(addrList)]")
@@ -163,6 +172,71 @@ public enum StructAndJSONGenerator {
             try writer.writeLine("  {\"index\": \(sl.index), \"address\": \"\(addrHex)\", \"value\": \"\(jsonEscape(sl.value))\"}\(comma)")
         }
         try writer.writeLine("]")
+        try writer.close()
+    }
+
+    public static func generateOffsetsSummary(
+        to url: URL,
+        images: [Il2CppImageInfo],
+        types: [Il2CppTypeInfo],
+        macho: MachOParser?,
+        diagnostics: ProtectionDiagnostics
+    ) throws {
+        let writer = try BufferedFileWriter(url: url)
+        defer { try? writer.close() }
+
+        try writer.writeLine("# IPA Dumper Pro v2.0 — Hierarchical Offsets Summary")
+        try writer.writeLine("# Metadata: \(diagnostics.metadataStatus.summaryText)")
+        try writer.writeLine("# Assemblies: \(images.count) | Types: \(types.count)")
+        try writer.writeLine("")
+
+        for t in types {
+            try writer.writeLine("[\(t.assemblyName)] \(t.fullName) (TypeDefIndex: \(t.typeDefIndex), Token: 0x\(String(t.token, radix: 16, uppercase: true)))")
+            for f in t.fields {
+                let offHex = f.offset >= 0 ? String(format: "0x%X", f.offset) : "0x0"
+                let dv = f.defaultValue.map { " = \($0)" } ?? ""
+                try writer.writeLine("  FIELD  \(offHex) | \(f.typeName) \(f.name)\(dv)")
+            }
+            for p in t.properties {
+                let gRva = p.getRVA > 0 ? String(format: " get=0x%llX", p.getRVA) : ""
+                let sRva = p.setRVA > 0 ? String(format: " set=0x%llX", p.setRVA) : ""
+                try writer.writeLine("  PROP   \(p.typeName) \(p.name)\(gRva)\(sRva)")
+            }
+            for ev in t.events {
+                try writer.writeLine("  EVENT  \(ev.typeName) \(ev.name)")
+            }
+            for m in t.methods {
+                let rvaHex = String(format: "0x%llX", m.rva)
+                let vaHex = String(format: "0x%llX", m.va)
+                let fHex = String(format: "0x%llX", m.fileOffset)
+                let sem = m.arm64Semantics.isEmpty ? "" : " | \(m.arm64Semantics)"
+                try writer.writeLine("  METHOD RVA=\(rvaHex) VA=\(vaHex) OFF=\(fHex) | \(m.returnTypeName) \(m.name)\(sem)")
+            }
+            try writer.writeLine("")
+        }
+
+        if let macho = macho {
+            if !macho.objcClasses.isEmpty {
+                try writer.writeLine("# Objective-C Classes (\(macho.objcClasses.count))")
+                for cls in macho.objcClasses {
+                    try writer.writeLine("[\(cls.name) : \(cls.superName)]")
+                    for iv in cls.ivars {
+                        try writer.writeLine(String(format: "  IVAR   0x%X | %@ %@", iv.offset, iv.typeEncoding, iv.name))
+                    }
+                    for m in cls.methods {
+                        try writer.writeLine(String(format: "  OBJC   RVA=0x%llX VA=0x%llX OFF=0x%llX | %@%@", m.rva, m.va, m.fileOffset, m.isClassMethod ? "+" : "-", m.name))
+                    }
+                }
+                try writer.writeLine("")
+            }
+            if !macho.exportedSymbols.isEmpty {
+                try writer.writeLine("# Mach-O Exports (\(macho.exportedSymbols.count))")
+                for sym in macho.exportedSymbols.prefix(5000) {
+                    try writer.writeLine(String(format: "  EXPORT RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
+                }
+            }
+        }
+
         try writer.close()
     }
 

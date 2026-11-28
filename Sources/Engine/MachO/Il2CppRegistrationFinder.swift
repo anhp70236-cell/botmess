@@ -112,7 +112,6 @@ public enum Il2CppRegistrationFinder {
                 return false
             }
 
-            // Determine whether fieldOffsets is int32** (pointer per TypeDef) or flat int32*
             var pointerMode = false
             if foTableOff + cnt1 * 8 <= sliceSize {
                 var hits = 0
@@ -130,26 +129,54 @@ public enum Il2CppRegistrationFinder {
                         }
                     }
                 }
-            }
-
-            guard pointerMode else { return false }
-
-            var parsedFields = [[Int32]](repeating: [], count: typeDefsCount)
-            for ti in 0..<typeDefsCount {
-                let fc = ti < typeFieldCounts.count ? Int(typeFieldCounts[ti]) : 0
-                if fc == 0 { continue }
-                let arrVM = macho.decodePointer(atSliceRelOffset: foTableOff + ti * 8)
-                guard let arrOff = macho.vmToSliceRelOffset(arrVM), arrOff + fc * 4 <= sliceSize else { continue }
-                var arr: [Int32] = []
-                arr.reserveCapacity(fc)
-                for fi in 0..<fc {
-                    arr.append(macho.readSliceInt32(arrOff + fi * 4))
+                if !pointerMode && tested > 0 && hits >= min(2, tested) {
+                    pointerMode = true
                 }
-                parsedFields[ti] = arr
             }
-            fieldOffsetsByType = parsedFields
 
-            // Also parse Il2CppType table located at p - 32 (typesCount @ p-32, types** @ p-24)
+            if pointerMode {
+                var parsedFields = [[Int32]](repeating: [], count: typeDefsCount)
+                for ti in 0..<typeDefsCount {
+                    let fc = ti < typeFieldCounts.count ? Int(typeFieldCounts[ti]) : 0
+                    if fc == 0 { continue }
+                    let arrVM = macho.decodePointer(atSliceRelOffset: foTableOff + ti * 8)
+                    guard let arrOff = macho.vmToSliceRelOffset(arrVM), arrOff + fc * 4 <= sliceSize else { continue }
+                    var arr: [Int32] = []
+                    arr.reserveCapacity(fc)
+                    for fi in 0..<fc {
+                        arr.append(macho.readSliceInt32(arrOff + fi * 4))
+                    }
+                    parsedFields[ti] = arr
+                }
+                fieldOffsetsByType = parsedFields
+            } else {
+                // Legacy flat int32* fieldOffsets table fallback
+                let totalFields = typeFieldCounts.reduce(0) { $0 + Int($1) }
+                guard totalFields > 0, foTableOff + totalFields * 4 <= sliceSize else { return false }
+                var sane = 0
+                let checkCount = min(totalFields, 32)
+                for i in 0..<checkCount {
+                    let v = macho.readSliceInt32(foTableOff + i * 4)
+                    if v >= 0 && v <= 0x40000 { sane += 1 }
+                }
+                guard sane >= max(1, checkCount / 2) else { return false }
+                var parsedFields = [[Int32]](repeating: [], count: typeDefsCount)
+                var cursor = 0
+                for ti in 0..<typeDefsCount {
+                    let fc = ti < typeFieldCounts.count ? Int(typeFieldCounts[ti]) : 0
+                    if fc == 0 { continue }
+                    var arr: [Int32] = []
+                    arr.reserveCapacity(fc)
+                    for _ in 0..<fc where cursor < totalFields {
+                        arr.append(macho.readSliceInt32(foTableOff + cursor * 4))
+                        cursor += 1
+                    }
+                    parsedFields[ti] = arr
+                }
+                fieldOffsetsByType = parsedFields
+            }
+
+            // Parse Il2CppType table located at p - 32 (typesCount @ p-32, types** @ p-24)
             if il2cppTypes.isEmpty && p >= 32 {
                 let tCnt = Int(macho.readSliceUInt32(p - 32))
                 let tHi = macho.readSliceUInt32(p - 28)
@@ -158,6 +185,15 @@ public enum Il2CppRegistrationFinder {
                    let tArrOff = macho.vmToSliceRelOffset(tArrVM),
                    tArrOff + tCnt * 8 <= sliceSize,
                    !macho.isInEncryptedRange(sliceRelOffset: tArrOff) {
+                    var typeVMToIndex: [UInt64: Int32] = [:]
+                    typeVMToIndex.reserveCapacity(tCnt)
+                    for k in 0..<tCnt {
+                        let tVM = macho.decodePointer(atSliceRelOffset: tArrOff + k * 8)
+                        if tVM != 0 {
+                            typeVMToIndex[tVM] = Int32(k)
+                        }
+                    }
+
                     var typesOut: [Il2CppTypeMetaEntry] = []
                     typesOut.reserveCapacity(tCnt)
                     var validTypes = 0
@@ -177,8 +213,8 @@ public enum Il2CppRegistrationFinder {
                         var elemEnum: UInt8 = 0
                         var elemDataIdx: Int32 = -1
                         var rank: UInt8 = 1
-                        let genBase: Int32 = -1
-                        let genArgs: [Int32] = []
+                        var genBase: Int32 = -1
+                        var genArgs: [Int32] = []
 
                         if tEnum != 0 && tEnum <= 0x55 {
                             validTypes += 1
@@ -207,16 +243,35 @@ public enum Il2CppRegistrationFinder {
                             }
                         } else if tEnum == 0x15 { // GENERICINST (Il2CppGenericClass*)
                             let gcVM = macho.decodePointer(atSliceRelOffset: tOff)
-                            if let gcOff = macho.vmToSliceRelOffset(gcVM), gcOff + 16 <= sliceSize {
+                            if let gcOff = macho.vmToSliceRelOffset(gcVM), gcOff + 24 <= sliceSize {
                                 let baseTVM = macho.decodePointer(atSliceRelOffset: gcOff)
+                                if let mappedBase = typeVMToIndex[baseTVM] {
+                                    genBase = mappedBase
+                                }
                                 if let baseTOff = macho.vmToSliceRelOffset(baseTVM), baseTOff + 16 <= sliceSize {
                                     let bEnum = macho.readSliceUInt8(baseTOff + 10)
                                     if bEnum == 0x11 || bEnum == 0x12 {
                                         dataIdx = macho.readSliceInt32(baseTOff)
                                     }
                                 } else {
-                                    // Unity v27+ stores TypeDefinitionIndex directly at gcOff
                                     dataIdx = macho.readSliceInt32(gcOff)
+                                }
+
+                                // Il2CppGenericContext { Il2CppGenericInst* class_inst; Il2CppGenericInst* method_inst; } at +8
+                                let classInstVM = macho.decodePointer(atSliceRelOffset: gcOff + 8)
+                                if let instOff = macho.vmToSliceRelOffset(classInstVM), instOff + 16 <= sliceSize {
+                                    let argc = Int(macho.readSliceUInt32(instOff))
+                                    let argvVM = macho.decodePointer(atSliceRelOffset: instOff + 8)
+                                    if argc > 0 && argc <= 16,
+                                       let argvOff = macho.vmToSliceRelOffset(argvVM),
+                                       argvOff + argc * 8 <= sliceSize {
+                                        for ai in 0..<argc {
+                                            let argTVM = macho.decodePointer(atSliceRelOffset: argvOff + ai * 8)
+                                            if let argIdx = typeVMToIndex[argTVM] {
+                                                genArgs.append(argIdx)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         } else if tEnum == 0x13 || tEnum == 0x1E { // VAR / MVAR
@@ -396,7 +451,6 @@ public enum Il2CppRegistrationFinder {
                         if strategyUsed == "None" { strategyUsed = "CodeGenModuleScan" }
                     }
 
-                    // Legacy v24 CodeRegistration
                     if legacyMethodRVAs.isEmpty && metadataVersion <= 24 && totalMethodsCount >= 2 {
                         let mc = Int(macho.readSliceUInt32(p))
                         let mhi = macho.readSliceUInt32(p + 4)

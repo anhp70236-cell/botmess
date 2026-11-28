@@ -75,6 +75,7 @@ public final class DumpCoordinator {
         guard let machoEntry = primaryMachO else {
             throw DumpCoordinatorError.noMachOFound
         }
+        let secondaryPath: String? = (unityFw != nil && appExec != nil && appExec?.path != unityFw?.path) ? appExec?.path : nil
 
         let metaEntry = entries.first { $0.path.hasSuffix("Data/Managed/Metadata/global-metadata.dat") }
             ?? entries.first { $0.path.lowercased().hasSuffix("global-metadata.dat") }
@@ -87,6 +88,7 @@ public final class DumpCoordinator {
             bundleVersion: bundleVer,
             executableName: execName,
             primaryMachOPath: machoEntry.path,
+            secondaryMachOPath: secondaryPath,
             unityFrameworkPath: unityFw?.path,
             metadataPath: metaEntry?.path,
             totalZipEntries: entries.count,
@@ -123,6 +125,16 @@ public final class DumpCoordinator {
         }
         if isCancelled() { throw DumpCoordinatorError.cancelled }
 
+        var localSecondaryMachO: URL? = nil
+        if let secPath = info.secondaryMachOPath,
+           let secEntry = reader.entries.first(where: { $0.path == secPath }) {
+            let secDest = tempDir.appendingPathComponent("secondary_macho")
+            try? reader.extractEntry(secEntry, to: secDest, progress: nil)
+            if FileManager.default.fileExists(atPath: secDest.path) {
+                localSecondaryMachO = secDest
+            }
+        }
+
         var localMetadata: URL? = nil
         if let metaPath = info.metadataPath,
            let metaEntry = reader.entries.first(where: { $0.path == metaPath }) {
@@ -135,6 +147,7 @@ public final class DumpCoordinator {
         return try executeCorePipeline(
             info: info,
             machOURL: localMachO,
+            secondaryMachOURL: localSecondaryMachO,
             metadataURL: localMetadata,
             outputsRootURL: outputsRootURL,
             options: options,
@@ -175,6 +188,7 @@ public final class DumpCoordinator {
             bundleVersion: "1.0",
             executableName: machOURL.lastPathComponent,
             primaryMachOPath: machOURL.path,
+            secondaryMachOPath: nil,
             unityFrameworkPath: nil,
             metadataPath: metadataURL?.path,
             totalZipEntries: 0,
@@ -183,6 +197,7 @@ public final class DumpCoordinator {
         return try executeCorePipeline(
             info: info,
             machOURL: machOURL,
+            secondaryMachOURL: nil,
             metadataURL: metadataURL,
             outputsRootURL: outputsRootURL,
             options: options,
@@ -195,6 +210,7 @@ public final class DumpCoordinator {
     private func executeCorePipeline(
         info: IPAInspectionInfo,
         machOURL: URL,
+        secondaryMachOURL: URL?,
         metadataURL: URL?,
         outputsRootURL: URL,
         options: DumpOptions,
@@ -207,7 +223,6 @@ public final class DumpCoordinator {
         let workerCount = max(1, min(4, options.workerThreads))
         onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.30, message: "Khởi chạy \(workerCount) Worker(s) phân tích song song Mach-O & Metadata..."))
 
-        // Phase 2A: Parallel Worker 1 (Metadata Quick Peek) & Worker 2 (Mach-O Map + Sections + Fixups + Deep Scan)
         let group = DispatchGroup()
         let sem = DispatchSemaphore(value: workerCount)
         let lock = NSLock()
@@ -257,7 +272,7 @@ public final class DumpCoordinator {
 
         if let err = machoError { throw err }
         if let err = metaPeekError { throw err }
-        guard let macho = parsedMachO else { throw DumpCoordinatorError.noMachOFound }
+        guard var macho = parsedMachO else { throw DumpCoordinatorError.noMachOFound }
         if isCancelled() { throw DumpCoordinatorError.cancelled }
 
         let metaStatus = peekResult?.status ?? .missing
@@ -285,7 +300,7 @@ public final class DumpCoordinator {
 
         if let metaURL = metadataURL, let peek = peekResult, peek.status.isValid {
             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.54, message: "Định vị CodeRegistration, MetadataRegistration & FieldOffsets..."))
-            let reg = Il2CppRegistrationFinder.find(
+            var reg = Il2CppRegistrationFinder.find(
                 in: macho,
                 imageNames: peek.imageNames,
                 typeFieldCounts: peek.typeFieldCounts,
@@ -297,7 +312,29 @@ public final class DumpCoordinator {
                 onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.60, message: msg))
             }
 
-            onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.65, message: "Giải mã toàn bộ Types, Fields, Properties, Methods & Attributes..."))
+            // Multi-binary fallback: if primary Mach-O had no IL2CPP registration, probe secondary Mach-O
+            if reg.codeGenModules.isEmpty && reg.legacyMethodRVAs.isEmpty,
+               let secURL = secondaryMachOURL,
+               let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent) {
+                if options.deepMachOScan { secMacho.runDeepNativeScan() }
+                let secReg = Il2CppRegistrationFinder.find(
+                    in: secMacho,
+                    imageNames: peek.imageNames,
+                    typeFieldCounts: peek.typeFieldCounts,
+                    typeDefsCount: peek.totalTypes,
+                    totalMethodsCount: peek.totalMethods,
+                    metadataVersion: peek.version,
+                    ctorPairsByImage: peek.ctorPairsByImage
+                ) { msg in
+                    onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.62, message: msg))
+                }
+                if !secReg.codeGenModules.isEmpty || !secReg.legacyMethodRVAs.isEmpty {
+                    reg = secReg
+                    macho = secMacho
+                }
+            }
+
+            onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.65, message: "Giải mã toàn bộ Types, Fields, Properties, Events, Methods & Attributes..."))
             fullMeta = try Il2CppMetadataParser.inspectAndParse(
                 url: metaURL,
                 registration: reg,
@@ -306,14 +343,12 @@ public final class DumpCoordinator {
             ) { msg in
                 onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.72, message: msg))
             }
-        } else if let metaURL = metadataURL {
-            _ = metaURL
+        } else if metadataURL != nil {
             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.62, message: "Chuyển sang chế độ Mach-O Fallback (Obj-C: \(macho.objcClasses.count), Swift: \(macho.swiftTypes.count), Exports: \(macho.exportedSymbols.count))..."))
         }
 
         if isCancelled() { throw DumpCoordinatorError.cancelled }
 
-        // Phase 3: Create output directory & generate selected outputs in parallel across workers
         let fm = FileManager.default
         if !fm.fileExists(atPath: outputsRootURL.path) {
             try fm.createDirectory(at: outputsRootURL, withIntermediateDirectories: true)
@@ -377,6 +412,14 @@ public final class DumpCoordinator {
             }
         }
 
+        try StructAndJSONGenerator.generateOffsetsSummary(
+            to: outDir.appendingPathComponent("offsets_summary.txt"),
+            images: fullMeta.images,
+            types: fullMeta.types,
+            macho: macho,
+            diagnostics: diagnostics
+        )
+
         if options.generateDummyDLLs && !fullMeta.images.isEmpty {
             let dllDir = outDir.appendingPathComponent("DummyDll")
             do {
@@ -396,18 +439,15 @@ public final class DumpCoordinator {
         genGroup.wait()
         if let err = genError { throw err }
 
-        // Also write a concise diagnostic & Mach-O summary report
         let summaryURL = outDir.appendingPathComponent("report.txt")
         try writeSummaryReport(to: summaryURL, info: info, diagnostics: diagnostics, macho: macho, meta: fullMeta, dummyDllCount: dummyDllCount)
 
-        // Optional Auto-ZIP export
         if options.autoExportZip {
             onProgress(DumpProgressUpdate(phase: .packaging, progress: 0.93, message: "Đang nén gói kết quả ZIP..."))
             let zipURL = outDir.appendingPathComponent("\(safeBase)_dump.zip")
             try packageOutputDirectory(outDir, toZip: zipURL)
         }
 
-        // Build explorer rows + persist compact explorer index
         let explorerRows = buildExplorerRows(meta: fullMeta, macho: macho)
         let explorerURL = outDir.appendingPathComponent(".explorer_index.json")
         if let expData = try? JSONEncoder().encode(explorerRows) {
@@ -418,6 +458,7 @@ public final class DumpCoordinator {
         let totalMethods = fullMeta.types.reduce(0) { $0 + $1.methods.count }
         let totalFields = fullMeta.types.reduce(0) { $0 + $1.fields.count }
         let totalProps = fullMeta.types.reduce(0) { $0 + $1.properties.count }
+        let totalEvents = fullMeta.types.reduce(0) { $0 + $1.events.count }
         let totalFiltered = fullMeta.filteredRealMoneyCount + macho.filteredRealMoneyCount
         let nativeCount = macho.objcClasses.reduce(0) { $0 + $1.methods.count } + macho.swiftTypes.count + macho.exportedSymbols.count
 
@@ -427,6 +468,7 @@ public final class DumpCoordinator {
             methodsCount: totalMethods,
             fieldsCount: totalFields,
             propertiesCount: totalProps,
+            eventsCount: totalEvents,
             stringLiteralsCount: fullMeta.stringLiterals.count,
             dummyDllsCount: dummyDllCount,
             nativeSymbolsCount: nativeCount,
@@ -553,11 +595,33 @@ public final class DumpCoordinator {
                     name: p.name,
                     signature: "\(p.typeName) \(p.name) { get; set; }",
                     dataType: p.typeName,
-                    rvaHex: "—",
+                    rvaHex: p.getRVA > 0 ? String(format: "0x%llX", p.getRVA) : "—",
                     vaHex: "—",
                     fileOffsetHex: "—",
                     fieldOffsetHex: "—",
                     tokenHex: String(format: "0x%X", p.token),
+                    typeDefIndex: t.typeDefIndex,
+                    extraNote: ""
+                ))
+                nextId += 1
+            }
+
+            for ev in t.events {
+                if rows.count >= 120_000 { break }
+                rows.append(ExplorerRow(
+                    id: nextId,
+                    kind: .event,
+                    assembly: t.assemblyName,
+                    namespace: t.namespace,
+                    className: t.fullName,
+                    name: ev.name,
+                    signature: "event \(ev.typeName) \(ev.name)",
+                    dataType: ev.typeName,
+                    rvaHex: "—",
+                    vaHex: "—",
+                    fileOffsetHex: "—",
+                    fieldOffsetHex: "—",
+                    tokenHex: String(format: "0x%X", ev.token),
                     typeDefIndex: t.typeDefIndex,
                     extraNote: ""
                 ))

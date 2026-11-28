@@ -35,7 +35,7 @@ public enum Il2CppMetadataParser {
             )
         }
 
-        // Check standard plaintext magic at 0 or aligned container offset (no decryption/cracking!)
+        // Check standard plaintext magic at 0 or aligned container offset (no DRM/encryption cracking)
         var baseOffset = -1
         if mapped.readUInt32(at: 0) == sanityMagic {
             let ver = mapped.readInt32(at: 4)
@@ -43,7 +43,7 @@ public enum Il2CppMetadataParser {
                 baseOffset = 0
             }
         } else {
-            let scanCap = min(mapped.count - 256, 65_536)
+            let scanCap = min(mapped.count - 256, 131_072)
             for off in stride(from: 4, through: scanCap, by: 4) {
                 if mapped.readUInt32(at: off) == sanityMagic {
                     let ver = mapped.readInt32(at: off + 4)
@@ -59,8 +59,8 @@ public enum Il2CppMetadataParser {
             let magic = mapped.hexPreview(at: 0, length: 8)
             let entropy = mapped.shannonEntropy()
             let reason = entropy >= 7.2
-                ? "Entropy cao (đã mã hoá hoặc nén tuỳ chỉnh; ứng dụng không bẻ khoá DRM/encryption — tự động chuyển sang quét Mach-O rõ)"
-                : "Header không khớp chuẩn Unity 0xFAB11BAF (đã bảo vệ tuỳ chỉnh — tự động chuyển sang quét Mach-O rõ)"
+                ? "Entropy cao (tệp đã mã hoá/nén tuỳ chỉnh — tự động phân tích sâu Mach-O rõ)"
+                : "Header không khớp chuẩn Unity 0xFAB11BAF — tự động phân tích sâu Mach-O rõ"
             return ParsedMetadataResult(
                 status: .encryptedOrProtected(magicHex: magic, entropy: entropy, reason: reason),
                 version: 0, images: [], types: [], stringLiterals: [],
@@ -76,6 +76,8 @@ public enum Il2CppMetadataParser {
         let stringOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 24))
         let stringSize = Int(mapped.readUInt32(at: baseOffset + 28))
 
+        let eventsOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 32))
+        let eventsSize = Int(mapped.readUInt32(at: baseOffset + 36))
         let propertiesOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 40))
         let propertiesSize = Int(mapped.readUInt32(at: baseOffset + 44))
         let methodsOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 48))
@@ -91,25 +93,28 @@ public enum Il2CppMetadataParser {
         let fieldsOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 96))
         let fieldsSize = Int(mapped.readUInt32(at: baseOffset + 100))
 
-        // Attributes (v24-v27: attributesInfo @120, attributeTypes @128; v29+: customAttributeData @256, customAttributeDataRange @264)
-        let attrInfoOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 120))
-        let attrInfoSize = Int(mapped.readUInt32(at: baseOffset + 124))
-        let attrTypesOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 128))
-        let attrTypesSize = Int(mapped.readUInt32(at: baseOffset + 132))
+        let genericParamsOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 104))
+        let genericParamsSize = Int(mapped.readUInt32(at: baseOffset + 108))
+        let genericContainersOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 120))
+        let genericContainersSize = Int(mapped.readUInt32(at: baseOffset + 124))
+        let nestedTypesOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 128))
+        let nestedTypesSize = Int(mapped.readUInt32(at: baseOffset + 132))
+        let interfacesOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 136))
+        let interfacesSize = Int(mapped.readUInt32(at: baseOffset + 140))
+
+        let typeDefsOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 160))
+        let typeDefsSize = Int(mapped.readUInt32(at: baseOffset + 164))
+
+        // Attributes: v24-v27 (@200/@208) vs v29+ (@256/@264)
+        let attrInfoOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 200))
+        let attrInfoSize = Int(mapped.readUInt32(at: baseOffset + 204))
+        let attrTypesOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 208))
+        let attrTypesSize = Int(mapped.readUInt32(at: baseOffset + 212))
         let attrDataOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 256))
         let attrDataSize = Int(mapped.readUInt32(at: baseOffset + 260))
         let attrDataRangeOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 264))
         let attrDataRangeSize = Int(mapped.readUInt32(at: baseOffset + 268))
 
-        let nestedTypesOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 144))
-        let nestedTypesSize = Int(mapped.readUInt32(at: baseOffset + 148))
-        let interfacesOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 152))
-        let interfacesSize = Int(mapped.readUInt32(at: baseOffset + 156))
-
-        let typeDefsOff = baseOffset + Int(mapped.readUInt32(at: baseOffset + 160))
-        let typeDefsSize = Int(mapped.readUInt32(at: baseOffset + 164))
-
-        // Validate basic table bounds
         guard mapped.inRange(stringOff, stringSize),
               mapped.inRange(typeDefsOff, typeDefsSize),
               typeDefsSize >= 64 else {
@@ -203,6 +208,8 @@ public enum Il2CppMetadataParser {
         let resolvedParamStride = paramStride > 0 ? paramStride : 12
         let propStride = autoProbeStride(tableOff: propertiesOff, tableSize: propertiesSize, candidates: [24, 20, 28])
         let resolvedPropStride = propStride > 0 ? propStride : 24
+        let eventStride = autoProbeStride(tableOff: eventsOff, tableSize: eventsSize, candidates: [24, 20, 28])
+        let resolvedEventStride = eventStride > 0 ? eventStride : 24
 
         guard typeStride > 0 else {
             return ParsedMetadataResult(
@@ -221,8 +228,9 @@ public enum Il2CppMetadataParser {
         let numFields = mapped.inRange(fieldsOff, fieldsSize) ? (fieldsSize / resolvedFieldStride) : 0
         let numParams = mapped.inRange(parametersOff, parametersSize) ? (parametersSize / resolvedParamStride) : 0
         let numProps = mapped.inRange(propertiesOff, propertiesSize) ? (propertiesSize / resolvedPropStride) : 0
+        let numEvents = mapped.inRange(eventsOff, eventsSize) ? (eventsSize / resolvedEventStride) : 0
 
-        // Auto-detect TypeDef fieldShift (accounts for v24 vs v27 vs v29 header fields)
+        // Auto-detect TypeDef fieldShift (v27+ = 0 on 88-byte stride; v24 = +4/+8/+12/+16)
         var tdShift = max(0, typeStride - 88)
         if totalTypes > 0 {
             var bestShift = tdShift
@@ -300,7 +308,6 @@ public enum Il2CppMetadataParser {
             ))
         }
 
-        // Map TypeDef -> ImageIndex
         var typeToImage = [Int](repeating: 0, count: totalTypes)
         for img in images {
             let start = max(0, img.typeStart)
@@ -308,6 +315,34 @@ public enum Il2CppMetadataParser {
             if start < end {
                 for ti in start..<end { typeToImage[ti] = img.index }
             }
+        }
+
+        // Parse GenericParameters (16 bytes: ownerIndex@0, nameIndex@4, constraintsStart@8, constraintsCount@10, num@12, flags@14)
+        var genericParamNamesByIdx: [String] = []
+        if mapped.inRange(genericParamsOff, genericParamsSize) && genericParamsSize >= 16 {
+            let gpCount = genericParamsSize / 16
+            genericParamNamesByIdx.reserveCapacity(gpCount)
+            for i in 0..<gpCount {
+                let gp = genericParamsOff + i * 16
+                let nm = readMetaString(mapped.readUInt32(at: gp + 4))
+                genericParamNamesByIdx.append(nm.isEmpty ? "T\(i)" : nm)
+            }
+        }
+
+        func genericParamsForContainer(_ gcIndex: Int32) -> [String] {
+            let idx = Int(gcIndex)
+            guard idx >= 0,
+                  mapped.inRange(genericContainersOff, genericContainersSize),
+                  (idx + 1) * 16 <= genericContainersSize else {
+                return []
+            }
+            let gcOff = genericContainersOff + idx * 16
+            let typeArgc = Int(mapped.readInt32(at: gcOff + 4))
+            let gParamStart = Int(mapped.readInt32(at: gcOff + 12))
+            guard typeArgc > 0 && typeArgc <= 16 && gParamStart >= 0 && gParamStart + typeArgc <= genericParamNamesByIdx.count else {
+                return []
+            }
+            return Array(genericParamNamesByIdx[gParamStart..<(gParamStart + typeArgc)])
         }
 
         // Field & Parameter Default Values lookup
@@ -346,32 +381,31 @@ public enum Il2CppMetadataParser {
             var ptr = defValDataOff + dataRel
             guard ptr >= defValDataOff && ptr < defValDataOff + defValDataSize else { return nil }
             switch typeEnum {
-            case 0x02: // BOOLEAN
+            case 0x02:
                 return mapped.readUInt8(at: ptr) != 0 ? "true" : "false"
-            case 0x03: // CHAR
-                let ch = mapped.readUInt16(at: ptr)
-                return String(format: "'\\u%04X'", ch)
-            case 0x04: // I1
+            case 0x03:
+                return String(format: "'\\u%04X'", mapped.readUInt16(at: ptr))
+            case 0x04:
                 return "\(mapped.readInt8(at: ptr))"
-            case 0x05: // U1
+            case 0x05:
                 return "\(mapped.readUInt8(at: ptr))"
-            case 0x06: // I2
+            case 0x06:
                 return "\(mapped.readInt16(at: ptr))"
-            case 0x07: // U2
+            case 0x07:
                 return "\(mapped.readUInt16(at: ptr))"
-            case 0x08: // I4
+            case 0x08:
                 return "\(version >= 29 ? mapped.readCompressedInt32(at: &ptr) : mapped.readInt32(at: ptr))"
-            case 0x09: // U4
+            case 0x09:
                 return "\(version >= 29 ? mapped.readCompressedUInt32(at: &ptr) : mapped.readUInt32(at: ptr))"
-            case 0x0A: // I8
+            case 0x0A:
                 return "\(mapped.readInt64(at: ptr))"
-            case 0x0B: // U8
+            case 0x0B:
                 return "\(mapped.readUInt64(at: ptr))"
-            case 0x0C: // R4
+            case 0x0C:
                 return String(format: "%g", mapped.readFloat(at: ptr))
-            case 0x0D: // R8
+            case 0x0D:
                 return String(format: "%g", mapped.readDouble(at: ptr))
-            case 0x0E: // STRING
+            case 0x0E:
                 let len: Int
                 if version >= 29 {
                     let u = mapped.readCompressedUInt32(at: &ptr)
@@ -392,7 +426,7 @@ public enum Il2CppMetadataParser {
             }
         }
 
-        // First pass over TypeDefs to gather quick names + fieldCounts + .ctor pairs
+        // Pre-pass: TypeDef names, field counts, .ctor pairs
         var rawTypeNames = [String](repeating: "", count: totalTypes)
         var rawNamespaces = [String](repeating: "", count: totalTypes)
         var typeFieldCounts = [UInt16](repeating: 0, count: totalTypes)
@@ -404,8 +438,7 @@ public enum Il2CppMetadataParser {
             let ns = readMetaString(mapped.readUInt32(at: tp + 4))
             rawTypeNames[ti] = name.isEmpty ? "Type_\(ti)" : name
             rawNamespaces[ti] = ns
-            let fc = mapped.readUInt16(at: tp + 68 + tdShift)
-            typeFieldCounts[ti] = fc
+            typeFieldCounts[ti] = mapped.readUInt16(at: tp + 68 + tdShift)
 
             if methodStride > 0 && numMethods > 0 {
                 let mStart = Int(mapped.readInt32(at: tp + 36 + tdShift))
@@ -427,7 +460,6 @@ public enum Il2CppMetadataParser {
             }
         }
 
-        // Build TypeResolver helper
         let il2cppTypes = registration?.il2cppTypes ?? []
         let resolver = Il2CppTypeResolver(
             il2cppTypes: il2cppTypes,
@@ -435,7 +467,7 @@ public enum Il2CppMetadataParser {
             typeNamespaces: rawNamespaces
         )
 
-        // Parse CustomAttributes (optional, fast lookup by token)
+        // CustomAttributes lookup
         var attrTypeIndicesByToken: [UInt32: [Int32]] = [:]
         if options.restoreAttributes {
             if version < 29, mapped.inRange(attrInfoOff, attrInfoSize), mapped.inRange(attrTypesOff, attrTypesSize) {
@@ -484,7 +516,6 @@ public enum Il2CppMetadataParser {
             var res: [Il2CppAttributeInfo] = []
             for rawIdx in list {
                 if version >= 29 {
-                    // rawIdx is methodIndex of the attribute .ctor
                     let mi = Int(rawIdx)
                     if mi >= 0 && mi < numMethods {
                         let mp = methodsOff + mi * methodStride
@@ -500,35 +531,43 @@ public enum Il2CppMetadataParser {
             return res
         }
 
-        // Parse StringLiterals
+        // StringLiterals with auto-detected field order: (len, idx) in v24-v27 vs (idx, len) in v29+
         var stringLiterals: [Il2CppStringLiteral] = []
         var filteredCount = 0
         if mapped.inRange(stringLiteralOff, stringLiteralSize), mapped.inRange(stringLiteralDataOff, stringLiteralDataSize) {
             let slCount = stringLiteralSize / 8
+            var scoreLenFirst = 0
+            var scoreIdxFirst = 0
+            for i in 0..<min(slCount, 32) {
+                let p = stringLiteralOff + i * 8
+                let a = Int(mapped.readUInt32(at: p))
+                let b = Int(mapped.readUInt32(at: p + 4))
+                if a >= 0 && a <= 4096 && b >= 0 && b + a <= stringLiteralDataSize { scoreLenFirst += 1 }
+                if b >= 0 && b <= 4096 && a >= 0 && a + b <= stringLiteralDataSize { scoreIdxFirst += 1 }
+            }
+            let dataIdxFirst = (scoreIdxFirst > scoreLenFirst) || (scoreIdxFirst == scoreLenFirst && version >= 29)
+
             stringLiterals.reserveCapacity(min(slCount, 50_000))
             for i in 0..<slCount {
                 let p = stringLiteralOff + i * 8
-                let len = Int(mapped.readUInt32(at: p))
-                let dataIdx = Int(mapped.readUInt32(at: p + 4))
-                guard len >= 0 && dataIdx >= 0 && stringLiteralDataOff + dataIdx + len <= stringLiteralDataOff + stringLiteralDataSize else {
-                    continue
-                }
+                let first = Int(mapped.readUInt32(at: p))
+                let second = Int(mapped.readUInt32(at: p + 4))
+                let len = dataIdxFirst ? second : first
+                let dataIdx = dataIdxFirst ? first : second
+                guard len >= 0 && dataIdx >= 0 && dataIdx + len <= stringLiteralDataSize else { continue }
                 let val = mapped.readUTF8(at: stringLiteralDataOff + dataIdx, length: min(len, 2048))
                 if SafetyGuard.isRealMoneyBlocked(val) {
                     filteredCount += 1
                     continue
                 }
-                let addr: UInt64
-                if let regAddrs = registration?.stringLiteralAddresses, i < regAddrs.count {
-                    addr = regAddrs[i]
-                } else {
-                    addr = 0
-                }
+                let addr: UInt64 = (registration != nil && i < registration!.stringLiteralAddresses.count)
+                    ? registration!.stringLiteralAddresses[i]
+                    : 0
                 stringLiterals.append(Il2CppStringLiteral(index: i, value: val, address: addr))
             }
         }
 
-        // Parse Full TypeDefs, Fields, Properties, Methods
+        // Parse Full TypeDefs, Fields, Properties, Events, Methods
         var parsedTypes: [Il2CppTypeInfo] = []
         parsedTypes.reserveCapacity(totalTypes)
 
@@ -544,25 +583,51 @@ public enum Il2CppMetadataParser {
                 continue
             }
 
-            let parentTypeIdx = mapped.readInt32(at: tp + 16)
-            let declaringTypeIdx = mapped.readInt32(at: tp + 20)
+            let hasByRef = (version < 27 && tdShift >= 4)
+            let declaringTypeIdx = mapped.readInt32(at: tp + (hasByRef ? 16 : 12))
+            let parentTypeIdx = mapped.readInt32(at: tp + (hasByRef ? 20 : 16))
+            let genericContainerIdx = mapped.readInt32(at: tp + (hasByRef ? 28 : 24))
+            let flags = mapped.readUInt32(at: tp + 28 + tdShift)
+
             let fieldStart = Int(mapped.readInt32(at: tp + 32 + tdShift))
             let methodStart = Int(mapped.readInt32(at: tp + 36 + tdShift))
+            let eventStart = Int(mapped.readInt32(at: tp + 40 + tdShift))
             let propStart = Int(mapped.readInt32(at: tp + 44 + tdShift))
-            let ifaceStart = Int(mapped.readInt32(at: tp + 48 + tdShift))
-            let flags = mapped.readUInt32(at: tp + 60 + tdShift)
+            let nestedStart = Int(mapped.readInt32(at: tp + 48 + tdShift))
+            let ifaceStart = Int(mapped.readInt32(at: tp + 52 + tdShift))
+
             let methodCount = Int(mapped.readUInt16(at: tp + 64 + tdShift))
             let propCount = Int(mapped.readUInt16(at: tp + 66 + tdShift))
             let fieldCount = Int(mapped.readUInt16(at: tp + 68 + tdShift))
-            let ifaceCount = Int(mapped.readUInt16(at: tp + 72 + tdShift))
+            let eventCount = Int(mapped.readUInt16(at: tp + 70 + tdShift))
+            let nestedCount = Int(mapped.readUInt16(at: tp + 72 + tdShift))
+            let ifaceCount = Int(mapped.readUInt16(at: tp + 76 + tdShift))
+            let bitfield = mapped.readUInt32(at: tp + 80 + tdShift)
             let token = mapped.readUInt32(at: tp + 84 + tdShift)
 
             let parentName = parentTypeIdx >= 0 ? resolver.resolveTypeName(typeIndex: parentTypeIdx) : nil
+            let declaringName: String? = (declaringTypeIdx >= 0 && Int(declaringTypeIdx) < il2cppTypes.count)
+                ? resolver.resolveTypeName(typeIndex: declaringTypeIdx)
+                : nil
+
             let isInterface = (flags & 0x0000_0020) != 0
             let isAbstract = (flags & 0x0000_0080) != 0
             let isSealed = (flags & 0x0000_0100) != 0
-            let isValueType = (parentName == "System.ValueType" || parentName == "ValueType" || parentName == "System.Enum" || parentName == "Enum")
-            let isEnum = (parentName == "System.Enum" || parentName == "Enum")
+            let isEnum = ((bitfield & 0x02) != 0) || (parentName == "System.Enum" || parentName == "Enum")
+            let isValueType = ((bitfield & 0x01) != 0) || isEnum || (parentName == "System.ValueType" || parentName == "ValueType")
+
+            let typeGenericParams = genericParamsForContainer(genericContainerIdx)
+
+            var nestedNames: [String] = []
+            if nestedStart >= 0 && nestedCount > 0 && mapped.inRange(nestedTypesOff, nestedTypesSize) {
+                let nEnd = min(nestedTypesSize / 4, nestedStart + nestedCount)
+                for ni in nestedStart..<nEnd {
+                    let nTdIdx = Int(mapped.readInt32(at: nestedTypesOff + ni * 4))
+                    if nTdIdx >= 0 && nTdIdx < rawTypeNames.count {
+                        nestedNames.append(rawTypeNames[nTdIdx])
+                    }
+                }
+            }
 
             var ifaceIndices: [Int32] = []
             var ifaceNames: [String] = []
@@ -647,6 +712,7 @@ public enum Il2CppMetadataParser {
                     let mName = readMetaString(mapped.readUInt32(at: mp))
                     let retTypeIdx = mapped.readInt32(at: mp + 8)
                     let paramStart = Int(mapped.readInt32(at: mp + 12))
+                    let mGenericIdx = methodStride >= 24 ? mapped.readInt32(at: mp + 16) : -1
                     let mTok = mapped.readUInt32(at: mp + mTokOff)
                     let mFlags = mapped.readUInt16(at: mp + mTokOff + 4)
                     let mIFlags = mapped.readUInt16(at: mp + mTokOff + 6)
@@ -705,11 +771,14 @@ public enum Il2CppMetadataParser {
                         armSem = macho.analyzeArm64FunctionValue(atSliceRelOffset: sliceOff)
                     }
 
+                    let mGenericParams = mGenericIdx >= 0 ? genericParamsForContainer(mGenericIdx) : []
+
                     parsedMethods.append(Il2CppMethodInfo(
                         index: mGlobal,
                         name: mName.isEmpty ? "Method_\(mGlobal)" : mName,
                         returnTypeIndex: retTypeIdx,
                         returnTypeName: resolver.resolveTypeName(typeIndex: retTypeIdx),
+                        genericParamNames: mGenericParams,
                         parameters: params,
                         token: mTok,
                         flags: mFlags,
@@ -724,10 +793,11 @@ public enum Il2CppMetadataParser {
                 }
             }
 
+            let methodByRelIdx = Dictionary(uniqueKeysWithValues: parsedMethods.map { ($0.index - max(0, methodStart), $0) })
+
             // Properties
             var parsedProps: [Il2CppPropertyInfo] = []
             if options.includeProperties && propStart >= 0 && propCount > 0 && propStart + propCount <= numProps {
-                let methodByRelIdx = Dictionary(uniqueKeysWithValues: parsedMethods.enumerated().map { ($0.element.index - max(0, methodStart), $0.element) })
                 for pri in 0..<propCount {
                     let pGlobal = propStart + pri
                     let pp = propertiesOff + pGlobal * resolvedPropStride
@@ -743,10 +813,17 @@ public enum Il2CppMetadataParser {
                     }
 
                     var pTypeName = "object"
+                    var getRVA: UInt64 = 0
+                    var setRVA: UInt64 = 0
                     if getRel >= 0, let gm = methodByRelIdx[Int(getRel)] {
                         pTypeName = gm.returnTypeName
-                    } else if setRel >= 0, let sm = methodByRelIdx[Int(setRel)], let lastParam = sm.parameters.last {
-                        pTypeName = lastParam.typeName
+                        getRVA = gm.rva
+                    }
+                    if setRel >= 0, let sm = methodByRelIdx[Int(setRel)] {
+                        setRVA = sm.rva
+                        if getRel < 0, let lastParam = sm.parameters.last {
+                            pTypeName = lastParam.typeName
+                        }
                     }
 
                     parsedProps.append(Il2CppPropertyInfo(
@@ -754,10 +831,43 @@ public enum Il2CppMetadataParser {
                         name: pName.isEmpty ? "Property_\(pGlobal)" : pName,
                         getMethodIndex: getRel >= 0 ? Int32(methodStart) + getRel : -1,
                         setMethodIndex: setRel >= 0 ? Int32(methodStart) + setRel : -1,
+                        getRVA: getRVA,
+                        setRVA: setRVA,
                         typeName: pTypeName,
                         attrs: pAttrs,
                         token: pTok,
                         attributes: resolveAttributes(forToken: pTok)
+                    ))
+                }
+            }
+
+            // Events
+            var parsedEvents: [Il2CppEventInfo] = []
+            if eventStart >= 0 && eventCount > 0 && eventStart + eventCount <= numEvents {
+                for ei in 0..<eventCount {
+                    let eGlobal = eventStart + ei
+                    let ep = eventsOff + eGlobal * resolvedEventStride
+                    let eName = readMetaString(mapped.readUInt32(at: ep))
+                    let eTypeIdx = mapped.readInt32(at: ep + 4)
+                    let addRel = mapped.readInt32(at: ep + 8)
+                    let remRel = mapped.readInt32(at: ep + 12)
+                    let raiseRel = mapped.readInt32(at: ep + 16)
+                    let eTok = resolvedEventStride >= 24 ? mapped.readUInt32(at: ep + 20) : UInt32(0x1400_0000 | (eGlobal + 1))
+
+                    if SafetyGuard.isRealMoneyBlocked("\(fullName).\(eName)") {
+                        filteredCount += 1
+                        continue
+                    }
+
+                    parsedEvents.append(Il2CppEventInfo(
+                        index: eGlobal,
+                        name: eName.isEmpty ? "Event_\(eGlobal)" : eName,
+                        typeName: resolver.resolveTypeName(typeIndex: eTypeIdx),
+                        addMethodIndex: addRel >= 0 ? Int32(methodStart) + addRel : -1,
+                        removeMethodIndex: remRel >= 0 ? Int32(methodStart) + remRel : -1,
+                        raiseMethodIndex: raiseRel >= 0 ? Int32(methodStart) + raiseRel : -1,
+                        token: eTok,
+                        attributes: resolveAttributes(forToken: eTok)
                     ))
                 }
             }
@@ -769,11 +879,14 @@ public enum Il2CppMetadataParser {
                 namespace: ns,
                 name: typeName,
                 fullName: fullName,
+                genericParamNames: typeGenericParams,
                 flags: flags,
                 token: token,
                 parentTypeIndex: parentTypeIdx,
                 parentName: parentName,
                 declaringTypeIndex: declaringTypeIdx,
+                declaringTypeName: declaringName,
+                nestedTypeNames: nestedNames,
                 interfaceTypeIndices: ifaceIndices,
                 interfaceNames: ifaceNames,
                 isValueType: isValueType,
@@ -784,11 +897,11 @@ public enum Il2CppMetadataParser {
                 fields: parsedFields,
                 methods: options.includeMethods ? parsedMethods : [],
                 properties: parsedProps,
+                events: parsedEvents,
                 attributes: resolveAttributes(forToken: token)
             ))
         }
 
-        _ = nestedTypesOff; _ = nestedTypesSize
         log("[IL2CPP Metadata] Phiên bản v\(version): \(images.count) Assemblies · \(parsedTypes.count) Types · \(stringLiterals.count) StringLiterals (đã lọc \(filteredCount) mục tiền thật).")
 
         return ParsedMetadataResult(
@@ -804,7 +917,6 @@ public enum Il2CppMetadataParser {
         )
     }
 
-    /// Lightweight Phase-1 header peek used before Mach-O registration scan.
     public static func quickPeek(url: URL) throws -> (
         status: MetadataProtectionStatus,
         version: Int32,

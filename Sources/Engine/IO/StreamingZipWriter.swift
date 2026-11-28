@@ -1,5 +1,5 @@
 import Foundation
-import zlib
+import Compression
 
 public final class StreamingZipWriter {
     private struct CentralRecord {
@@ -68,45 +68,42 @@ public final class StreamingZipWriter {
         let nameBytes = Array(entryName.utf8)
         let localOffset = bytesWritten
 
-        // Stream compress into a temporary file or direct? Using local data descriptor bit (bit 3 = 0x0008) avoids seeking!
         var lfh: [UInt8] = []
         lfh.reserveCapacity(30 + nameBytes.count)
         Self.appendU32(&lfh, 0x04034B50)
-        Self.appendU16(&lfh, 20)         // version needed
-        Self.appendU16(&lfh, 0x0808)     // flags: UTF-8 (bit 11) + data descriptor (bit 3)
+        Self.appendU16(&lfh, 20)
+        Self.appendU16(&lfh, 0x0808)     // UTF-8 + Data Descriptor
         Self.appendU16(&lfh, 8)          // DEFLATE
-        Self.appendU16(&lfh, 0)          // mod time
-        Self.appendU16(&lfh, 0x5421)     // mod date
-        Self.appendU32(&lfh, 0)          // crc32 (in data descriptor)
-        Self.appendU32(&lfh, 0)          // compSize (in data descriptor)
-        Self.appendU32(&lfh, 0)          // uncompSize (in data descriptor)
+        Self.appendU16(&lfh, 0)
+        Self.appendU16(&lfh, 0x5421)
+        Self.appendU32(&lfh, 0)
+        Self.appendU32(&lfh, 0)
+        Self.appendU32(&lfh, 0)
         Self.appendU16(&lfh, UInt16(nameBytes.count))
-        Self.appendU16(&lfh, 0)          // extra len
+        Self.appendU16(&lfh, 0)
         lfh.append(contentsOf: nameBytes)
         try writeBytes(lfh)
 
         let inHandle = try FileHandle(forReadingFrom: fileURL)
         defer { try? inHandle.close() }
 
-        var stream = z_stream()
-        let initRet = deflateInit2_(
-            &stream,
-            Z_DEFAULT_COMPRESSION,
-            Z_DEFLATED,
-            -15,
-            8,
-            Z_DEFAULT_STRATEGY,
-            zlibVersion(),
-            Int32(MemoryLayout<z_stream>.size)
-        )
-        guard initRet == Z_OK else {
-            throw ZipReaderError.ioFailed("deflateInit2_ failed: \(initRet)")
+        let streamPtr = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        memset(streamPtr, 0, MemoryLayout<compression_stream>.size)
+        let initStatus = compression_stream_init(streamPtr, COMPRESSION_STREAM_ENCODE, COMPRESSION_ZLIB)
+        guard initStatus != COMPRESSION_STATUS_ERROR else {
+            streamPtr.deallocate()
+            throw ZipReaderError.ioFailed("compression_stream_init encode failed")
         }
-        defer { deflateEnd(&stream) }
+        defer {
+            compression_stream_destroy(streamPtr)
+            streamPtr.deallocate()
+        }
 
         let chunkSize = 262_144
-        var outBuf = [UInt8](repeating: 0, count: chunkSize)
-        var crcVal: uLong = zlib.crc32(0, nil, 0)
+        let dstBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
+        defer { dstBuffer.deallocate() }
+
+        var crcVal: UInt32 = 0
         var uncompTotal: UInt64 = 0
         var compTotal: UInt64 = 0
 
@@ -116,41 +113,49 @@ public final class StreamingZipWriter {
             if !isEOF {
                 uncompTotal += UInt64(chunkData.count)
                 chunkData.withUnsafeBytes { raw in
-                    if let ptr = raw.bindMemory(to: Bytef.self).baseAddress {
-                        crcVal = zlib.crc32(crcVal, ptr, uInt(chunkData.count))
+                    if let ptr = raw.bindMemory(to: UInt8.self).baseAddress {
+                        crcVal = CRC32.update(crc: crcVal, bytes: ptr, count: chunkData.count)
                     }
                 }
             }
 
-            var inBytes = Array(chunkData)
-            try inBytes.withUnsafeMutableBytes { inRaw in
-                stream.next_in = isEOF ? nil : inRaw.bindMemory(to: Bytef.self).baseAddress
-                stream.avail_in = uInt(chunkData.count)
-                let flushMode = isEOF ? Z_FINISH : Z_NO_FLUSH
+            let flags: Int32 = isEOF ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
+            try chunkData.withUnsafeBytes { inRaw in
+                if !isEOF, let srcBase = inRaw.bindMemory(to: UInt8.self).baseAddress {
+                    streamPtr.pointee.src_ptr = srcBase
+                    streamPtr.pointee.src_size = chunkData.count
+                } else {
+                    streamPtr.pointee.src_ptr = UnsafePointer(dstBuffer)
+                    streamPtr.pointee.src_size = 0
+                }
 
-                repeat {
-                    let outCount = outBuf.count
-                    var written = 0
-                    outBuf.withUnsafeMutableBytes { outRaw in
-                        stream.next_out = outRaw.bindMemory(to: Bytef.self).baseAddress
-                        stream.avail_out = uInt(outCount)
-                        _ = deflate(&stream, flushMode)
-                        written = outCount - Int(stream.avail_out)
+                while true {
+                    streamPtr.pointee.dst_ptr = dstBuffer
+                    streamPtr.pointee.dst_size = chunkSize
+                    let status = compression_stream_process(streamPtr, flags)
+                    let produced = chunkSize - streamPtr.pointee.dst_size
+                    if produced > 0 {
+                        compTotal += UInt64(produced)
+                        try writeData(Data(bytes: dstBuffer, count: produced))
                     }
-                    if written > 0 {
-                        compTotal += UInt64(written)
-                        try writeData(Data(outBuf[0..<written]))
+                    if status == COMPRESSION_STATUS_END {
+                        break
                     }
-                } while stream.avail_out == 0
+                    if status == COMPRESSION_STATUS_ERROR {
+                        throw ZipReaderError.ioFailed("compression_stream_process encode failed")
+                    }
+                    if !isEOF && streamPtr.pointee.src_size == 0 && streamPtr.pointee.dst_size > 0 {
+                        break
+                    }
+                }
             }
 
             if isEOF { break }
         }
 
-        let finalCRC = UInt32(crcVal & 0xFFFF_FFFF)
         var dd: [UInt8] = []
         Self.appendU32(&dd, 0x08074B50)
-        Self.appendU32(&dd, finalCRC)
+        Self.appendU32(&dd, crcVal)
         Self.appendU32(&dd, UInt32(min(compTotal, UInt64(UInt32.max))))
         Self.appendU32(&dd, UInt32(min(uncompTotal, UInt64(UInt32.max))))
         try writeBytes(dd)
@@ -158,7 +163,7 @@ public final class StreamingZipWriter {
         records.append(CentralRecord(
             nameBytes: nameBytes,
             method: 8,
-            crc32: finalCRC,
+            crc32: crcVal,
             compressedSize: compTotal,
             uncompressedSize: uncompTotal,
             localHeaderOffset: localOffset

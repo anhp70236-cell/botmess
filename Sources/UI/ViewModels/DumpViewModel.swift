@@ -10,6 +10,7 @@ final class DumpViewModel: ObservableObject {
     }
 
     @Published var inputMode: InputMode = .ipa
+    @Published var activeTab: Int = 0
     @Published var selectedIPAURL: URL?
     @Published var selectedMachOURL: URL?
     @Published var selectedMetadataURL: URL?

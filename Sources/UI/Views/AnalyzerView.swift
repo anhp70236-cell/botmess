@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct AnalyzerView: View {
@@ -7,6 +8,9 @@ struct AnalyzerView: View {
     @State private var showMachOPicker = false
     @State private var showMetaPicker = false
     @State private var showOptionsSheet = false
+    @State private var showOptionsDetails = false
+    @State private var showLogs = false
+    @State private var quickShareZipURL: URL?
 
     private var ipaContentTypes: [UTType] {
         var types: [UTType] = [.zip, .data]
@@ -14,6 +18,23 @@ struct AnalyzerView: View {
             types.insert(ipa, at: 0)
         }
         return types
+    }
+
+    private var enabledOptionCount: Int {
+        let flags = [
+            vm.options.generateDumpCS,
+            vm.options.generateStructAndJSON,
+            vm.options.generateDummyDLLs,
+            vm.options.includeMethods,
+            vm.options.includeFields,
+            vm.options.includeProperties,
+            vm.options.restoreAttributes,
+            vm.options.writeFieldOffsets,
+            vm.options.writeMethodOffsets,
+            vm.options.writeTypeDefIndexes,
+            vm.options.restoreDummyDllTokens
+        ]
+        return flags.filter { $0 }.count
     }
 
     var body: some View {
@@ -29,7 +50,7 @@ struct AnalyzerView: View {
                         if let info = vm.inspectionInfo {
                             ipaInfoCard(info, theme: theme)
                         }
-                        optionsSummaryCard(theme)
+                        optionsDisclosureCard(theme)
                         actionAndProgressCard(theme)
                         if let err = vm.errorMessage {
                             errorBanner(err, theme: theme)
@@ -38,7 +59,7 @@ struct AnalyzerView: View {
                             completionSummaryCard(session, theme: theme)
                         }
                         if !vm.logs.isEmpty {
-                            consoleLogCard(theme)
+                            collapsibleLogCard(theme)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -61,6 +82,12 @@ struct AnalyzerView: View {
                 OptionsSheetView()
                     .environmentObject(vm)
             }
+            .sheet(item: Binding(
+                get: { quickShareZipURL.map { AnalyzerShareURL(url: $0) } },
+                set: { quickShareZipURL = $0?.url }
+            )) { wrapper in
+                AnalyzerActivitySheet(activityItems: [wrapper.url])
+            }
             .fileImporter(isPresented: $showIPAPicker, allowedContentTypes: ipaContentTypes) { res in
                 if case let .success(url) = res { vm.setIPAFile(url) }
             }
@@ -70,6 +97,11 @@ struct AnalyzerView: View {
             .fileImporter(isPresented: $showMetaPicker, allowedContentTypes: [.data, .item]) { res in
                 if case let .success(url) = res { vm.setMetadataFile(url) }
             }
+            .onChange(of: vm.isRunning) { running in
+                if running {
+                    showLogs = true
+                }
+            }
         }
         .navigationViewStyle(.stack)
     }
@@ -78,23 +110,22 @@ struct AnalyzerView: View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(theme.accent.opacity(0.18))
-                    .frame(width: 50, height: 50)
+                    .fill(theme.accent.opacity(0.16))
+                    .frame(width: 46, height: 46)
                 Image(systemName: "cube.transparent.fill")
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 22, weight: .semibold))
                     .foregroundColor(theme.accent)
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Streaming IL2CPP & Mach-O Engine")
+            VStack(alignment: .leading, spacing: 3) {
+                Text("IPA Dumper Pro")
                     .font(.headline)
                     .foregroundColor(theme.primaryText)
-                HStack(spacing: 6) {
-                    BadgeChip(text: "MAX 10 GB", color: theme.accent)
-                    BadgeChip(text: "\(vm.options.workerThreads) WORKERS", color: theme.success)
-                    BadgeChip(text: "ARM64", color: theme.warning)
-                }
+                Text("IL2CPP & Mach-O Static Engine")
+                    .font(.caption)
+                    .foregroundColor(theme.secondaryText)
             }
             Spacer()
+            BadgeChip(text: "≤ 10 GB · \(vm.options.workerThreads)W", color: theme.accent)
         }
         .dipCard(theme)
     }
@@ -121,7 +152,7 @@ struct AnalyzerView: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(theme.primaryText)
                                 .lineLimit(1)
-                            Text("Đọc trực tiếp qua ZIP64 Central Directory, không tốn RAM")
+                            Text("Đọc trực tiếp qua ZIP64 streaming, không tràn RAM")
                                 .font(.caption)
                                 .foregroundColor(theme.secondaryText)
                         }
@@ -141,7 +172,7 @@ struct AnalyzerView: View {
                         fileRowLabel(
                             icon: "terminal.fill",
                             title: vm.selectedMachOURL?.lastPathComponent ?? "Chọn Mach-O (UnityFramework / Binary)",
-                            subtitle: "Bắt buộc · ARM64 Mach-O đã giải mã FairPlay",
+                            subtitle: "Bắt buộc · ARM64 Mach-O",
                             theme: theme
                         )
                     }
@@ -185,63 +216,79 @@ struct AnalyzerView: View {
     }
 
     private func ipaInfoCard(_ info: IPAInspectionInfo, theme: AppThemeStyle) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text("Thông tin IPA phát hiện")
+                Text(info.appName)
                     .font(.subheadline.weight(.bold))
                     .foregroundColor(theme.primaryText)
+                    .lineLimit(1)
                 Spacer()
                 Text(formatByteCount(info.fileSizeBytes))
                     .font(.caption.monospacedDigit())
                     .foregroundColor(theme.accent)
             }
-            Divider().opacity(0.25)
-            infoLine("Ứng dụng", "\(info.appName) (v\(info.bundleVersion))", theme: theme)
-            infoLine("Bundle ID", info.bundleId.isEmpty ? "—" : info.bundleId, theme: theme)
-            infoLine("Mach-O", URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent, theme: theme)
-            infoLine("Metadata", info.metadataPath != nil ? "Có global-metadata.dat" : "Không có (quét Mach-O)", theme: theme)
+            Text("\(info.bundleId.isEmpty ? "—" : info.bundleId) · v\(info.bundleVersion)")
+                .font(.caption)
+                .foregroundColor(theme.secondaryText)
+            HStack(spacing: 6) {
+                BadgeChip(text: URL(fileURLWithPath: info.primaryMachOPath).lastPathComponent, color: theme.accent)
+                BadgeChip(text: info.metadataPath != nil ? "Metadata OK" : "Mach-O Only", color: info.metadataPath != nil ? theme.success : theme.warning)
+            }
         }
         .dipCard(theme)
     }
 
-    private func infoLine(_ k: String, _ v: String, theme: AppThemeStyle) -> some View {
-        HStack {
-            Text(k)
-                .font(.caption)
-                .foregroundColor(theme.secondaryText)
-            Spacer()
-            Text(v)
-                .font(.caption.weight(.medium))
-                .foregroundColor(theme.primaryText)
-                .lineLimit(1)
-        }
-    }
-
-    private func optionsSummaryCard(_ theme: AppThemeStyle) -> some View {
+    private func optionsDisclosureCard(_ theme: AppThemeStyle) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Cấu hình trích xuất")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundColor(theme.primaryText)
-                Spacer()
-                Button("Tuỳ chỉnh chi tiết") {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showOptionsDetails.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "slider.horizontal.3")
+                            .foregroundColor(theme.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tuỳ chọn Dump")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(theme.primaryText)
+                            Text("\(enabledOptionCount)/11 mục bật · \(vm.options.workerThreads) Workers")
+                                .font(.caption)
+                                .foregroundColor(theme.secondaryText)
+                        }
+                        Spacer()
+                        Image(systemName: showOptionsDetails ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(theme.secondaryText)
+                    }
+                }
+
+                Button("Sửa") {
                     showOptionsSheet = true
                 }
                 .font(.caption.weight(.semibold))
                 .foregroundColor(theme.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(theme.accent.opacity(0.14))
+                .clipShape(Capsule())
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 6)], spacing: 6) {
-                optionPill("dump.cs", active: vm.options.generateDumpCS, theme: theme)
-                optionPill("il2cpp.h & JSON", active: vm.options.generateStructAndJSON, theme: theme)
-                optionPill("Dummy DLLs", active: vm.options.generateDummyDLLs, theme: theme)
-                optionPill("Methods/Fields", active: vm.options.includeMethods && vm.options.includeFields, theme: theme)
-                optionPill("Properties", active: vm.options.includeProperties, theme: theme)
-                optionPill("Attributes", active: vm.options.restoreAttributes, theme: theme)
-                optionPill("Field Offsets", active: vm.options.writeFieldOffsets, theme: theme)
-                optionPill("RVA/VA/Offset", active: vm.options.writeMethodOffsets, theme: theme)
-                optionPill("TypeDef Index", active: vm.options.writeTypeDefIndexes, theme: theme)
-                optionPill("DLL Tokens", active: vm.options.restoreDummyDllTokens, theme: theme)
+            if showOptionsDetails {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 6)], spacing: 6) {
+                    optionPill("dump.cs", active: vm.options.generateDumpCS, theme: theme)
+                    optionPill("Struct & JSON", active: vm.options.generateStructAndJSON, theme: theme)
+                    optionPill("Dummy DLLs", active: vm.options.generateDummyDLLs, theme: theme)
+                    optionPill("Methods", active: vm.options.includeMethods, theme: theme)
+                    optionPill("Fields", active: vm.options.includeFields, theme: theme)
+                    optionPill("Properties", active: vm.options.includeProperties, theme: theme)
+                    optionPill("Attributes", active: vm.options.restoreAttributes, theme: theme)
+                    optionPill("Field Offsets", active: vm.options.writeFieldOffsets, theme: theme)
+                    optionPill("RVA/VA/Offset", active: vm.options.writeMethodOffsets, theme: theme)
+                    optionPill("TypeDef Index", active: vm.options.writeTypeDefIndexes, theme: theme)
+                    optionPill("DLL Tokens", active: vm.options.restoreDummyDllTokens, theme: theme)
+                }
             }
         }
         .dipCard(theme)
@@ -267,24 +314,22 @@ struct AnalyzerView: View {
     private func actionAndProgressCard(_ theme: AppThemeStyle) -> some View {
         let canStart = !vm.isRunning && ((vm.inputMode == .ipa && vm.selectedIPAURL != nil) || (vm.inputMode == .standalone && vm.selectedMachOURL != nil))
         return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Button {
-                    if vm.isRunning { vm.cancelAnalysis() }
-                    else { vm.startAnalysis() }
-                } label: {
-                    HStack {
-                        Image(systemName: vm.isRunning ? "stop.circle.fill" : "play.fill")
-                        Text(vm.isRunning ? "Huỷ phân tích" : "Bắt đầu Dump chuyên sâu")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                    .foregroundColor(.white)
-                    .background(vm.isRunning ? theme.danger : (canStart ? theme.accent : theme.secondaryText.opacity(0.4)))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Button {
+                if vm.isRunning { vm.cancelAnalysis() }
+                else { vm.startAnalysis() }
+            } label: {
+                HStack {
+                    Image(systemName: vm.isRunning ? "stop.circle.fill" : "play.fill")
+                    Text(vm.isRunning ? "Huỷ phân tích" : "Bắt đầu Dump")
+                        .fontWeight(.semibold)
                 }
-                .disabled(!vm.isRunning && !canStart)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .foregroundColor(.white)
+                .background(vm.isRunning ? theme.danger : (canStart ? theme.accent : theme.secondaryText.opacity(0.35)))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .disabled(!vm.isRunning && !canStart)
 
             if vm.isRunning || vm.progress > 0 {
                 VStack(alignment: .leading, spacing: 6) {
@@ -330,7 +375,7 @@ struct AnalyzerView: View {
     private func completionSummaryCard(_ s: DumpSessionRecord, theme: AppThemeStyle) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Kết quả trích xuất", systemImage: "checkmark.seal.fill")
+                Label("Hoàn tất trích xuất", systemImage: "checkmark.seal.fill")
                     .font(.subheadline.weight(.bold))
                     .foregroundColor(theme.success)
                 Spacer()
@@ -352,8 +397,35 @@ struct AnalyzerView: View {
                 statBox("Dummy DLLs", "\(s.stats.dummyDllsCount)", theme: theme)
             }
 
+            HStack(spacing: 10) {
+                Button {
+                    vm.activeTab = 1
+                } label: {
+                    Label("Xem Offset", systemImage: "magnifyingglass")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .foregroundColor(.white)
+                        .background(theme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                Button {
+                    if let zip = vm.exportSessionZip(s) {
+                        quickShareZipURL = zip
+                    }
+                } label: {
+                    Label("Chia sẻ ZIP", systemImage: "square.and.arrow.up")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .foregroundColor(theme.accent)
+                        .background(theme.elevatedBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+
             if s.stats.filteredRealMoneyCount > 0 {
-                Text("Đã lọc an toàn \(s.stats.filteredRealMoneyCount) symbol liên quan đến thanh toán / tiền thật.")
+                Text("Đã lọc \(s.stats.filteredRealMoneyCount) symbol liên quan đến thanh toán tiền thật.")
                     .font(.caption2)
                     .foregroundColor(theme.secondaryText)
             }
@@ -376,29 +448,50 @@ struct AnalyzerView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private func consoleLogCard(_ theme: AppThemeStyle) -> some View {
+    private func collapsibleLogCard(_ theme: AppThemeStyle) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Nhật ký Worker")
-                    .font(.caption.weight(.bold))
-                    .foregroundColor(theme.primaryText)
-                Spacer()
-                Text("\(vm.logs.count) dòng")
-                    .font(.caption2)
-                    .foregroundColor(theme.secondaryText)
-            }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(vm.logs.enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(theme.secondaryText)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showLogs.toggle()
+                }
+            } label: {
+                HStack {
+                    Text("Nhật ký Worker (\(vm.logs.count))")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(theme.primaryText)
+                    Spacer()
+                    Image(systemName: showLogs ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundColor(theme.secondaryText)
                 }
             }
-            .frame(maxHeight: 160)
+            if showLogs {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(vm.logs.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(theme.secondaryText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .frame(maxHeight: 150)
+            }
         }
         .dipCard(theme)
     }
+}
+
+private struct AnalyzerShareURL: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct AnalyzerActivitySheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

@@ -1,6 +1,6 @@
 import Foundation
 import Darwin
-import zlib
+import Compression
 
 public struct ZipEntry: Equatable, Sendable {
     public var path: String
@@ -28,7 +28,7 @@ public enum ZipReaderError: Error, LocalizedError {
         case let .unsupportedCompression(method, entry):
             return "Phương thức nén #\(method) không được hỗ trợ cho \(entry)"
         case let .decompressFailed(code, entry):
-            return "Lỗi giải nén zlib (\(code)) cho \(entry)"
+            return "Lỗi giải nén Compression (\(code)) cho \(entry)"
         case let .ioFailed(msg):
             return "Lỗi đọc/ghi tệp: \(msg)"
         }
@@ -116,7 +116,7 @@ public final class StreamingZipReader {
             throw ZipReaderError.invalidArchive("Tệp quá nhỏ (< 22 bytes)")
         }
         let tailLen = Int(min(fileSize, 66_000))
-        let tailOffset = fileSize - UInt64(tailOffsetBase(tailLen))
+        let tailOffset = fileSize - UInt64(tailLen)
         let tail = try preadExact(offset: tailOffset, length: tailLen)
 
         var eocdPos = -1
@@ -189,7 +189,6 @@ public final class StreamingZipReader {
             let nameBytes = cdData[nameStart..<extraStart]
             let entryPath = String(decoding: nameBytes, as: UTF8.self)
 
-            // Parse ZIP64 extra field (0x0001) if any 32-bit sentinel is 0xFFFFFFFF
             if (compSize == 0xFFFF_FFFF || uncompSize == 0xFFFF_FFFF || localOff == 0xFFFF_FFFF), extraLen >= 4 {
                 var ep = extraStart
                 let extraEnd = extraStart + extraLen
@@ -230,10 +229,6 @@ public final class StreamingZipReader {
         }
 
         self.entries = parsed
-    }
-
-    private func tailOffsetBase(_ tailLen: Int) -> Int {
-        return tailLen
     }
 
     private func dataOffset(for entry: ZipEntry) throws -> UInt64 {
@@ -277,10 +272,9 @@ public final class StreamingZipReader {
             return
         }
 
-        let chunkSize = 524_288 // 512 KB streaming chunk
+        let chunkSize = 524_288
 
         if entry.compressionMethod == 0 {
-            // STORED: raw copy in 512 KB chunks
             var remaining = compTotal
             var cursor = startOffset
             while remaining > 0 {
@@ -301,60 +295,68 @@ public final class StreamingZipReader {
             throw ZipReaderError.unsupportedCompression(entry.compressionMethod, entry.path)
         }
 
-        // DEFLATE streaming inflate via zlib
-        var stream = z_stream()
-        let initRet = inflateInit2_(
-            &stream,
-            -15,
-            zlibVersion(),
-            Int32(MemoryLayout<z_stream>.size)
-        )
-        guard initRet == Z_OK else {
-            throw ZipReaderError.decompressFailed(initRet, entry.path)
+        let streamPtr = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        memset(streamPtr, 0, MemoryLayout<compression_stream>.size)
+        let initStatus = compression_stream_init(streamPtr, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+        guard initStatus != COMPRESSION_STATUS_ERROR else {
+            streamPtr.deallocate()
+            throw ZipReaderError.decompressFailed(-1, entry.path)
         }
-        defer { inflateEnd(&stream) }
+        defer {
+            compression_stream_destroy(streamPtr)
+            streamPtr.deallocate()
+        }
 
-        var outBuf = [UInt8](repeating: 0, count: chunkSize)
+        let dstBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
+        defer { dstBuffer.deallocate() }
+
         var remaining = compTotal
         var cursor = startOffset
         var done = false
 
         while !done {
             let toRead = Int(min(UInt64(chunkSize), remaining))
-            if toRead == 0 {
-                break
-            }
-            var inBuf = try preadExact(offset: cursor, length: toRead)
+            let inBuf = toRead > 0 ? try preadExact(offset: cursor, length: toRead) : []
             cursor += UInt64(toRead)
             remaining -= UInt64(toRead)
+            let isLast = (remaining == 0)
+            let flags: Int32 = isLast ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
 
-            try inBuf.withUnsafeMutableBytes { inRaw in
-                stream.next_in = inRaw.bindMemory(to: Bytef.self).baseAddress
-                stream.avail_in = uInt(toRead)
+            try inBuf.withUnsafeBytes { inRaw in
+                if toRead > 0, let srcBase = inRaw.bindMemory(to: UInt8.self).baseAddress {
+                    streamPtr.pointee.src_ptr = srcBase
+                    streamPtr.pointee.src_size = toRead
+                } else {
+                    streamPtr.pointee.src_ptr = UnsafePointer(dstBuffer)
+                    streamPtr.pointee.src_size = 0
+                }
 
-                while stream.avail_in > 0 && !done {
-                    let outCount = outBuf.count
-                    var written = 0
-                    var status: Int32 = Z_OK
-                    outBuf.withUnsafeMutableBytes { outRaw in
-                        stream.next_out = outRaw.bindMemory(to: Bytef.self).baseAddress
-                        stream.avail_out = uInt(outCount)
-                        status = inflate(&stream, Z_NO_FLUSH)
-                        written = outCount - Int(stream.avail_out)
+                while !done {
+                    streamPtr.pointee.dst_ptr = dstBuffer
+                    streamPtr.pointee.dst_size = chunkSize
+
+                    let status = compression_stream_process(streamPtr, flags)
+                    let produced = chunkSize - streamPtr.pointee.dst_size
+                    if produced > 0 {
+                        try outHandle.write(contentsOf: Data(bytes: dstBuffer, count: produced))
                     }
-                    if written > 0 {
-                        try outHandle.write(contentsOf: Data(outBuf[0..<written]))
-                    }
-                    if status == Z_STREAM_END {
+
+                    if status == COMPRESSION_STATUS_END {
                         done = true
                         break
                     }
-                    if status != Z_OK && status != Z_BUF_ERROR {
-                        throw ZipReaderError.decompressFailed(status, entry.path)
+                    if status == COMPRESSION_STATUS_ERROR {
+                        throw ZipReaderError.decompressFailed(-2, entry.path)
+                    }
+                    if streamPtr.pointee.dst_size > 0 && streamPtr.pointee.src_size == 0 {
+                        break
                     }
                 }
             }
 
+            if toRead == 0 && !done {
+                break
+            }
             if let progress = progress, compTotal > 0 {
                 progress(Double(compTotal - remaining) / Double(compTotal))
             }
