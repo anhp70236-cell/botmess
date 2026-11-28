@@ -27,7 +27,7 @@ public enum SafetyGuard {
     )
 
     private static let iapTokenRE = try! NSRegularExpression(
-        pattern: #"\b(?:iap|inapp|storekit|skpayment|skproduct|skreceipt|billing|checkout|payment|paywall|receipt|applepay|googlepay|creditcard|realmoney|microtrans|topup|recharge|voucher|coupon|invoice|entitlement|iapsubscription|storesubscription|vipsubscription|premiumsubscription|paidsubscription|autorenewsubscription|subscriptionsku|subscriptionreceipt|monetization|monetize)\b"#,
+        pattern: #"\b(?:iap|inapp|storekit|skpayment|skproduct|skreceipt|billing|checkout|payment|paywall|receipt|applepay|googlepay|creditcard|realmoney|microtrans|topup|recharge|voucher|coupon|invoice|entitlement|monetization|monetize|(?:iap|store|vip|premium|paid|autorenew|auto\s+renew)\s*subscription|subscription\s*(?:sku|receipt|price|tier|purchase|billing))\b"#,
         options: [.caseInsensitive]
     )
 
