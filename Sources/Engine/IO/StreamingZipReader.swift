@@ -348,12 +348,15 @@ public final class StreamingZipReader {
                     if status == COMPRESSION_STATUS_ERROR {
                         throw ZipReaderError.decompressFailed(-2, entry.path)
                     }
-                    if toRead > 0 && streamPtr.pointee.dst_size > 0 && streamPtr.pointee.src_size == 0 {
-                        break
-                    }
-                    if toRead == 0 && streamPtr.pointee.dst_size > 0 {
-                        done = true
-                        break
+                    if toRead > 0 {
+                        if streamPtr.pointee.src_size == 0 && produced == 0 {
+                            break
+                        }
+                    } else {
+                        if produced == 0 {
+                            done = true
+                            break
+                        }
                     }
                 }
             }
