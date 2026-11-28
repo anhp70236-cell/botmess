@@ -320,8 +320,7 @@ public final class StreamingZipReader {
             let inBuf = toRead > 0 ? try preadExact(offset: cursor, length: toRead) : []
             cursor += UInt64(toRead)
             remaining -= UInt64(toRead)
-            let isLast = (remaining == 0)
-            let flags: Int32 = isLast ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
+            let flags: Int32 = (toRead == 0) ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
 
             try inBuf.withUnsafeBytes { inRaw in
                 if toRead > 0, let srcBase = inRaw.bindMemory(to: UInt8.self).baseAddress {
@@ -349,15 +348,16 @@ public final class StreamingZipReader {
                     if status == COMPRESSION_STATUS_ERROR {
                         throw ZipReaderError.decompressFailed(-2, entry.path)
                     }
-                    if streamPtr.pointee.dst_size > 0 && streamPtr.pointee.src_size == 0 {
+                    if toRead > 0 && streamPtr.pointee.dst_size > 0 && streamPtr.pointee.src_size == 0 {
+                        break
+                    }
+                    if toRead == 0 && streamPtr.pointee.dst_size > 0 {
+                        done = true
                         break
                     }
                 }
             }
 
-            if toRead == 0 && !done {
-                break
-            }
             if let progress = progress, compTotal > 0 {
                 progress(Double(compTotal - remaining) / Double(compTotal))
             }

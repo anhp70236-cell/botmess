@@ -70,7 +70,7 @@ struct EngineTests {
         let extractedURL = tmp.appendingPathComponent("out.txt")
         try reader.extractEntry(entry, to: extractedURL)
         let readBack = try String(contentsOf: extractedURL, encoding: .utf8)
-        assertTrue(readBack == payload, "Extracted ZIP payload mismatch")
+        assertTrue(readBack == payload, "Extracted ZIP payload mismatch (expected=\(payload.utf8.count), actual=\(readBack.utf8.count), comp=\(entry.compressedSize), uncomp=\(entry.uncompressedSize))")
         print("[PASS] StreamingZip RoundTrip (Apple Compression + CRC32)")
     }
 

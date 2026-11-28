@@ -102,6 +102,7 @@ public final class StreamingZipWriter {
         let chunkSize = 262_144
         let dstBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
         defer { dstBuffer.deallocate() }
+        var dummySrc: UInt8 = 0
 
         var crcVal: UInt32 = 0
         var uncompTotal: UInt64 = 0
@@ -125,7 +126,7 @@ public final class StreamingZipWriter {
                     streamPtr.pointee.src_ptr = srcBase
                     streamPtr.pointee.src_size = chunkData.count
                 } else {
-                    streamPtr.pointee.src_ptr = UnsafePointer(dstBuffer)
+                    streamPtr.pointee.src_ptr = withUnsafePointer(to: &dummySrc) { $0 }
                     streamPtr.pointee.src_size = 0
                 }
 
