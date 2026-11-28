@@ -4,7 +4,8 @@ public enum StructAndJSONGenerator {
     public static func generateIl2CppHeader(
         to url: URL,
         types: [Il2CppTypeInfo],
-        macho: MachOParser?
+        macho: MachOParser?,
+        snapshots: [NativeBinarySnapshot] = []
     ) throws {
         let writer = try BufferedFileWriter(url: url)
         defer { try? writer.close() }
@@ -61,18 +62,22 @@ public enum StructAndJSONGenerator {
             try writer.writeLine("")
         }
 
-        if types.isEmpty, let macho = macho {
-            for cls in macho.objcClasses {
-                let cBase = Il2CppTypeResolver.sanitizeCIdentifier(cls.name)
-                if seenNames.contains(cBase) { continue }
-                seenNames.insert(cBase)
-                try writer.writeLine("typedef struct \(cBase)_ObjC {")
-                try writer.writeLine("    void* isa;")
-                for iv in cls.ivars {
-                    let fIdent = Il2CppTypeResolver.sanitizeCIdentifier(iv.name)
-                    try writer.writeLine("    void* \(fIdent); // 0x\(String(iv.offset, radix: 16, uppercase: true))")
+        let effectiveSnapshots: [NativeBinarySnapshot] = !snapshots.isEmpty ? snapshots : (macho.map { [$0.makeSnapshot()] } ?? [])
+        if types.isEmpty {
+            for (idx, bin) in effectiveSnapshots.enumerated() {
+                for cls in bin.objcClasses {
+                    let rawName = idx == 0 ? cls.name : "\(bin.sourceName)_\(cls.name)"
+                    let cBase = Il2CppTypeResolver.sanitizeCIdentifier(rawName)
+                    if seenNames.contains(cBase) { continue }
+                    seenNames.insert(cBase)
+                    try writer.writeLine("typedef struct \(cBase)_ObjC {")
+                    try writer.writeLine("    void* isa;")
+                    for iv in cls.ivars {
+                        let fIdent = Il2CppTypeResolver.sanitizeCIdentifier(iv.name)
+                        try writer.writeLine("    void* \(fIdent); // 0x\(String(iv.offset, radix: 16, uppercase: true))")
+                    }
+                    try writer.writeLine("} \(cBase)_ObjC;")
                 }
-                try writer.writeLine("} \(cBase)_ObjC;")
             }
         }
 
@@ -83,7 +88,8 @@ public enum StructAndJSONGenerator {
         to url: URL,
         types: [Il2CppTypeInfo],
         stringLiterals: [Il2CppStringLiteral],
-        macho: MachOParser?
+        macho: MachOParser?,
+        snapshots: [NativeBinarySnapshot] = []
     ) throws {
         let writer = try BufferedFileWriter(url: url)
         defer { try? writer.close() }
@@ -93,26 +99,79 @@ public enum StructAndJSONGenerator {
 
         var methodEntries: [(addr: UInt64, name: String, sig: String, tdSig: String)] = []
         var addresses: [UInt64] = []
-
-        for t in types {
-            for m in t.methods where m.rva > 0 {
-                let fullSig = "\(m.returnTypeName) \(t.fullName)__\(m.name)(\(m.parameters.map { "\($0.typeName) \($0.name)" }.joined(separator: ", ")))"
-                let name = "\(t.fullName)$$\(m.name)"
-                methodEntries.append((m.rva, name, fullSig, "\(Il2CppTypeResolver.sanitizeCIdentifier(t.fullName))_o*"))
-                addresses.append(m.rva)
+        var seenAddr = Set<UInt64>()
+        func recordAddr(_ rva: UInt64) {
+            if rva > 0 && !seenAddr.contains(rva) {
+                seenAddr.insert(rva)
+                addresses.append(rva)
             }
         }
 
-        if methodEntries.isEmpty, let macho = macho {
-            for cls in macho.objcClasses {
-                for m in cls.methods where m.rva > 0 {
-                    methodEntries.append((m.rva, "\(cls.name)$$\(m.name)", "void \(cls.name)_\(m.name)()", "void*"))
-                    addresses.append(m.rva)
+        var hasIL2CPPRVA = false
+        for t in types {
+            for m in t.methods {
+                let cStruct = Il2CppTypeResolver.sanitizeCIdentifier(t.fullName)
+                let fullSig = "\(m.returnTypeName) \(t.fullName)__\(m.name)(\(m.parameters.map { "\($0.typeName) \($0.name)" }.joined(separator: ", ")))"
+                if m.rva > 0 {
+                    hasIL2CPPRVA = true
+                    let name = "\(t.fullName)$$\(m.name)"
+                    methodEntries.append((m.rva, name, fullSig, "\(cStruct)_o*"))
+                    recordAddr(m.rva)
+                }
+                var gIdx = 1
+                for gRVA in m.genericInstRVAs where gRVA > 0 && gRVA != m.rva {
+                    hasIL2CPPRVA = true
+                    let gName = "\(t.fullName)$$\(m.name)<GenericInst_\(gIdx)>"
+                    methodEntries.append((gRVA, gName, fullSig, "\(cStruct)_o*"))
+                    recordAddr(gRVA)
+                    gIdx += 1
                 }
             }
-            for sym in macho.exportedSymbols where sym.rva > 0 {
-                methodEntries.append((sym.rva, sym.name, sym.name, "void*"))
-                addresses.append(sym.rva)
+        }
+
+        let effectiveSnapshots: [NativeBinarySnapshot] = !snapshots.isEmpty ? snapshots : (macho.map { [$0.makeSnapshot()] } ?? [])
+        var seenNativeKey = Set<String>()
+        for (binIdx, bin) in effectiveSnapshots.enumerated() {
+            let prefix = binIdx == 0 ? "" : "[\(bin.sourceName)] "
+            for cls in bin.objcClasses {
+                for m in cls.methods where m.rva > 0 {
+                    let nm = "\(prefix)\(cls.name)$$\(m.name)"
+                    let key = "\(m.rva)|\(nm)"
+                    if !seenNativeKey.contains(key) {
+                        seenNativeKey.insert(key)
+                        methodEntries.append((m.rva, nm, "void \(cls.name)_\(m.name)()", "void*"))
+                        recordAddr(m.rva)
+                    }
+                }
+            }
+            for sym in bin.exportedSymbols where sym.rva > 0 {
+                let nm = "\(prefix)\(sym.name)"
+                let key = "\(sym.rva)|\(nm)"
+                if !seenNativeKey.contains(key) {
+                    seenNativeKey.insert(key)
+                    methodEntries.append((sym.rva, nm, nm, "void*"))
+                    recordAddr(sym.rva)
+                }
+            }
+            for sym in bin.symtabSymbols where sym.rva > 0 {
+                let nm = "\(prefix)\(sym.name)"
+                let key = "\(sym.rva)|\(nm)"
+                if !seenNativeKey.contains(key) {
+                    seenNativeKey.insert(key)
+                    methodEntries.append((sym.rva, nm, nm, "void*"))
+                    recordAddr(sym.rva)
+                }
+            }
+            if !hasIL2CPPRVA {
+                var covered = Set<UInt64>()
+                for s in bin.exportedSymbols { covered.insert(s.rva) }
+                for s in bin.symtabSymbols { covered.insert(s.rva) }
+                for c in bin.objcClasses { for m in c.methods { covered.insert(m.rva) } }
+                for rva in bin.functionStartsRVA where rva > 0 && !covered.contains(rva) {
+                    let nm = String(format: "%@sub_%llX", prefix, rva)
+                    methodEntries.append((rva, nm, nm, "void*"))
+                    recordAddr(rva)
+                }
             }
         }
 
@@ -179,14 +238,17 @@ public enum StructAndJSONGenerator {
         images: [Il2CppImageInfo],
         types: [Il2CppTypeInfo],
         macho: MachOParser?,
+        snapshots: [NativeBinarySnapshot] = [],
         diagnostics: ProtectionDiagnostics
     ) throws {
         let writer = try BufferedFileWriter(url: url)
         defer { try? writer.close() }
 
+        let effectiveSnapshots: [NativeBinarySnapshot] = !snapshots.isEmpty ? snapshots : (macho.map { [$0.makeSnapshot()] } ?? [])
+
         try writer.writeLine("# IPA Dumper Pro v2.0 — Hierarchical Offsets Summary")
         try writer.writeLine("# Metadata: \(diagnostics.metadataStatus.summaryText)")
-        try writer.writeLine("# Assemblies: \(images.count) | Types: \(types.count)")
+        try writer.writeLine("# Assemblies: \(images.count) | Types: \(types.count) | Binaries Scanned: \(effectiveSnapshots.count)")
         try writer.writeLine("")
 
         for t in types {
@@ -208,16 +270,18 @@ public enum StructAndJSONGenerator {
                 let rvaHex = String(format: "0x%llX", m.rva)
                 let vaHex = String(format: "0x%llX", m.va)
                 let fHex = String(format: "0x%llX", m.fileOffset)
+                let gen = m.genericInstRVAs.count > 1 ? " GEN=" + m.genericInstRVAs.map { String(format: "0x%llX", $0) }.joined(separator: ",") : ""
                 let sem = m.arm64Semantics.isEmpty ? "" : " | \(m.arm64Semantics)"
-                try writer.writeLine("  METHOD RVA=\(rvaHex) VA=\(vaHex) OFF=\(fHex) | \(m.returnTypeName) \(m.name)\(sem)")
+                try writer.writeLine("  METHOD RVA=\(rvaHex) VA=\(vaHex) OFF=\(fHex)\(gen) | \(m.returnTypeName) \(m.name)\(sem)")
             }
             try writer.writeLine("")
         }
 
-        if let macho = macho {
-            if !macho.objcClasses.isEmpty {
-                try writer.writeLine("# Objective-C Classes (\(macho.objcClasses.count))")
-                for cls in macho.objcClasses {
+        for bin in effectiveSnapshots {
+            try writer.writeLine("# Binary: \(bin.sourceName) [\(bin.architecture)] BaseVM=0x\(String(bin.baseVM, radix: 16, uppercase: true))")
+            if !bin.objcClasses.isEmpty {
+                try writer.writeLine("# Objective-C Classes (\(bin.objcClasses.count))")
+                for cls in bin.objcClasses {
                     try writer.writeLine("[\(cls.name) : \(cls.superName)]")
                     for iv in cls.ivars {
                         try writer.writeLine(String(format: "  IVAR   0x%X | %@ %@", iv.offset, iv.typeEncoding, iv.name))
@@ -228,12 +292,45 @@ public enum StructAndJSONGenerator {
                 }
                 try writer.writeLine("")
             }
-            if !macho.exportedSymbols.isEmpty {
-                try writer.writeLine("# Mach-O Exports (\(macho.exportedSymbols.count))")
-                for sym in macho.exportedSymbols {
+            if !bin.swiftTypes.isEmpty {
+                try writer.writeLine("# Swift 5 Types (\(bin.swiftTypes.count))")
+                for st in bin.swiftTypes {
+                    let fSuffix = st.fields.isEmpty ? "" : " { \(st.fields.joined(separator: ", ")) }"
+                    try writer.writeLine(String(format: "  SWIFT  RVA=0x%llX | %@ %@%@", st.descriptorRVA, st.kind, st.name, fSuffix))
+                }
+                try writer.writeLine("")
+            }
+            if !bin.exportedSymbols.isEmpty {
+                try writer.writeLine("# Mach-O Exports (\(bin.exportedSymbols.count))")
+                for sym in bin.exportedSymbols {
                     try writer.writeLine(String(format: "  EXPORT RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
                 }
             }
+            if !bin.symtabSymbols.isEmpty {
+                try writer.writeLine("# Symtab Symbols (\(bin.symtabSymbols.count))")
+                for sym in bin.symtabSymbols {
+                    try writer.writeLine(String(format: "  SYMTAB RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", sym.rva, sym.va, sym.fileOffset, sym.name))
+                }
+            }
+            if !bin.xrefFunctions.isEmpty {
+                try writer.writeLine("# ARM64 String XRefs (\(bin.xrefFunctions.count))")
+                for xr in bin.xrefFunctions {
+                    try writer.writeLine(String(format: "  XREF   RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", xr.rva, xr.va, xr.fileOffset, xr.name))
+                }
+            }
+            var covered = Set<UInt64>()
+            for s in bin.exportedSymbols { covered.insert(s.rva) }
+            for s in bin.symtabSymbols { covered.insert(s.rva) }
+            for c in bin.objcClasses { for m in c.methods { covered.insert(m.rva) } }
+            let uncovered = bin.functionStartsRVA.filter { $0 > 0 && !covered.contains($0) }
+            if !uncovered.isEmpty {
+                try writer.writeLine("# Function Starts (\(uncovered.count) additional)")
+                for rva in uncovered {
+                    let va = bin.baseVM + rva
+                    try writer.writeLine(String(format: "  FUNC   RVA=0x%llX VA=0x%llX | sub_%llX", rva, va, rva))
+                }
+            }
+            try writer.writeLine("")
         }
 
         try writer.close()
@@ -272,7 +369,8 @@ public enum StructAndJSONGenerator {
                 }
             }
             for st in bin.swiftTypes {
-                try writer.writeLine(String(format: "SWIFT   RVA=0x%llX | %@ %@", st.descriptorRVA, st.kind, st.name))
+                let fSuffix = st.fields.isEmpty ? "" : " { \(st.fields.joined(separator: ", ")) }"
+                try writer.writeLine(String(format: "SWIFT   RVA=0x%llX | %@ %@%@", st.descriptorRVA, st.kind, st.name, fSuffix))
             }
             for xr in bin.xrefFunctions {
                 try writer.writeLine(String(format: "XREF    RVA=0x%llX VA=0x%llX OFF=0x%llX | %@", xr.rva, xr.va, xr.fileOffset, xr.name))

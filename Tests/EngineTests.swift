@@ -9,6 +9,8 @@ struct EngineTests {
         try testFullIL2CPPAndMachOPipeline()
         try testEncryptedMetadataFallback()
         try testPrefixedPathAndMetadataOverride()
+        try testChainedFixupsAndDyldInfoOnlyAndMultiBinary()
+        try testIL2CPPv24CodeGenModulesAndGenericMethodsAndUnicode()
         print("ALL ENGINE TESTS PASSED!")
     }
 
@@ -24,8 +26,16 @@ struct EngineTests {
         assertTrue(SafetyGuard.isRealMoneyBlocked("StoreKitManager"), "StoreKitManager must be blocked")
         assertTrue(SafetyGuard.isRealMoneyBlocked("SKPaymentTransaction"), "SKPaymentTransaction must be blocked")
         assertTrue(SafetyGuard.isRealMoneyBlocked("BuyGemsPack"), "BuyGemsPack must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("PurchaseSubscription"), "PurchaseSubscription must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("VIPSubscription"), "VIPSubscription must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("BuyBattlePass"), "BuyBattlePass must be blocked")
+        assertTrue(SafetyGuard.isRealMoneyBlocked("VerifyReceipt"), "VerifyReceipt must be blocked")
         assertTrue(!SafetyGuard.isRealMoneyBlocked("PlayerHealth"), "PlayerHealth must NOT be blocked")
         assertTrue(!SafetyGuard.isRealMoneyBlocked("EnemySpawner"), "EnemySpawner must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("Material.SetPass"), "Material.SetPass must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("AssetBundle.GetBundle"), "AssetBundle.GetBundle must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("UniRx.EventSubscription"), "UniRx.EventSubscription must NOT be blocked")
+        assertTrue(!SafetyGuard.isRealMoneyBlocked("SpriteAtlas.AddPack"), "SpriteAtlas.AddPack must NOT be blocked")
 
         let bankCheck = SafetyGuard.detectRestrictedApp(
             fileName: "Vietcombank.ipa",
@@ -225,6 +235,334 @@ struct EngineTests {
         assertTrue(dumpCS.contains("class PlayerStats<T>"), "Override dump.cs missing PlayerStats<T>")
         assertTrue(!dumpCS.contains("IAPManager"), "Override dump.cs leaked IAPManager")
         print("[PASS] Prefixed ./Payload/ IPA + External Metadata Override")
+    }
+
+    static func testChainedFixupsAndDyldInfoOnlyAndMultiBinary() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("chained_test_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let baseVM: UInt64 = 0x1_0000_0000
+        var macho = Data(repeating: 0, count: 0x6000)
+        // __text at 0x1000: RET, STP X29, X30, [SP, #-0x10]!, RET
+        putU32(&macho, 0x1000, 0xD65F_03C0) // RET (also sub_1000)
+        putU32(&macho, 0x1004, 0xA9BF_7BFD) // STP X29, X30, [SP, #-0x10]! -> prologue function start!
+        putU32(&macho, 0x1008, 0xD65F_03C0) // RET
+
+        for (i, b) in Array("ChainedObjCClass\0".utf8).enumerated() { macho[0x1400 + i] = b }
+        for (i, b) in Array("MultiStartClass\0".utf8).enumerated() { macho[0x1420 + i] = b }
+
+        // __objc_classlist at 0x2000: 2 entries rebased with format-2 (DYLD_CHAINED_PTR_64)
+        // encoded via DYLD_CHAINED_PTR_START_MULTI overflow chains
+        putU64(&macho, 0x2000, baseVM + 0x2100) // format 2 rebase: next=0, bind=0, target=baseVM+0x2100
+        putU64(&macho, 0x2008, baseVM + 0x2200) // format 2 rebase: next=0, bind=0, target=baseVM+0x2200
+        // Note: make upper bits differ from raw VM so ONLY chained fixups resolve Class1/Class2:
+        putU64(&macho, 0x2000, (baseVM + 0x2100) | (UInt64(1) << 44)) // reserved bits set; format 2 uses bits 0..35 + high8
+        putU64(&macho, 0x2008, (baseVM + 0x2200) | (UInt64(1) << 44))
+
+        // Class 1 at 0x2100 -> ro1 at 0x2140 -> name at 0x1400
+        putU64(&macho, 0x2100 + 32, baseVM + 0x2140)
+        putU64(&macho, 0x2140 + 24, baseVM + 0x1400)
+        // Class 2 at 0x2200 -> ro2 at 0x2240 -> name at 0x1420
+        putU64(&macho, 0x2200 + 32, baseVM + 0x2240)
+        putU64(&macho, 0x2240 + 24, baseVM + 0x1420)
+
+        // LC_DYLD_CHAINED_FIXUPS payload at 0x4000
+        putU32(&macho, 0x4004, 0x20)          // starts_offset = 0x20
+        putU32(&macho, 0x4020, 3)             // seg_count = 3 (__TEXT, __DATA, __LINKEDIT)
+        putU32(&macho, 0x4024, 0)             // seg 0 (__TEXT): none
+        putU32(&macho, 0x4028, 16)            // seg 1 (__DATA) offset from starts = 16 -> 0x4030
+        putU32(&macho, 0x402C, 0)             // seg 2 (__LINKEDIT): none
+
+        // dyld_chained_starts_in_segment at 0x4030
+        putU32(&macho, 0x4030, 64)            // size
+        putU16(&macho, 0x4034, 0x1000)        // page_size = 4096
+        putU16(&macho, 0x4036, 2)             // DYLD_CHAINED_PTR_64
+        putU64(&macho, 0x4038, 0x2000)        // segment_offset = 0x2000
+        putU16(&macho, 0x4044, 2)             // page_count = 2
+        putU16(&macho, 0x4046, 0x8002)        // page_start[0]: START_MULTI | ovIdx 2
+        putU16(&macho, 0x4048, 0xFFFF)        // page_start[1]: START_NONE
+        putU16(&macho, 0x404A, 0x0000)        // page_start[2]: chain 1 at 0x0000
+        putU16(&macho, 0x404C, 0x8008)        // page_start[3]: START_LAST | 0x0008
+
+        // LC_DYLD_INFO_ONLY exports trie at 0x4200: "_dyldExportedFn" -> RVA 0x1004
+        let edge1 = Array("_dyldExportedFn\0".utf8)
+        macho[0x4200] = 0 // root termSize = 0
+        macho[0x4201] = 1 // 1 child
+        for (i, b) in edge1.enumerated() { macho[0x4202 + i] = b }
+        macho[0x4202 + edge1.count] = 19 // child node offset = 19
+        macho[0x4200 + 19] = 3     // termSize = 3
+        macho[0x4200 + 20] = 0     // flags = REGULAR
+        macho[0x4200 + 21] = 0x84  // uleb128(0x1004) byte 0
+        macho[0x4200 + 22] = 0x20  // uleb128(0x1004) byte 1
+        macho[0x4200 + 23] = 0     // childCount = 0
+
+        let segTextSz: UInt32 = 72 + 2 * 80
+        let segDataSz: UInt32 = 72 + 1 * 80
+        let segLinkSz: UInt32 = 72
+        let dyldInfoSz: UInt32 = 48
+        let chainedSz: UInt32 = 16
+        let totalCmdSz = segTextSz + segDataSz + segLinkSz + dyldInfoSz + chainedSz
+
+        putU32(&macho, 0, 0xFEED_FACF); putU32(&macho, 4, 0x0100_000C)
+        putU32(&macho, 12, 2); putU32(&macho, 16, 5); putU32(&macho, 20, totalCmdSz)
+        var c = 32
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segTextSz); writeFixed(&macho, c + 8, "__TEXT")
+        putU64(&macho, c + 24, baseVM); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0); putU64(&macho, c + 48, 0x2000)
+        putU32(&macho, c + 56, 5); putU32(&macho, c + 60, 5); putU32(&macho, c + 64, 2)
+        c += 72
+        writeFixed(&macho, c, "__text"); writeFixed(&macho, c + 16, "__TEXT")
+        putU64(&macho, c + 32, baseVM + 0x1000); putU64(&macho, c + 40, 0x400); putU32(&macho, c + 48, 0x1000); putU32(&macho, c + 64, 0x8000_0400)
+        c += 80
+        writeFixed(&macho, c, "__cstring"); writeFixed(&macho, c + 16, "__TEXT")
+        putU64(&macho, c + 32, baseVM + 0x1400); putU64(&macho, c + 40, 0x200); putU32(&macho, c + 48, 0x1400); putU32(&macho, c + 64, 0x02)
+        c += 80
+
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segDataSz); writeFixed(&macho, c + 8, "__DATA")
+        putU64(&macho, c + 24, baseVM + 0x2000); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x2000); putU64(&macho, c + 48, 0x2000)
+        putU32(&macho, c + 56, 3); putU32(&macho, c + 60, 3); putU32(&macho, c + 64, 1)
+        c += 72
+        writeFixed(&macho, c, "__objc_classlist"); writeFixed(&macho, c + 16, "__DATA")
+        putU64(&macho, c + 32, baseVM + 0x2000); putU64(&macho, c + 40, 16); putU32(&macho, c + 48, 0x2000); putU32(&macho, c + 64, 0)
+        c += 80
+
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segLinkSz); writeFixed(&macho, c + 8, "__LINKEDIT")
+        putU64(&macho, c + 24, baseVM + 0x4000); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x4000); putU64(&macho, c + 48, 0x2000)
+        putU32(&macho, c + 56, 1); putU32(&macho, c + 60, 1); putU32(&macho, c + 64, 0)
+        c += 72
+
+        putU32(&macho, c, 0x8000_0022); putU32(&macho, c + 4, dyldInfoSz) // LC_DYLD_INFO_ONLY
+        putU32(&macho, c + 40, 0x4200); putU32(&macho, c + 44, 0x40)
+        c += 48
+
+        putU32(&macho, c, 0x8000_0034); putU32(&macho, c + 4, chainedSz) // LC_DYLD_CHAINED_FIXUPS
+        putU32(&macho, c + 8, 0x4000); putU32(&macho, c + 12, 0x200)
+
+        // Second Mach-O dylib inside Frameworks/HelperKit.dylib
+        var dylib = Data(repeating: 0, count: 0x4000)
+        putU32(&dylib, 0x1000, 0xD65F_03C0)
+        let edge2 = Array("_helperDylibFn\0".utf8)
+        dylib[0x2000] = 0; dylib[0x2001] = 1
+        for (i, b) in edge2.enumerated() { dylib[0x2002 + i] = b }
+        dylib[0x2002 + edge2.count] = 18
+        dylib[0x2000 + 18] = 3; dylib[0x2000 + 19] = 0; dylib[0x2000 + 20] = 0x80; dylib[0x2000 + 21] = 0x20
+        dylib[0x2000 + 22] = 0
+
+        let dTextSz: UInt32 = 72 + 80
+        let dExpSz: UInt32 = 16
+        putU32(&dylib, 0, 0xFEED_FACF); putU32(&dylib, 4, 0x0100_000C)
+        putU32(&dylib, 12, 6); putU32(&dylib, 16, 2); putU32(&dylib, 20, dTextSz + dExpSz)
+        var dc = 32
+        putU32(&dylib, dc, 0x19); putU32(&dylib, dc + 4, dTextSz); writeFixed(&dylib, dc + 8, "__TEXT")
+        putU64(&dylib, dc + 24, baseVM); putU64(&dylib, dc + 32, 0x3000); putU64(&dylib, dc + 40, 0); putU64(&dylib, dc + 48, 0x3000)
+        putU32(&dylib, dc + 56, 5); putU32(&dylib, dc + 60, 5); putU32(&dylib, dc + 64, 1)
+        dc += 72
+        writeFixed(&dylib, dc, "__text"); writeFixed(&dylib, dc + 16, "__TEXT")
+        putU64(&dylib, dc + 32, baseVM + 0x1000); putU64(&dylib, dc + 40, 0x100); putU32(&dylib, dc + 48, 0x1000); putU32(&dylib, dc + 64, 0x8000_0400)
+        dc += 80
+        putU32(&dylib, dc, 0x8000_0033); putU32(&dylib, dc + 4, dExpSz)
+        putU32(&dylib, dc + 8, 0x2000); putU32(&dylib, dc + 12, 0x40)
+
+        let plistDict: [String: Any] = [
+            "CFBundleDisplayName": "NativeMultiTest",
+            "CFBundleIdentifier": "com.indie.nativemulti",
+            "CFBundleShortVersionString": "1.0",
+            "CFBundleExecutable": "GameApp"
+        ]
+        let plistData = try PropertyListSerialization.data(fromPropertyList: plistDict, format: .xml, options: 0)
+
+        let appURL = tmp.appendingPathComponent("GameApp")
+        let dylibURL = tmp.appendingPathComponent("HelperKit.dylib")
+        let plistURL = tmp.appendingPathComponent("Info.plist")
+        try macho.write(to: appURL)
+        try dylib.write(to: dylibURL)
+        try plistData.write(to: plistURL)
+
+        let ipaURL = tmp.appendingPathComponent("NativeMulti.ipa")
+        let zw = try StreamingZipWriter(destinationURL: ipaURL)
+        try zw.addFile(at: plistURL, entryName: "Payload/GameApp.app/Info.plist")
+        try zw.addFile(at: appURL, entryName: "Payload/GameApp.app/GameApp")
+        try zw.addFile(at: dylibURL, entryName: "Payload/GameApp.app/Frameworks/HelperKit.dylib")
+        try zw.finalize()
+
+        var opts = DumpOptions.default
+        opts.autoExportZip = true
+        let result = try DumpCoordinator().runIPA(ipaURL: ipaURL, outputsRootURL: tmp.appendingPathComponent("out"), options: opts) { _ in }
+
+        let dumpCS = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("dump.cs"), encoding: .utf8)
+        let summaryText = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("offsets_summary.txt"), encoding: .utf8)
+        let nativeText = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("native_functions.txt"), encoding: .utf8)
+        let scriptText = try String(contentsOf: result.outputDirectoryURL.appendingPathComponent("script.json"), encoding: .utf8)
+
+        assertTrue(dumpCS.contains("ChainedObjCClass"), "Format-2 chained pointer Obj-C class missing")
+        assertTrue(dumpCS.contains("MultiStartClass"), "DYLD_CHAINED_PTR_START_MULTI Obj-C class missing")
+        assertTrue(nativeText.contains("dyldExportedFn"), "LC_DYLD_INFO_ONLY export missing")
+        assertTrue(nativeText.contains("helperDylibFn"), "Embedded dylib export missing")
+        assertTrue(summaryText.contains("helperDylibFn"), "offsets_summary.txt missing secondary dylib")
+        assertTrue(scriptText.contains("dyldExportedFn") && scriptText.contains("helperDylibFn"), "script.json missing exports")
+
+        let zipReader = try StreamingZipReader(url: result.outputDirectoryURL.appendingPathComponent("NativeMultiTest_dump.zip"))
+        assertTrue(zipReader.entries.contains(where: { $0.path == "dump.cs" }), "ZIP should use clean relative path 'dump.cs', got: \(zipReader.entries.map { $0.path })")
+        print("[PASS] Chained Fixups (Format 2 + START_MULTI) + LC_DYLD_INFO_ONLY + Multi-Binary + ZIP Paths")
+    }
+
+    static func testIL2CPPv24CodeGenModulesAndGenericMethodsAndUnicode() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("v24_gen_test_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        var strBlob = Data([0])
+        var strOffsets: [String: UInt32] = [:]
+        func addStr(_ s: String) -> UInt32 {
+            if let v = strOffsets[s] { return v }
+            let off = UInt32(strBlob.count)
+            strBlob.append(contentsOf: s.utf8)
+            strBlob.append(0)
+            strOffsets[s] = off
+            return off
+        }
+
+        let sAsm = addStr("Assembly-CSharp.dll")
+        let sNs = addStr("CoreGame")
+        let sClass = addStr("ChiếnBinh_战士")
+        let sField = addStr("power")
+        let sMethod = addStr("GenericAttack")
+
+        var images = Data(repeating: 0, count: 40)
+        putU32(&images, 0, sAsm); putU32(&images, 8, 0); putU32(&images, 12, 1)
+        putU32(&images, 16, 0xFFFF_FFFF); putU32(&images, 20, 0x2000_0001)
+
+        var typeDefs = Data(repeating: 0, count: 88)
+        putU32(&typeDefs, 0, sClass); putU32(&typeDefs, 4, sNs)
+        putU32(&typeDefs, 12, 0xFFFF_FFFF); putU32(&typeDefs, 16, 0xFFFF_FFFF)
+        putU32(&typeDefs, 24, 0xFFFF_FFFF); putU32(&typeDefs, 28, 0x0010_0001)
+        putU32(&typeDefs, 32, 0); putU32(&typeDefs, 36, 0)
+        putU32(&typeDefs, 40, 0xFFFF_FFFF); putU32(&typeDefs, 44, 0xFFFF_FFFF)
+        putU16(&typeDefs, 64, 1); putU16(&typeDefs, 68, 1); putU32(&typeDefs, 84, 0x0200_0002)
+
+        var fields = Data(repeating: 0, count: 12)
+        putU32(&fields, 0, sField); putU32(&fields, 4, 0); putU32(&fields, 8, 0x0400_0001)
+
+        var methods = Data(repeating: 0, count: 32)
+        putU32(&methods, 0, sMethod); putU32(&methods, 4, 0); putU32(&methods, 8, 0)
+        putU32(&methods, 12, 0xFFFF_FFFF); putU32(&methods, 16, 0xFFFF_FFFF)
+        putU32(&methods, 20, 0x0600_0001); putU16(&methods, 24, 0x0086); putU16(&methods, 28, 0xFFFF)
+
+        var meta = Data(repeating: 0, count: 288)
+        func appendSec(_ blob: Data, offHdr: Int, szHdr: Int) {
+            let off = UInt32(meta.count); let sz = UInt32(blob.count)
+            meta.append(blob); while meta.count % 4 != 0 { meta.append(0) }
+            putU32(&meta, offHdr, off); putU32(&meta, szHdr, sz)
+        }
+        putU32(&meta, 0, 0xFAB1_1BAF); putU32(&meta, 4, 24) // version 24!
+        appendSec(strBlob, offHdr: 24, szHdr: 28)
+        appendSec(methods, offHdr: 48, szHdr: 52)
+        appendSec(fields, offHdr: 96, szHdr: 100)
+        appendSec(typeDefs, offHdr: 160, szHdr: 164)
+        appendSec(images, offHdr: 168, szHdr: 172)
+
+        // Mach-O with CodeGenModules + genericMethodPointers + MetaReg(genericMethodTable + methodSpecs + types + fieldOffsets)
+        var macho = Data(repeating: 0, count: 0x4000)
+        let baseVM: UInt64 = 0x1_0000_0000
+        putU32(&macho, 0x1000, 0xD65F_03C0)
+        putU32(&macho, 0x1020, 0xD65F_03C0)
+        putU32(&macho, 0x1030, 0xD65F_03C0)
+        for (i, b) in Array("Assembly-CSharp.dll\0".utf8).enumerated() { macho[0x1200 + i] = b }
+
+        // Method ptrs table at 0x2000 (1 method -> RVA 0x1000)
+        putU64(&macho, 0x2000, baseVM + 0x1000)
+        // GenericMethodPointers array at 0x2010 (2 instantiated RVAs: 0x1020, 0x1030)
+        putU64(&macho, 0x2010, baseVM + 0x1020)
+        putU64(&macho, 0x2018, baseVM + 0x1030)
+        // CodeGenModule at 0x2020: { namePtr, methodCount=1, methodPtrs }
+        putU64(&macho, 0x2020, baseVM + 0x1200)
+        putU64(&macho, 0x2028, 1)
+        putU64(&macho, 0x2030, baseVM + 0x2000)
+        // CodeGenModules* at 0x2040
+        putU64(&macho, 0x2040, baseVM + 0x2020)
+
+        // Il2CppCodeRegistration at 0x2050:
+        // genericMethodPointersCount=2 @ 0x2050, genericMethodPointers=0x2010 @ 0x2058
+        // codeGenModulesCount=1 @ 0x2060, codeGenModules=0x2040 @ 0x2068
+        putU64(&macho, 0x2050, 2); putU64(&macho, 0x2058, baseVM + 0x2010)
+        putU64(&macho, 0x2060, 1); putU64(&macho, 0x2068, baseVM + 0x2040)
+
+        // FieldOffsets[0] = 0x18 @ 0x2100; fieldOffsetsTable @ 0x2110; tdSize @ 0x2118
+        putU32(&macho, 0x2100, 0x18)
+        putU64(&macho, 0x2110, baseVM + 0x2100)
+        putU32(&macho, 0x2118, 0x20)
+        // Il2CppType[0] = Int32 (0x08) @ 0x2120; types* @ 0x2130
+        macho[0x2120 + 10] = 0x08
+        putU64(&macho, 0x2130, baseVM + 0x2120)
+
+        // genericMethodTable (2 entries * 12 bytes = 24 bytes) @ 0x2140:
+        // entry0: specIdx=0, methIdx=0, invIdx=0; entry1: specIdx=1, methIdx=1, invIdx=0
+        putU32(&macho, 0x2140, 0); putU32(&macho, 0x2144, 0)
+        putU32(&macho, 0x214C, 1); putU32(&macho, 0x2150, 1)
+        // methodSpecs (2 entries * 12 bytes = 24 bytes) @ 0x2160: both point to methodDefIndex 0
+        putU32(&macho, 0x2160, 0); putU32(&macho, 0x2164, 0); putU32(&macho, 0x2168, 0)
+        putU32(&macho, 0x216C, 0); putU32(&macho, 0x2170, 0); putU32(&macho, 0x2174, 0)
+
+        // MetaReg anchored at 0x2230:
+        // p - 48 (0x2200): gmCnt=2, gmPtr=0x2140
+        // p - 32 (0x2210): typesCnt=1, types=0x2130
+        // p - 16 (0x2220): methodSpecsCnt=2, methodSpecs=0x2160
+        // p      (0x2230): foCnt=1, foPtr=0x2110, tdCnt=1, tdSizePtr=0x2118
+        putU64(&macho, 0x2200, 2); putU64(&macho, 0x2208, baseVM + 0x2140)
+        putU64(&macho, 0x2210, 1); putU64(&macho, 0x2218, baseVM + 0x2130)
+        putU64(&macho, 0x2220, 2); putU64(&macho, 0x2228, baseVM + 0x2160)
+        putU64(&macho, 0x2230, 1); putU64(&macho, 0x2238, baseVM + 0x2110)
+        putU64(&macho, 0x2240, 1); putU64(&macho, 0x2248, baseVM + 0x2118)
+
+        let segTextSz: UInt32 = 72 + 2 * 80
+        let segDataSz: UInt32 = 72 + 80
+        putU32(&macho, 0, 0xFEED_FACF); putU32(&macho, 4, 0x0100_000C)
+        putU32(&macho, 12, 6); putU32(&macho, 16, 2); putU32(&macho, 20, segTextSz + segDataSz)
+        var c = 32
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segTextSz); writeFixed(&macho, c + 8, "__TEXT")
+        putU64(&macho, c + 24, baseVM); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0); putU64(&macho, c + 48, 0x2000)
+        putU32(&macho, c + 56, 5); putU32(&macho, c + 60, 5); putU32(&macho, c + 64, 2)
+        c += 72
+        writeFixed(&macho, c, "__text"); writeFixed(&macho, c + 16, "__TEXT")
+        putU64(&macho, c + 32, baseVM + 0x1000); putU64(&macho, c + 40, 0x200); putU32(&macho, c + 48, 0x1000); putU32(&macho, c + 64, 0x8000_0400)
+        c += 80
+        writeFixed(&macho, c, "__cstring"); writeFixed(&macho, c + 16, "__TEXT")
+        putU64(&macho, c + 32, baseVM + 0x1200); putU64(&macho, c + 40, 0x200); putU32(&macho, c + 48, 0x1200); putU32(&macho, c + 64, 0x02)
+        c += 80
+        putU32(&macho, c, 0x19); putU32(&macho, c + 4, segDataSz); writeFixed(&macho, c + 8, "__DATA")
+        putU64(&macho, c + 24, baseVM + 0x2000); putU64(&macho, c + 32, 0x2000); putU64(&macho, c + 40, 0x2000); putU64(&macho, c + 48, 0x2000)
+        putU32(&macho, c + 56, 3); putU32(&macho, c + 60, 3); putU32(&macho, c + 64, 1)
+        c += 72
+        writeFixed(&macho, c, "__data"); writeFixed(&macho, c + 16, "__DATA")
+        putU64(&macho, c + 32, baseVM + 0x2000); putU64(&macho, c + 40, 0x2000); putU32(&macho, c + 48, 0x2000); putU32(&macho, c + 64, 0)
+
+        let plistDict: [String: Any] = ["CFBundleDisplayName": "V24GenGame", "CFBundleIdentifier": "com.indie.v24gen", "CFBundleExecutable": "V24Gen"]
+        let plistData = try PropertyListSerialization.data(fromPropertyList: plistDict, format: .xml, options: 0)
+
+        let mURL = tmp.appendingPathComponent("global-metadata.dat")
+        let fwURL = tmp.appendingPathComponent("UnityFramework")
+        let pURL = tmp.appendingPathComponent("Info.plist")
+        try meta.write(to: mURL); try macho.write(to: fwURL); try plistData.write(to: pURL)
+
+        let ipaURL = tmp.appendingPathComponent("V24Gen.ipa")
+        let zw = try StreamingZipWriter(destinationURL: ipaURL)
+        try zw.addFile(at: pURL, entryName: "Payload/V24Gen.app/Info.plist")
+        try zw.addFile(at: fwURL, entryName: "Payload/V24Gen.app/Frameworks/UnityFramework.framework/UnityFramework")
+        try zw.addFile(at: mURL, entryName: "Payload/V24Gen.app/Data/Managed/Metadata/global-metadata.dat")
+        try zw.finalize()
+
+        let res = try DumpCoordinator().runIPA(ipaURL: ipaURL, outputsRootURL: tmp.appendingPathComponent("out"), options: .default) { _ in }
+        let dumpCS = try String(contentsOf: res.outputDirectoryURL.appendingPathComponent("dump.cs"), encoding: .utf8)
+        let summaryText = try String(contentsOf: res.outputDirectoryURL.appendingPathComponent("offsets_summary.txt"), encoding: .utf8)
+        let scriptText = try String(contentsOf: res.outputDirectoryURL.appendingPathComponent("script.json"), encoding: .utf8)
+
+        assertTrue(res.session.diagnostics.metadataStatus.isValid, "IL2CPP v24 Unicode metadata must validate")
+        assertTrue(dumpCS.contains("ChiếnBinh_战士"), "Unicode type name missing in dump.cs")
+        assertTrue(dumpCS.contains("RVA: 0x1000"), "v24 CodeGenModule method RVA 0x1000 missing in dump.cs")
+        assertTrue(dumpCS.contains("0x1020") && dumpCS.contains("0x1030"), "Generic instantiation RVAs missing in dump.cs")
+        assertTrue(summaryText.contains("0x1020") && summaryText.contains("0x1030"), "Generic instantiation RVAs missing in offsets_summary.txt")
+        assertTrue(scriptText.contains("4128") && scriptText.contains("4144"), "script.json missing decimal RVAs for generic instantiations (0x1020=4128, 0x1030=4144)")
+        print("[PASS] IL2CPP v24 CodeGenModules + GenericMethods + Unicode Identifiers")
     }
 
     static func validateECMA335DLL(at url: URL) throws {

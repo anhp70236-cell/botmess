@@ -169,15 +169,47 @@ public final class DumpCoordinator {
             }
         }
 
-        let extraBinaryEntries: [ZipEntry] = options.deepMachOScan ? Array(reader.entries.filter { entry in
-            guard !entry.isDirectory else { return false }
+        let nonBinaryExts: Set<String> = [
+            "plist", "nib", "png", "jpg", "jpeg", "webp", "gif", "car", "strings",
+            "mobileprovision", "json", "dat", "assets", "resource", "bank", "mp4",
+            "wav", "mp3", "ogg", "pak", "bundle", "txt", "xml", "html", "css", "js",
+            "ttf", "otf", "xcent", "entitlements", "metallib", "mom", "momd",
+            "lua", "luac", "unity3d", "ab", "prefab", "shader", "mat", "fbx",
+            "obj", "glb", "gltf", "zip", "gz", "bz2", "xz", "7z", "rar",
+            "sqlite", "db", "cer", "der", "pem", "p12", "svg", "pdf", "ico",
+            "bmp", "tga", "dds", "ktx", "pvr", "astc", "exr", "hdr", "m4a",
+            "aac", "flac", "mov", "avi", "webm", "h", "m", "mm", "swift",
+            "c", "cpp", "py", "sh", "md", "yaml", "yml", "ini", "cfg", "conf",
+            "log", "csv", "tsv", "bin", "raw", "idx", "map", "bplist", "storyboardc"
+        ]
+        let nonBinaryNames: Set<String> = ["pkginfo", "coderesources", "license", "readme", "notice", "authors", "copying"]
+        let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xCAFEBABE, 0xBEBAFECA, 0xCAFEBABF, 0xBFBAFECA]
+
+        let extraBinaryEntries: [ZipEntry] = options.deepMachOScan ? reader.entries.filter { entry in
+            guard !entry.isDirectory, entry.uncompressedSize >= 4096 else { return false }
             let np = Self.normalizedZipPath(entry.path)
             if np == Self.normalizedZipPath(info.primaryMachOPath) { return false }
             if let sp = info.secondaryMachOPath, np == Self.normalizedZipPath(sp) { return false }
-            let isFwBin = np.range(of: #"(?:^|/)Payload/[^/]+\.app/Frameworks/([^/]+)\.framework/\1$"#, options: [.regularExpression, .caseInsensitive]) != nil
-            let isDylib = np.range(of: #"(?:^|/)Payload/[^/]+\.app/Frameworks/[^/]+\.dylib$"#, options: [.regularExpression, .caseInsensitive]) != nil
-            return (isFwBin || isDylib) && !SafetyGuard.isRealMoneyBlocked(np)
-        }.prefix(16)) : []
+            guard np.range(of: #"(?:^|/)Payload/[^/]+\.app/"#, options: [.regularExpression, .caseInsensitive]) != nil else {
+                return false
+            }
+            guard !SafetyGuard.isRealMoneyBlocked(np) else { return false }
+            let lastName = URL(fileURLWithPath: np).lastPathComponent.lowercased()
+            if nonBinaryNames.contains(lastName) { return false }
+            let ext = URL(fileURLWithPath: np).pathExtension.lowercased()
+            if !ext.isEmpty && nonBinaryExts.contains(ext) { return false }
+
+            let isFwBin = np.range(of: #"/Frameworks/[^/]+\.framework/[^/]+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+            let isDylibOrSo = ext == "dylib" || ext == "so"
+            let isPlugIn = np.range(of: #"/PlugIns/[^/]+\.appex/[^/]+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+            let isExtensionless = ext.isEmpty
+            guard isFwBin || isDylibOrSo || isPlugIn || isExtensionless else { return false }
+
+            guard let prefix = reader.peekEntryPrefix(entry, maxBytes: 4), prefix.count >= 4 else { return false }
+            let magic = UInt32(prefix[0]) | (UInt32(prefix[1]) << 8) | (UInt32(prefix[2]) << 16) | (UInt32(prefix[3]) << 24)
+            let magicBE = (UInt32(prefix[0]) << 24) | (UInt32(prefix[1]) << 16) | (UInt32(prefix[2]) << 8) | UInt32(prefix[3])
+            return machoMagics.contains(magic) || machoMagics.contains(magicBE)
+        } : []
 
         var localMetadata: URL? = nil
         if let overrideMetadataURL = overrideMetadataURL {
@@ -354,6 +386,8 @@ public final class DumpCoordinator {
             filteredRealMoneyCount: 0
         )
 
+        var promotedExtraPath: String? = nil
+        var secondaryConsumed = false
         if let metaURL = metadataURL, let peek = peekResult, peek.status.isValid {
             onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.54, message: "Định vị CodeRegistration, MetadataRegistration & FieldOffsets..."))
             var reg = Il2CppRegistrationFinder.find(
@@ -386,6 +420,45 @@ public final class DumpCoordinator {
                 if !secReg.codeGenModules.isEmpty || !secReg.legacyMethodRVAs.isEmpty {
                     reg = secReg
                     macho = secMacho
+                    secondaryConsumed = true
+                }
+            }
+
+            if reg.codeGenModules.isEmpty && reg.legacyMethodRVAs.isEmpty,
+               let reader = extraMachOReader, let tDir = tempDir, !extraMachOEntries.isEmpty {
+                let prioritized = extraMachOEntries.sorted { a, b in
+                    let al = a.path.lowercased()
+                    let bl = b.path.lowercased()
+                    let aHint = al.contains("il2cpp") || al.contains("unity") || al.contains("game")
+                    let bHint = bl.contains("il2cpp") || bl.contains("unity") || bl.contains("game")
+                    if aHint != bHint { return aHint }
+                    return a.uncompressedSize > b.uncompressedSize
+                }
+                for (cIdx, entry) in prioritized.enumerated() {
+                    if isCancelled() { throw DumpCoordinatorError.cancelled }
+                    let candDest = tDir.appendingPathComponent("cand_il2cpp_\(cIdx)")
+                    if (try? reader.extractEntry(entry, to: candDest, progress: nil)) != nil,
+                       let candMacho = try? MachOParser(url: candDest, sourceName: URL(fileURLWithPath: entry.path).lastPathComponent) {
+                        if options.deepMachOScan { candMacho.runDeepNativeScan() }
+                        let candReg = Il2CppRegistrationFinder.find(
+                            in: candMacho,
+                            imageNames: peek.imageNames,
+                            typeFieldCounts: peek.typeFieldCounts,
+                            typeDefsCount: peek.totalTypes,
+                            totalMethodsCount: peek.totalMethods,
+                            metadataVersion: peek.version,
+                            ctorPairsByImage: peek.ctorPairsByImage
+                        ) { msg in
+                            onProgress(DumpProgressUpdate(phase: .analyzing, progress: 0.63, message: msg))
+                        }
+                        if !candReg.codeGenModules.isEmpty || !candReg.legacyMethodRVAs.isEmpty {
+                            reg = candReg
+                            macho = candMacho
+                            promotedExtraPath = entry.path
+                            break
+                        }
+                    }
+                    try? FileManager.default.removeItem(at: candDest)
                 }
             }
 
@@ -404,7 +477,7 @@ public final class DumpCoordinator {
 
         // Collect all Mach-O snapshots across primary, secondary, and embedded frameworks (one-by-one temp disk cleanup)
         var allNativeSnapshots: [NativeBinarySnapshot] = [macho.makeSnapshot()]
-        if let secURL = secondaryMachOURL,
+        if !secondaryConsumed, let secURL = secondaryMachOURL,
            let secMacho = try? MachOParser(url: secURL, sourceName: URL(fileURLWithPath: info.secondaryMachOPath ?? "AppBinary").lastPathComponent) {
             if options.deepMachOScan { secMacho.runDeepNativeScan() }
             if !allNativeSnapshots.contains(where: { $0.sourceName == secMacho.sourceName }) {
@@ -413,6 +486,7 @@ public final class DumpCoordinator {
         }
         if options.deepMachOScan, let reader = extraMachOReader, let tDir = tempDir, !extraMachOEntries.isEmpty {
             for (idx, entry) in extraMachOEntries.enumerated() {
+                if entry.path == promotedExtraPath { continue }
                 if isCancelled() { throw DumpCoordinatorError.cancelled }
                 let tmpBin = tDir.appendingPathComponent("extra_bin_\(idx)")
                 defer { try? FileManager.default.removeItem(at: tmpBin) }
@@ -454,6 +528,7 @@ public final class DumpCoordinator {
                         images: fullMeta.images,
                         types: fullMeta.types,
                         macho: macho,
+                        snapshots: allNativeSnapshots,
                         diagnostics: diagnostics,
                         options: options
                     )
@@ -471,13 +546,15 @@ public final class DumpCoordinator {
                     try StructAndJSONGenerator.generateIl2CppHeader(
                         to: outDir.appendingPathComponent("il2cpp.h"),
                         types: fullMeta.types,
-                        macho: macho
+                        macho: macho,
+                        snapshots: allNativeSnapshots
                     )
                     try StructAndJSONGenerator.generateScriptJSON(
                         to: outDir.appendingPathComponent("script.json"),
                         types: fullMeta.types,
                         stringLiterals: fullMeta.stringLiterals,
-                        macho: macho
+                        macho: macho,
+                        snapshots: allNativeSnapshots
                     )
                     try StructAndJSONGenerator.generateStringLiteralJSON(
                         to: outDir.appendingPathComponent("stringliteral.json"),
@@ -494,6 +571,7 @@ public final class DumpCoordinator {
             images: fullMeta.images,
             types: fullMeta.types,
             macho: macho,
+            snapshots: allNativeSnapshots,
             diagnostics: diagnostics
         )
         try StructAndJSONGenerator.generateNativeFunctionsReport(
@@ -521,7 +599,7 @@ public final class DumpCoordinator {
         if let err = genError { throw err }
 
         let summaryURL = outDir.appendingPathComponent("report.txt")
-        try writeSummaryReport(to: summaryURL, info: info, diagnostics: diagnostics, macho: macho, meta: fullMeta, dummyDllCount: dummyDllCount, binariesScanned: allNativeSnapshots.count)
+        try writeSummaryReport(to: summaryURL, info: info, diagnostics: diagnostics, macho: macho, meta: fullMeta, dummyDllCount: dummyDllCount, snapshots: allNativeSnapshots)
 
         if options.autoExportZip {
             onProgress(DumpProgressUpdate(phase: .packaging, progress: 0.93, message: "Đang nén gói kết quả ZIP..."))
@@ -582,14 +660,20 @@ public final class DumpCoordinator {
     public func packageOutputDirectory(_ dirURL: URL, toZip zipURL: URL) throws {
         let writer = try StreamingZipWriter(destinationURL: zipURL)
         let fm = FileManager.default
-        if let enumerator = fm.enumerator(at: dirURL, includingPropertiesForKeys: [.isRegularFileKey]) {
+        let resolvedDir = dirURL.resolvingSymlinksInPath()
+        let resolvedZip = zipURL.resolvingSymlinksInPath()
+        let basePrefix = resolvedDir.path.hasSuffix("/") ? resolvedDir.path : (resolvedDir.path + "/")
+        if let enumerator = fm.enumerator(at: resolvedDir, includingPropertiesForKeys: [.isRegularFileKey]) {
             for case let fileURL as URL in enumerator {
                 let name = fileURL.lastPathComponent
-                if name.hasPrefix(".") || fileURL == zipURL { continue }
-                let vals = try? fileURL.resourceValues(forKeys: [.isRegularFileKey])
+                let resFile = fileURL.resolvingSymlinksInPath()
+                if name.hasPrefix(".") || resFile == resolvedZip { continue }
+                let vals = try? resFile.resourceValues(forKeys: [.isRegularFileKey])
                 if vals?.isRegularFile == true {
-                    let rel = fileURL.path.replacingOccurrences(of: dirURL.path + "/", with: "")
-                    try writer.addFile(at: fileURL, entryName: rel)
+                    let rel = resFile.path.hasPrefix(basePrefix)
+                        ? String(resFile.path.dropFirst(basePrefix.count))
+                        : resFile.lastPathComponent
+                    try writer.addFile(at: resFile, entryName: rel)
                 }
             }
         }
@@ -603,21 +687,34 @@ public final class DumpCoordinator {
         macho: MachOParser,
         meta: ParsedMetadataResult,
         dummyDllCount: Int,
-        binariesScanned: Int
+        snapshots: [NativeBinarySnapshot]
     ) throws {
         let writer = try BufferedFileWriter(url: url)
         defer { try? writer.close() }
+        let totalMethods = meta.types.reduce(0) { $0 + $1.methods.count }
+        let methodsWithRVA = meta.types.reduce(0) { $0 + $1.methods.filter { $0.rva > 0 }.count }
+        let genericInstTotal = meta.types.reduce(0) { acc, t in acc + t.methods.reduce(0) { $0 + $1.genericInstRVAs.count } }
+        let totalFields = meta.types.reduce(0) { $0 + $1.fields.count }
+        let resolvedFields = meta.types.reduce(0) { $0 + $1.fields.filter { $0.offset >= 0 }.count }
+        let totalFiltered = meta.filteredRealMoneyCount + snapshots.reduce(0) { $0 + $1.filteredRealMoneyCount }
+
         try writer.writeLine("IPA Dumper Pro v2.0 — Analysis Report")
         try writer.writeLine("=====================================")
         try writer.writeLine("App: \(info.appName) (\(info.bundleId)) v\(info.bundleVersion)")
         try writer.writeLine("Input Size: \(formatSize(info.fileSizeBytes))")
-        try writer.writeLine("Primary Mach-O: \(info.primaryMachOPath) [\(macho.architecture)] (Total Binaries Scanned: \(binariesScanned))")
+        try writer.writeLine("Primary Mach-O: \(info.primaryMachOPath) [\(macho.architecture)] (Total Binaries Scanned: \(snapshots.count))")
         try writer.writeLine("FairPlay DRM: \(diagnostics.fairPlayEncrypted ? "ENCRYPTED (cryptid=\(diagnostics.cryptId))" : "Decrypted")")
         try writer.writeLine("Chained Fixups: \(macho.hasChainedFixups ? "Yes (\(macho.chainedFixupPointers.count) pointers)" : "No")")
         try writer.writeLine("Metadata Status: \(diagnostics.metadataStatus.summaryText)")
         try writer.writeLine("Assemblies: \(meta.images.count) | Types: \(meta.types.count) | Dummy DLLs: \(dummyDllCount)")
-        try writer.writeLine("Obj-C Classes: \(macho.objcClasses.count) | Swift Types: \(macho.swiftTypes.count) | Exports: \(macho.exportedSymbols.count)")
-        try writer.writeLine("Filtered Real-Money/IAP Symbols: \(meta.filteredRealMoneyCount + macho.filteredRealMoneyCount)")
+        try writer.writeLine("IL2CPP Methods with RVA: \(methodsWithRVA)/\(totalMethods) (GenericInst RVAs: \(genericInstTotal)) | Field Offsets Resolved: \(resolvedFields)/\(totalFields)")
+        try writer.writeLine("Filtered Real-Money/IAP Symbols: \(totalFiltered)")
+        try writer.writeLine("")
+        try writer.writeLine("--- Native Binary Breakdown ---")
+        for bin in snapshots {
+            let objcMethodCount = bin.objcClasses.reduce(0) { $0 + $1.methods.count }
+            try writer.writeLine("[\(bin.sourceName)] (\(bin.architecture)) Exports=\(bin.exportedSymbols.count) Symtab=\(bin.symtabSymbols.count) ObjC=\(bin.objcClasses.count) ObjCMethods=\(objcMethodCount) Swift=\(bin.swiftTypes.count) FuncStarts=\(bin.functionStartsRVA.count) XRefs=\(bin.xrefFunctions.count)")
+        }
         try writer.close()
     }
 

@@ -7,7 +7,7 @@ public struct ParsedMetadataResult: Sendable {
     public let types: [Il2CppTypeInfo]
     public let stringLiterals: [Il2CppStringLiteral]
     public let typeFieldCounts: [UInt16]
-    public let ctorPairsByImage: [String: [(typeDefIndex: Int, methodId: Int)]]
+    public let ctorPairsByImage: [String: [(typeDefIndex: Int, ridIndex: Int, globalIndex: Int)]]
     public let totalMethodsCount: Int
     public let filteredRealMoneyCount: Int
 }
@@ -43,7 +43,7 @@ public enum Il2CppMetadataParser {
                 baseOffset = 0
             }
         } else {
-            let scanCap = min(mapped.count - 256, 131_072)
+            let scanCap = min(mapped.count - 256, 16 * 1024 * 1024)
             for off in stride(from: 4, through: scanCap, by: 4) {
                 if mapped.readUInt32(at: off) == sanityMagic {
                     let ver = mapped.readInt32(at: off + 4)
@@ -148,11 +148,12 @@ public enum Il2CppMetadataParser {
 
         func isGoodIdent(_ idx: UInt32) -> Bool {
             if idx == 0 || Int(idx) >= stringSize { return false }
+            if mapped.readUInt8(at: stringOff + Int(idx) - 1) != 0 { return false }
             let s = readMetaString(idx)
             guard !s.isEmpty else { return false }
             for u in s.unicodeScalars {
                 let v = u.value
-                if v < 0x20 || v > 0x7E { return false }
+                if v < 0x20 || v == 0x7F || v == 0xFFFD { return false }
             }
             return true
         }
@@ -245,7 +246,7 @@ public enum Il2CppMetadataParser {
         if totalTypes > 0 {
             var bestShift = tdShift
             var bestScore = -1
-            let candidates = Array(Set([max(0, typeStride - 88), 0, 4, 8, 12, 16])).filter { 84 + $0 + 4 <= typeStride }
+            let candidates = Array(Set([max(0, typeStride - 88), 0, 4, 8, 12, 16, 20])).filter { 84 + $0 + 4 <= typeStride }
             let tStep = max(1, totalTypes / 32)
             for sh in candidates {
                 var score = 0
@@ -440,7 +441,7 @@ public enum Il2CppMetadataParser {
         var rawTypeNames = [String](repeating: "", count: totalTypes)
         var rawNamespaces = [String](repeating: "", count: totalTypes)
         var typeFieldCounts = [UInt16](repeating: 0, count: totalTypes)
-        var ctorPairsByImage: [String: [(typeDefIndex: Int, methodId: Int)]] = [:]
+        var ctorPairsByImage: [String: [(typeDefIndex: Int, ridIndex: Int, globalIndex: Int)]] = [:]
 
         for ti in 0..<totalTypes {
             let tp = typeDefsOff + ti * typeStride
@@ -461,8 +462,8 @@ public enum Il2CppMetadataParser {
                         if mName == ".ctor" {
                             let tok = mapped.readUInt32(at: mp + mTokOff)
                             let rid = Int(tok & 0x00FF_FFFF)
-                            let mId = version >= 25 && rid > 0 ? (rid - 1) : mi
-                            ctorPairsByImage[imgName, default: []].append((ti, mId))
+                            let ridIdx = rid > 0 ? (rid - 1) : -1
+                            ctorPairsByImage[imgName, default: []].append((ti, ridIdx, mi))
                             break
                         }
                     }
@@ -765,11 +766,14 @@ public enum Il2CppMetadataParser {
                     }
 
                     let rid = Int(mTok & 0x00FF_FFFF)
+                    let genRVAs = registration?.genericMethodRVAsByMethodDef[mGlobal] ?? []
                     let rva: UInt64
-                    if let modRVAs = modRVAs, version >= 25, rid > 0, rid - 1 < modRVAs.count {
+                    if let modRVAs = modRVAs, !modRVAs.isEmpty, rid > 0, rid - 1 < modRVAs.count, modRVAs[rid - 1] > 0 {
                         rva = modRVAs[rid - 1]
-                    } else if mGlobal < legRVAs.count {
+                    } else if mGlobal < legRVAs.count, legRVAs[mGlobal] > 0 {
                         rva = legRVAs[mGlobal]
+                    } else if let firstGen = genRVAs.first {
+                        rva = firstGen
                     } else {
                         rva = 0
                     }
@@ -798,7 +802,8 @@ public enum Il2CppMetadataParser {
                         va: va,
                         fileOffset: fOff,
                         arm64Semantics: armSem,
-                        attributes: resolveAttributes(forToken: mTok)
+                        attributes: resolveAttributes(forToken: mTok),
+                        genericInstRVAs: genRVAs
                     ))
                 }
             }
@@ -934,7 +939,7 @@ public enum Il2CppMetadataParser {
         typeFieldCounts: [UInt16],
         totalTypes: Int,
         totalMethods: Int,
-        ctorPairsByImage: [String: [(typeDefIndex: Int, methodId: Int)]]
+        ctorPairsByImage: [String: [(typeDefIndex: Int, ridIndex: Int, globalIndex: Int)]]
     ) {
         let parsed = try inspectAndParse(url: url, registration: nil, macho: nil, options: DumpOptions(
             generateDumpCS: false, generateStructAndJSON: false, generateDummyDLLs: false,

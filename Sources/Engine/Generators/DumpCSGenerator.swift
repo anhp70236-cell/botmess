@@ -6,6 +6,7 @@ public enum DumpCSGenerator {
         images: [Il2CppImageInfo],
         types: [Il2CppTypeInfo],
         macho: MachOParser?,
+        snapshots: [NativeBinarySnapshot] = [],
         diagnostics: ProtectionDiagnostics,
         options: DumpOptions
     ) throws {
@@ -178,6 +179,10 @@ public enum DumpCSGenerator {
                             let slotStr = m.slot != 0xFFFF ? " Slot: \(m.slot)" : ""
                             let semStr = m.arm64Semantics.isEmpty ? "" : " | \(m.arm64Semantics)"
                             try writer.writeLine("\t// RVA: \(rvaStr) Offset: \(offStr) VA: \(vaStr)\(slotStr)\(semStr)")
+                            if m.genericInstRVAs.count > 1 {
+                                let genList = m.genericInstRVAs.map { String(format: "0x%llX", $0) }.joined(separator: ", ")
+                                try writer.writeLine("\t// GenericInst RVAs (\(m.genericInstRVAs.count)): \(genList)")
+                            }
                         }
                         let mVis = methodVisibility(m.flags)
                         var mMods = ""
@@ -202,47 +207,103 @@ public enum DumpCSGenerator {
             }
         }
 
-        // Plaintext Mach-O Obj-C / Swift fallback section
-        if let macho = macho, options.deepMachOScan {
-            if !macho.objcClasses.isEmpty {
+        // Plaintext Mach-O Multi-Binary section (Obj-C / Swift / Native Symbols)
+        let effectiveSnapshots: [NativeBinarySnapshot] = !snapshots.isEmpty ? snapshots : (macho.map { [$0.makeSnapshot()] } ?? [])
+        if options.deepMachOScan {
+            for bin in effectiveSnapshots {
+                let hasNative = !bin.objcClasses.isEmpty
+                    || !bin.swiftTypes.isEmpty
+                    || (types.isEmpty && (!bin.exportedSymbols.isEmpty || !bin.symtabSymbols.isEmpty || !bin.functionStartsRVA.isEmpty || !bin.xrefFunctions.isEmpty))
+                guard hasNative else { continue }
+
                 try writer.writeLine("// ============================================================")
-                try writer.writeLine("// Objective-C Classes (Plaintext Mach-O)")
+                try writer.writeLine("// Binary: \(bin.sourceName) (\(bin.architecture)) BaseVM=0x\(String(bin.baseVM, radix: 16, uppercase: true))")
                 try writer.writeLine("// ============================================================")
-                for cls in macho.objcClasses {
-                    try writer.writeLine("// Obj-C Class: \(cls.name) : \(cls.superName)")
-                    try writer.writeLine("public class \(cls.name) : \(cls.superName)")
-                    try writer.writeLine("{")
-                    if options.includeFields {
-                        for iv in cls.ivars {
-                            let offStr = options.writeFieldOffsets ? String(format: " // 0x%X", iv.offset) : ""
-                            try writer.writeLine("\tprivate \(iv.typeEncoding.isEmpty ? "IntPtr" : iv.typeEncoding) \(iv.name);\(offStr)")
-                        }
-                    }
-                    if options.includeProperties {
-                        for pr in cls.properties {
-                            try writer.writeLine("\tpublic object \(pr.name) { get; set; } // \(pr.attributes)")
-                        }
-                    }
-                    if options.includeMethods {
-                        for m in cls.methods {
-                            if options.writeMethodOffsets {
-                                try writer.writeLine(String(format: "\t// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX", m.rva, m.fileOffset, m.va))
+
+                if !bin.objcClasses.isEmpty {
+                    try writer.writeLine("// --- Objective-C Classes (\(bin.objcClasses.count)) ---")
+                    for cls in bin.objcClasses {
+                        try writer.writeLine("// Obj-C Class: \(cls.name) : \(cls.superName)")
+                        try writer.writeLine("public class \(cls.name) : \(cls.superName)")
+                        try writer.writeLine("{")
+                        if options.includeFields {
+                            for iv in cls.ivars {
+                                let offStr = options.writeFieldOffsets ? String(format: " // 0x%X", iv.offset) : ""
+                                try writer.writeLine("\tprivate \(iv.typeEncoding.isEmpty ? "IntPtr" : iv.typeEncoding) \(iv.name);\(offStr)")
                             }
-                            let prefix = m.isClassMethod ? "static " : ""
-                            try writer.writeLine("\tpublic \(prefix)void \(m.name)() { } // \(m.types)")
+                        }
+                        if options.includeProperties {
+                            for pr in cls.properties {
+                                try writer.writeLine("\tpublic object \(pr.name) { get; set; } // \(pr.attributes)")
+                            }
+                        }
+                        if options.includeMethods {
+                            for m in cls.methods {
+                                if options.writeMethodOffsets {
+                                    try writer.writeLine(String(format: "\t// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX", m.rva, m.fileOffset, m.va))
+                                }
+                                let prefix = m.isClassMethod ? "static " : ""
+                                try writer.writeLine("\tpublic \(prefix)void \(m.name)() { } // \(m.types)")
+                            }
+                        }
+                        try writer.writeLine("}")
+                        try writer.writeLine("")
+                    }
+                }
+
+                if !bin.swiftTypes.isEmpty {
+                    try writer.writeLine("// --- Swift 5 Descriptors (\(bin.swiftTypes.count)) ---")
+                    for st in bin.swiftTypes {
+                        try writer.writeLine("// RVA: 0x\(String(st.descriptorRVA, radix: 16, uppercase: true))")
+                        if st.fields.isEmpty {
+                            try writer.writeLine("public \(st.kind) \(st.name) { }")
+                        } else {
+                            try writer.writeLine("public \(st.kind) \(st.name)")
+                            try writer.writeLine("{")
+                            for fname in st.fields {
+                                try writer.writeLine("\tpublic var \(fname);")
+                            }
+                            try writer.writeLine("}")
                         }
                     }
-                    try writer.writeLine("}")
                     try writer.writeLine("")
                 }
-            }
-            if !macho.swiftTypes.isEmpty {
-                try writer.writeLine("// ============================================================")
-                try writer.writeLine("// Swift 5 Descriptors (Plaintext Mach-O)")
-                try writer.writeLine("// ============================================================")
-                for st in macho.swiftTypes {
-                    try writer.writeLine("// RVA: 0x\(String(st.descriptorRVA, radix: 16, uppercase: true))")
-                    try writer.writeLine("public \(st.kind) \(st.name) { }")
+
+                if types.isEmpty {
+                    if !bin.exportedSymbols.isEmpty {
+                        try writer.writeLine("// --- DYLD Exports (\(bin.exportedSymbols.count)) ---")
+                        for sym in bin.exportedSymbols {
+                            try writer.writeLine(String(format: "// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX | %@", sym.rva, sym.fileOffset, sym.va, sym.name))
+                        }
+                        try writer.writeLine("")
+                    }
+                    if !bin.symtabSymbols.isEmpty {
+                        try writer.writeLine("// --- Symtab Symbols (\(bin.symtabSymbols.count)) ---")
+                        for sym in bin.symtabSymbols {
+                            try writer.writeLine(String(format: "// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX | %@", sym.rva, sym.fileOffset, sym.va, sym.name))
+                        }
+                        try writer.writeLine("")
+                    }
+                    if !bin.xrefFunctions.isEmpty {
+                        try writer.writeLine("// --- ARM64 String XRefs (\(bin.xrefFunctions.count)) ---")
+                        for xr in bin.xrefFunctions {
+                            try writer.writeLine(String(format: "// RVA: 0x%llX Offset: 0x%llX VA: 0x%llX | %@", xr.rva, xr.fileOffset, xr.va, xr.name))
+                        }
+                        try writer.writeLine("")
+                    }
+                    var covered = Set<UInt64>()
+                    for s in bin.exportedSymbols { covered.insert(s.rva) }
+                    for s in bin.symtabSymbols { covered.insert(s.rva) }
+                    for c in bin.objcClasses { for m in c.methods { covered.insert(m.rva) } }
+                    let uncovered = bin.functionStartsRVA.filter { $0 > 0 && !covered.contains($0) }
+                    if !uncovered.isEmpty {
+                        try writer.writeLine("// --- Uncovered Function Starts (\(uncovered.count)) ---")
+                        for rva in uncovered {
+                            let va = bin.baseVM + rva
+                            try writer.writeLine(String(format: "// RVA: 0x%llX VA: 0x%llX | sub_%llX", rva, va, rva))
+                        }
+                        try writer.writeLine("")
+                    }
                 }
             }
         }

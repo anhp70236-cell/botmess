@@ -27,12 +27,12 @@ public enum SafetyGuard {
     )
 
     private static let iapTokenRE = try! NSRegularExpression(
-        pattern: #"\b(?:iap|inapp|storekit|skpayment|skproduct|skreceipt|billing|checkout|payment|paywall|receipt|applepay|googlepay|creditcard|realmoney|microtrans|topup|recharge|voucher|coupon|invoice|entitlement|subscription|monetization|monetize)\b"#,
+        pattern: #"\b(?:iap|inapp|storekit|skpayment|skproduct|skreceipt|billing|checkout|payment|paywall|receipt|applepay|googlepay|creditcard|realmoney|microtrans|topup|recharge|voucher|coupon|invoice|entitlement|iapsubscription|storesubscription|vipsubscription|premiumsubscription|paidsubscription|autorenewsubscription|subscriptionsku|subscriptionreceipt|monetization|monetize)\b"#,
         options: [.caseInsensitive]
     )
 
     private static let iapPairRE = try! NSRegularExpression(
-        pattern: #"\b(?:buy|purchase|spend|add|set|get|grant|give|unlock|restore)\s+(?:gem|gems|diamond|diamonds|gold|coin|coins|cash|money|currency|vip|premium|pack|bundle|pass|subscription|ads|noads|product|iap)\b"#,
+        pattern: #"(?:\b(?:buy|purchase|spend|topup|recharge|pay)\s+(?:gem|gems|diamond|diamonds|gold|coin|coins|cash|money|currency|vip|premium|pack|bundle|pass|subscription|ads|noads|product|iap)\b|\b(?:add|set|get|grant|give|unlock|restore)\s+(?:gem|gems|diamond|diamonds|gold|coin|coins|cash|money|currency|vip|premium|noads|iap|product)\b)"#,
         options: [.caseInsensitive]
     )
 

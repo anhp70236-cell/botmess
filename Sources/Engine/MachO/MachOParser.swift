@@ -208,6 +208,14 @@ public final class MachOParser {
                 if cmdsize >= 16 {
                     funcStartsCmd = (mapped.readUInt32(at: cmdPos + 8), mapped.readUInt32(at: cmdPos + 12))
                 }
+            case 0x22, 0x80000022: // LC_DYLD_INFO / LC_DYLD_INFO_ONLY
+                if cmdsize >= 48 {
+                    let exportOff = mapped.readUInt32(at: cmdPos + 40)
+                    let exportSize = mapped.readUInt32(at: cmdPos + 44)
+                    if exportsTrieCmd == nil && exportSize > 0 {
+                        exportsTrieCmd = (exportOff, exportSize)
+                    }
+                }
             case 0x80000033: // LC_DYLD_EXPORTS_TRIE
                 if cmdsize >= 16 {
                     exportsTrieCmd = (mapped.readUInt32(at: cmdPos + 8), mapped.readUInt32(at: cmdPos + 12))
@@ -381,13 +389,11 @@ public final class MachOParser {
             let pageCount = Int(mapped.readUInt16(at: segAbs + 20))
             guard pageSize > 0 && pageCount > 0 && segAbs + 22 + pageCount * 2 <= absBase + dataSize else { continue }
 
-            for pIdx in 0..<pageCount {
-                let pageStart = mapped.readUInt16(at: segAbs + 22 + pIdx * 2)
-                if pageStart == 0xFFFF { continue }
-                var curRel = Int(segOffset) + pIdx * pageSize + Int(pageStart)
+            func walkChain(startRel: Int) {
+                var curRel = startRel
                 var guardSteps = 0
 
-                while curRel >= 0 && curRel + 8 <= sliceSize && guardSteps < 4096 {
+                while curRel >= 0 && curRel + 8 <= sliceSize && guardSteps < 8192 {
                     guardSteps += 1
                     let raw = mapped.readUInt64(at: sliceOffset + curRel)
                     var nextStride = 0
@@ -407,22 +413,30 @@ public final class MachOParser {
                             } else {
                                 let targetLow = raw & 0x07FF_FFFF_FFFF
                                 let high8 = (raw >> 43) & 0xFF
-                                let targetVM = (high8 << 56) | targetLow
-                                if targetVM >= baseVM && targetVM < maxVM { fixups[curRel] = targetVM }
-                                else if baseVM + targetLow < maxVM { fixups[curRel] = baseVM + targetLow }
+                                let absTarget = (high8 << 56) | targetLow
+                                if absTarget >= baseVM && absTarget < maxVM {
+                                    fixups[curRel] = absTarget
+                                } else if baseVM + targetLow < maxVM {
+                                    fixups[curRel] = baseVM + targetLow
+                                }
                                 nextStride = Int((raw >> 51) & 0x7FF)
                             }
                         } else {
                             nextStride = Int((raw >> 51) & 0x7FF)
                         }
-                    case 2: // DYLD_CHAINED_PTR_64
+                    case 2: // DYLD_CHAINED_PTR_64 (target is full VM address, high8 top byte)
                         strideUnit = 4
                         let isBind = (raw >> 63) & 1
                         if isBind == 0 {
                             let targetLow = raw & 0x000F_FFFF_FFFF
-                            let targetVM = baseVM + targetLow
-                            if targetVM >= baseVM && targetVM < maxVM {
-                                fixups[curRel] = targetVM
+                            let high8 = (raw >> 36) & 0xFF
+                            let absTarget = (high8 << 56) | targetLow
+                            if absTarget >= baseVM && absTarget < maxVM {
+                                fixups[curRel] = absTarget
+                            } else if targetLow >= baseVM && targetLow < maxVM {
+                                fixups[curRel] = targetLow
+                            } else if baseVM + targetLow < maxVM {
+                                fixups[curRel] = baseVM + targetLow
                             }
                         }
                         nextStride = Int((raw >> 51) & 0xFFF)
@@ -437,7 +451,19 @@ public final class MachOParser {
                             }
                         }
                         nextStride = Int((raw >> 51) & 0xFFF)
-                    case 7, 9, 12: // ARM64E_USERLAND / KERNEL / USERLAND24
+                    case 7: // DYLD_CHAINED_PTR_ARM64E_KERNEL (stride 4)
+                        strideUnit = 4
+                        let isAuth = (raw >> 63) & 1
+                        let isBind = (raw >> 62) & 1
+                        if isBind == 0 {
+                            let targetOff = isAuth == 1 ? (raw & 0xFFFF_FFFF) : (raw & 0x07FF_FFFF_FFFF)
+                            let targetVM = baseVM + targetOff
+                            if targetVM >= baseVM && targetVM < maxVM {
+                                fixups[curRel] = targetVM
+                            }
+                        }
+                        nextStride = Int((raw >> 51) & 0x7FF)
+                    case 9, 12: // DYLD_CHAINED_PTR_ARM64E_USERLAND / USERLAND24 (stride 8)
                         strideUnit = 8
                         let isAuth = (raw >> 63) & 1
                         let isBind = (raw >> 62) & 1
@@ -455,6 +481,25 @@ public final class MachOParser {
 
                     if nextStride == 0 { break }
                     curRel += nextStride * strideUnit
+                }
+            }
+
+            for pIdx in 0..<pageCount {
+                let pageStart = mapped.readUInt16(at: segAbs + 22 + pIdx * 2)
+                if pageStart == 0xFFFF { continue }
+                let pageBaseRel = Int(segOffset) + pIdx * pageSize
+                if (pageStart & 0x8000) == 0 {
+                    walkChain(startRel: pageBaseRel + Int(pageStart))
+                } else {
+                    var ovIdx = Int(pageStart & 0x7FFF)
+                    var ovGuard = 0
+                    while ovGuard < 2048 && segAbs + 22 + ovIdx * 2 + 2 <= absBase + dataSize {
+                        ovGuard += 1
+                        let ovEntry = mapped.readUInt16(at: segAbs + 22 + ovIdx * 2)
+                        walkChain(startRel: pageBaseRel + Int(ovEntry & 0x7FFF))
+                        if (ovEntry & 0x8000) != 0 { break }
+                        ovIdx += 1
+                    }
                 }
             }
         }
@@ -476,7 +521,7 @@ public final class MachOParser {
                 out.append(curRVA)
             }
         }
-        self.functionStartsRVA = out
+        self.functionStartsRVA = Array(Set(out)).sorted()
     }
 
     private func decodeExportsTrie(dataOff: Int, dataSize: Int) {
@@ -486,20 +531,40 @@ public final class MachOParser {
         var out: [NativeSymbolEntry] = []
 
         func walk(nodeRel: Int, prefix: String, depth: Int) {
-            if depth > 64 || out.count >= 50_000 { return }
+            if depth > 512 { return }
             var pos = baseAbs + nodeRel
             guard pos < endAbs else { return }
             let termSize = Int(mapped.readULEB128(at: &pos))
             if termSize > 0 && pos + termSize <= endAbs {
                 var infoPos = pos
                 let flags = mapped.readULEB128(at: &infoPos)
-                if (flags & 0x08) == 0 && (flags & 0x03) == 0 { // regular export
-                    let rva = mapped.readULEB128(at: &infoPos)
+                if (flags & 0x08) == 0 { // not re-export
                     let symName = prefix.hasPrefix("_") ? String(prefix.dropFirst()) : prefix
-                    if !symName.isEmpty && !SafetyGuard.isRealMoneyBlocked(symName) {
-                        let va = baseVM + rva
-                        let fOff = UInt64(vmToSliceRelOffset(va) ?? 0)
-                        out.append(NativeSymbolEntry(name: symName, rva: rva, va: va, fileOffset: fOff, source: "DYLD_EXPORT"))
+                    if (flags & 0x10) != 0 { // STUB_AND_RESOLVER
+                        let stubRVA = mapped.readULEB128(at: &infoPos)
+                        _ = mapped.readULEB128(at: &infoPos) // resolver
+                        if !symName.isEmpty {
+                            if SafetyGuard.isRealMoneyBlocked(symName) {
+                                filteredRealMoneyCount += 1
+                            } else {
+                                let va = baseVM + stubRVA
+                                let fOff = UInt64(vmToSliceRelOffset(va) ?? 0)
+                                out.append(NativeSymbolEntry(name: symName, rva: stubRVA, va: va, fileOffset: fOff, source: "DYLD_EXPORT"))
+                            }
+                        }
+                    } else if (flags & 0x03) <= 2 { // REGULAR (0), THREAD_LOCAL (1), ABSOLUTE (2)
+                        let rawVal = mapped.readULEB128(at: &infoPos)
+                        let isAbs = (flags & 0x03) == 2
+                        let va = (isAbs && rawVal >= baseVM) ? rawVal : (baseVM + rawVal)
+                        let rva = va >= baseVM ? (va - baseVM) : rawVal
+                        if !symName.isEmpty {
+                            if SafetyGuard.isRealMoneyBlocked(symName) {
+                                filteredRealMoneyCount += 1
+                            } else {
+                                let fOff = UInt64(vmToSliceRelOffset(va) ?? 0)
+                                out.append(NativeSymbolEntry(name: symName, rva: rva, va: va, fileOffset: fOff, source: "DYLD_EXPORT"))
+                            }
+                        }
                     }
                 } else if SafetyGuard.isRealMoneyBlocked(prefix) {
                     filteredRealMoneyCount += 1
@@ -511,7 +576,7 @@ public final class MachOParser {
             pos += 1
             for _ in 0..<childCount {
                 guard pos < endAbs else { break }
-                let edge = mapped.readCString(at: pos, maxLength: min(256, endAbs - pos))
+                let edge = mapped.readCString(at: pos, maxLength: min(512, endAbs - pos))
                 pos += edge.utf8.count + 1
                 guard pos < endAbs else { break }
                 let childOffset = Int(mapped.readULEB128(at: &pos))
@@ -528,7 +593,7 @@ public final class MachOParser {
     private func decodeSymtab(symoff: Int, nsyms: Int, stroff: Int, strsize: Int) {
         guard symoff >= 0 && stroff >= 0 && symoff + nsyms * 16 <= sliceSize && stroff + strsize <= sliceSize else { return }
         var out: [NativeSymbolEntry] = []
-        out.reserveCapacity(min(nsyms, 32_768))
+        out.reserveCapacity(min(nsyms, 65_536))
         for i in 0..<nsyms {
             let nlistAbs = sliceOffset + symoff + i * 16
             let strx = Int(mapped.readUInt32(at: nlistAbs))
@@ -537,7 +602,7 @@ public final class MachOParser {
             let nValue = mapped.readUInt64(at: nlistAbs + 8)
             if (nType & 0xE0) != 0 || nSect == 0 || nValue < baseVM || nValue >= maxVM { continue }
             guard strx > 0 && strx < strsize else { continue }
-            var name = mapped.readCString(at: sliceOffset + stroff + strx, maxLength: min(256, strsize - strx))
+            var name = mapped.readCString(at: sliceOffset + stroff + strx, maxLength: min(1024, strsize - strx))
             if name.isEmpty { continue }
             if name.hasPrefix("_") { name.removeFirst() }
             if SafetyGuard.isRealMoneyBlocked(name) {
@@ -554,10 +619,15 @@ public final class MachOParser {
     public func runDeepNativeScan() {
         buildStringMaps()
         if !fairPlayEncrypted {
+            if functionStartsRVA.isEmpty {
+                scanArm64PrologueFunctions()
+            }
             parseObjCClasses()
             parseSwiftTypes()
             scanArm64StringXRefs()
         }
+        cstringByVM.removeAll(keepingCapacity: false)
+        selRefByVM.removeAll(keepingCapacity: false)
     }
 
     public func makeSnapshot() -> NativeBinarySnapshot {
@@ -578,19 +648,17 @@ public final class MachOParser {
     }
 
     private func buildStringMaps() {
-        for sec in sections where sec.segName == "__TEXT" && sec.sectName == "__cstring" {
+        for sec in sections where sec.segName == "__TEXT" && (sec.sectName == "__cstring" || sec.sectName == "__objc_methname") {
             let start = Int(sec.offset)
             let end = min(sliceSize, start + Int(sec.size))
             guard start >= 0 && start < end && !isInEncryptedRange(sliceRelOffset: start) else { continue }
             var p = start
-            var count = 0
-            while p < end && count < 150_000 {
-                let s = readSliceCString(p, maxLength: min(256, end - p))
+            while p < end {
+                let s = readSliceCString(p, maxLength: min(512, end - p))
                 let byteLen = s.utf8.count
                 if byteLen >= 2 {
                     let vm = sec.addr + UInt64(p - start)
                     cstringByVM[vm] = s
-                    count += 1
                 }
                 p += byteLen + 1
             }
@@ -600,12 +668,12 @@ public final class MachOParser {
             let start = Int(sec.offset)
             let cnt = Int(sec.size / 8)
             guard start >= 0 && start + cnt * 8 <= sliceSize && !isInEncryptedRange(sliceRelOffset: start) else { continue }
-            for i in 0..<min(cnt, 80_000) {
+            for i in 0..<cnt {
                 let targetVM = decodePointer(atSliceRelOffset: start + i * 8)
                 if let str = cstringByVM[targetVM] {
                     selRefByVM[sec.addr + UInt64(i * 8)] = str
                 } else if let strOff = vmToSliceRelOffset(targetVM), !isInEncryptedRange(sliceRelOffset: strOff) {
-                    let s = readSliceCString(strOff, maxLength: 160)
+                    let s = readSliceCString(strOff, maxLength: 256)
                     if !s.isEmpty {
                         selRefByVM[sec.addr + UInt64(i * 8)] = s
                     }
@@ -625,7 +693,7 @@ public final class MachOParser {
         var seenVM = Set<UInt64>()
 
         for sec in clsSecs {
-            let cnt = min(Int(sec.size / 8), 40_000)
+            let cnt = Int(sec.size / 8)
             let base = Int(sec.offset)
             for i in 0..<cnt {
                 let clsVM = decodePointer(atSliceRelOffset: base + i * 8)
@@ -666,8 +734,9 @@ public final class MachOParser {
                     let entsizeAndFlags = readSliceUInt32(mlOff)
                     let mCount = Int(readSliceUInt32(mlOff + 4))
                     let isSmall = (entsizeAndFlags & 0x8000_0000) != 0
+                    let isDirect = (entsizeAndFlags & 0x4000_0000) != 0
                     let entsize = max(isSmall ? 12 : 24, Int(entsizeAndFlags & 0xFFFF))
-                    guard mCount > 0 && mCount < 8192 && mlOff + 8 + mCount * entsize <= sliceSize else { return }
+                    guard mCount > 0 && mCount < 65_536 && mlOff + 8 + mCount * entsize <= sliceSize else { return }
 
                     for mi in 0..<mCount {
                         let mOff = mlOff + 8 + mi * entsize
@@ -684,13 +753,18 @@ public final class MachOParser {
                                 if let s = selRefByVM[selRefVM] {
                                     selName = s
                                 } else if let selRefOff = vmToSliceRelOffset(selRefVM) {
-                                    let direct = readSliceCString(selRefOff, maxLength: 140)
-                                    if !direct.isEmpty {
-                                        selName = direct
+                                    if isDirect {
+                                        let direct = readSliceCString(selRefOff, maxLength: 200)
+                                        if !direct.isEmpty {
+                                            selName = direct
+                                        }
                                     } else {
                                         let ptrVM = decodePointer(atSliceRelOffset: selRefOff)
                                         if let ptrOff = vmToSliceRelOffset(ptrVM) {
-                                            selName = readSliceCString(ptrOff, maxLength: 140)
+                                            selName = readSliceCString(ptrOff, maxLength: 200)
+                                        }
+                                        if selName.isEmpty {
+                                            selName = readSliceCString(selRefOff, maxLength: 200)
                                         }
                                     }
                                 }
@@ -749,7 +823,7 @@ public final class MachOParser {
                 if ivarListVM != 0, let ivOff = vmToSliceRelOffset(ivarListVM), ivOff + 8 <= sliceSize {
                     let entsize = max(32, Int(readSliceUInt32(ivOff) & 0xFFFF))
                     let ivCount = Int(readSliceUInt32(ivOff + 4))
-                    if ivCount > 0 && ivCount < 4096 && ivOff + 8 + ivCount * entsize <= sliceSize {
+                    if ivCount > 0 && ivCount < 65_536 && ivOff + 8 + ivCount * entsize <= sliceSize {
                         for ii in 0..<ivCount {
                             let itemOff = ivOff + 8 + ii * entsize
                             let offPtrVM = decodePointer(atSliceRelOffset: itemOff)
@@ -773,7 +847,7 @@ public final class MachOParser {
                 if propListVM != 0, let prOff = vmToSliceRelOffset(propListVM), prOff + 8 <= sliceSize {
                     let entsize = max(16, Int(readSliceUInt32(prOff) & 0xFFFF))
                     let prCount = Int(readSliceUInt32(prOff + 4))
-                    if prCount > 0 && prCount < 4096 && prOff + 8 + prCount * entsize <= sliceSize {
+                    if prCount > 0 && prCount < 65_536 && prOff + 8 + prCount * entsize <= sliceSize {
                         for pi in 0..<prCount {
                             let itemOff = prOff + 8 + pi * entsize
                             let pNameVM = decodePointer(atSliceRelOffset: itemOff)
@@ -797,18 +871,20 @@ public final class MachOParser {
             }
         }
 
-        // Obj-C Categories (__objc_catlist)
+        // Obj-C Categories (__objc_catlist / __objc_nlcatlist)
         let catSecs = sections.filter {
-            $0.sectName == "__objc_catlist" && $0.size >= 8
+            ($0.sectName == "__objc_catlist" || $0.sectName == "__objc_nlcatlist") && $0.size >= 8
                 && Int($0.offset + $0.size) <= sliceSize
                 && !isInEncryptedRange(sliceRelOffset: Int($0.offset))
         }
+        var seenCatVM = Set<UInt64>()
         for sec in catSecs {
             let cnt = Int(sec.size / 8)
             let base = Int(sec.offset)
             for i in 0..<cnt {
                 let catVM = decodePointer(atSliceRelOffset: base + i * 8)
-                guard catVM != 0, let catOff = vmToSliceRelOffset(catVM), catOff + 48 <= sliceSize, !isInEncryptedRange(sliceRelOffset: catOff) else { continue }
+                guard catVM != 0, !seenCatVM.contains(catVM), let catOff = vmToSliceRelOffset(catVM), catOff + 48 <= sliceSize, !isInEncryptedRange(sliceRelOffset: catOff) else { continue }
+                seenCatVM.insert(catVM)
                 let catNameVM = decodePointer(atSliceRelOffset: catOff)
                 let hostClsVM = decodePointer(atSliceRelOffset: catOff + 8)
                 let catName = vmToSliceRelOffset(catNameVM).map { readSliceCString($0, maxLength: 120) } ?? "Category"
@@ -835,8 +911,9 @@ public final class MachOParser {
                     let flagsAndSize = readSliceUInt32(mlOff)
                     let mCnt = Int(readSliceUInt32(mlOff + 4))
                     let isSmall = (flagsAndSize & 0x8000_0000) != 0
+                    let isDirect = (flagsAndSize & 0x4000_0000) != 0
                     let entsize = max(isSmall ? 12 : 24, Int(flagsAndSize & 0xFFFF))
-                    guard mCnt > 0 && mCnt < 4096 && mlOff + 8 + mCnt * entsize <= sliceSize else { return }
+                    guard mCnt > 0 && mCnt < 65_536 && mlOff + 8 + mCnt * entsize <= sliceSize else { return }
                     for mi in 0..<mCnt {
                         let mOff = mlOff + 8 + mi * entsize
                         var selName = ""
@@ -846,7 +923,21 @@ public final class MachOParser {
                             let relImp = Int64(readSliceInt32(mOff + 8))
                             if let curVM = sliceRelOffsetToVM(mOff) {
                                 let selRefVM = UInt64(bitPattern: Int64(bitPattern: curVM) &+ relSel)
-                                selName = selRefByVM[selRefVM] ?? vmToSliceRelOffset(selRefVM).map { readSliceCString($0, maxLength: 140) } ?? ""
+                                if let s = selRefByVM[selRefVM] {
+                                    selName = s
+                                } else if let selRefOff = vmToSliceRelOffset(selRefVM) {
+                                    if isDirect {
+                                        selName = readSliceCString(selRefOff, maxLength: 200)
+                                    } else {
+                                        let ptrVM = decodePointer(atSliceRelOffset: selRefOff)
+                                        if let ptrOff = vmToSliceRelOffset(ptrVM) {
+                                            selName = readSliceCString(ptrOff, maxLength: 200)
+                                        }
+                                        if selName.isEmpty {
+                                            selName = readSliceCString(selRefOff, maxLength: 200)
+                                        }
+                                    }
+                                }
                             }
                             if let curImpVM = sliceRelOffsetToVM(mOff + 8) {
                                 impVM = UInt64(bitPattern: Int64(bitPattern: curImpVM) &+ relImp)
@@ -903,89 +994,247 @@ public final class MachOParser {
     }
 
     private func parseSwiftTypes() {
-        guard let swiftSec = sections.first(where: { $0.sectName == "__swift5_types" && $0.size >= 4 && Int($0.offset + $0.size) <= sliceSize && !isInEncryptedRange(sliceRelOffset: Int($0.offset)) }) else {
-            return
-        }
-        let cnt = min(Int(swiftSec.size / 4), 25_000)
         var out: [SwiftTypeInfo] = []
-        for i in 0..<cnt {
-            let entryOff = Int(swiftSec.offset) + i * 4
-            let rel = Int64(readSliceInt32(entryOff))
-            guard let entryVM = sliceRelOffsetToVM(entryOff) else { continue }
-            let descVM = UInt64(bitPattern: Int64(bitPattern: entryVM) &+ rel)
-            guard let descOff = vmToSliceRelOffset(descVM), descOff + 16 <= sliceSize, !isInEncryptedRange(sliceRelOffset: descOff) else { continue }
-            let flags = readSliceUInt32(descOff)
-            let kindId = flags & 0x1F
-            let kindName: String
-            switch kindId {
-            case 16: kindName = "class"
-            case 17: kindName = "struct"
-            case 18: kindName = "enum"
-            default: kindName = "type"
-            }
-            let nameRelOff = descOff + 8
-            guard let nameFieldVM = sliceRelOffsetToVM(nameRelOff) else { continue }
-            let nameVM = UInt64(bitPattern: Int64(bitPattern: nameFieldVM) &+ Int64(readSliceInt32(nameRelOff)))
-            guard let nameOff = vmToSliceRelOffset(nameVM) else { continue }
-            let name = readSliceCString(nameOff, maxLength: 140)
-            if name.isEmpty { continue }
-            if SafetyGuard.isRealMoneyBlocked(name) {
-                filteredRealMoneyCount += 1
-                continue
-            }
-            out.append(SwiftTypeInfo(
-                kind: kindName,
-                name: name,
-                fields: [],
-                descriptorRVA: descVM >= baseVM ? (descVM - baseVM) : 0
-            ))
-        }
-        self.swiftTypes = out
-    }
+        var seenDesc = Set<UInt64>()
 
-    private func scanArm64StringXRefs() {
-        guard let textSec = sections.first(where: { $0.segName == "__TEXT" && $0.sectName == "__text" && $0.size >= 16 && Int($0.offset + $0.size) <= sliceSize && !isInEncryptedRange(sliceRelOffset: Int($0.offset)) }) else {
-            return
-        }
-        let maxBytes = min(Int(textSec.size), 256 * 1024 * 1024)
-        let start = Int(textSec.offset)
-        let end = start + maxBytes
-        var out: [NativeSymbolEntry] = []
-        out.reserveCapacity(4096)
+        for swiftSec in sections where swiftSec.sectName == "__swift5_types" && swiftSec.size >= 4 && Int(swiftSec.offset + swiftSec.size) <= sliceSize && !isInEncryptedRange(sliceRelOffset: Int(swiftSec.offset)) {
+            let cnt = Int(swiftSec.size / 4)
+            for i in 0..<cnt {
+                let entryOff = Int(swiftSec.offset) + i * 4
+                let rel = Int64(readSliceInt32(entryOff))
+                guard let entryVM = sliceRelOffsetToVM(entryOff) else { continue }
+                let descVM = UInt64(bitPattern: Int64(bitPattern: entryVM) &+ rel)
+                if seenDesc.contains(descVM) { continue }
+                seenDesc.insert(descVM)
+                guard let descOff = vmToSliceRelOffset(descVM), descOff + 16 <= sliceSize, !isInEncryptedRange(sliceRelOffset: descOff) else { continue }
+                let flags = readSliceUInt32(descOff)
+                let kindId = flags & 0x1F
+                let kindName: String
+                switch kindId {
+                case 16: kindName = "class"
+                case 17: kindName = "struct"
+                case 18: kindName = "enum"
+                default: kindName = "type"
+                }
+                let nameRelOff = descOff + 8
+                guard let nameFieldVM = sliceRelOffsetToVM(nameRelOff) else { continue }
+                let nameVM = UInt64(bitPattern: Int64(bitPattern: nameFieldVM) &+ Int64(readSliceInt32(nameRelOff)))
+                guard let nameOff = vmToSliceRelOffset(nameVM) else { continue }
+                let name = readSliceCString(nameOff, maxLength: 200)
+                if name.isEmpty { continue }
+                if SafetyGuard.isRealMoneyBlocked(name) {
+                    filteredRealMoneyCount += 1
+                    continue
+                }
 
-        var p = start
-        while p + 8 <= end && out.count < 150_000 {
-            let w1 = readSliceUInt32(p)
-            // ADRP Xd, imm
-            if (w1 & 0x9F00_0000) == 0x9000_0000 {
-                let rd = Int(w1 & 0x1F)
-                let immlo = Int64((w1 >> 29) & 0x3)
-                let immhi = Int64((w1 >> 5) & 0x7FFFF)
-                var imm21 = (immhi << 2) | immlo
-                if (imm21 & 0x10_0000) != 0 { imm21 |= ~0x1F_FFFF }
-                let pcVM = textSec.addr + UInt64(p - start)
-                let pageBase = (pcVM & ~0xFFF) &+ UInt64(bitPattern: imm21 &* 4096)
-                let w2 = readSliceUInt32(p + 4)
-                if ((w2 & 0xFFC0_0000) == 0x9100_0000) && Int((w2 >> 5) & 0x1F) == rd {
-                    let addImm = UInt64((w2 >> 10) & 0xFFF)
-                    let targetVM = pageBase + addImm
-                    if let s = cstringByVM[targetVM], s.count >= 4 && s.count <= 96 {
-                        if SafetyGuard.isRealMoneyBlocked(s) {
-                            filteredRealMoneyCount += 1
-                        } else {
-                            let rva = pcVM >= baseVM ? (pcVM - baseVM) : 0
-                            out.append(NativeSymbolEntry(
-                                name: "XRef -> \"\(s)\"",
-                                rva: rva,
-                                va: pcVM,
-                                fileOffset: UInt64(p),
-                                source: "ARM64_XREF"
-                            ))
+                var fields: [String] = []
+                if kindId >= 16 && kindId <= 18 && descOff + 20 <= sliceSize {
+                    let fdRelOff = descOff + 16
+                    if let fdFieldVM = sliceRelOffsetToVM(fdRelOff) {
+                        let fdPtrRel = Int64(readSliceInt32(fdRelOff))
+                        if fdPtrRel != 0 {
+                            let fdVM = UInt64(bitPattern: Int64(bitPattern: fdFieldVM) &+ fdPtrRel)
+                            if let fdOff = vmToSliceRelOffset(fdVM), fdOff + 16 <= sliceSize, !isInEncryptedRange(sliceRelOffset: fdOff) {
+                                let recordSize = Int(readSliceUInt16(fdOff + 10))
+                                let numFields = Int(readSliceUInt32(fdOff + 12))
+                                if recordSize >= 12 && numFields > 0 && numFields <= 2048 && fdOff + 16 + numFields * recordSize <= sliceSize {
+                                    for fi in 0..<numFields {
+                                        let recOff = fdOff + 16 + fi * recordSize
+                                        let fNameFieldOff = recOff + 8
+                                        guard let fnVMBase = sliceRelOffsetToVM(fNameFieldOff) else { continue }
+                                        let fnRel = Int64(readSliceInt32(fNameFieldOff))
+                                        if fnRel == 0 { continue }
+                                        let fnVM = UInt64(bitPattern: Int64(bitPattern: fnVMBase) &+ fnRel)
+                                        if let fnOff = vmToSliceRelOffset(fnVM) {
+                                            let fname = readSliceCString(fnOff, maxLength: 140)
+                                            if !fname.isEmpty && !SafetyGuard.isRealMoneyBlocked("\(name).\(fname)") {
+                                                fields.append(fname)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+
+                out.append(SwiftTypeInfo(
+                    kind: kindName,
+                    name: name,
+                    fields: fields,
+                    descriptorRVA: descVM >= baseVM ? (descVM - baseVM) : 0
+                ))
             }
-            p += 4
+        }
+
+        for protoSec in sections where protoSec.sectName == "__swift5_protos" && protoSec.size >= 4 && Int(protoSec.offset + protoSec.size) <= sliceSize && !isInEncryptedRange(sliceRelOffset: Int(protoSec.offset)) {
+            let cnt = Int(protoSec.size / 4)
+            for i in 0..<cnt {
+                let entryOff = Int(protoSec.offset) + i * 4
+                let rel = Int64(readSliceInt32(entryOff))
+                guard let entryVM = sliceRelOffsetToVM(entryOff) else { continue }
+                let descVM = UInt64(bitPattern: Int64(bitPattern: entryVM) &+ rel)
+                if seenDesc.contains(descVM) { continue }
+                seenDesc.insert(descVM)
+                guard let descOff = vmToSliceRelOffset(descVM), descOff + 12 <= sliceSize, !isInEncryptedRange(sliceRelOffset: descOff) else { continue }
+                let nameRelOff = descOff + 8
+                guard let nameFieldVM = sliceRelOffsetToVM(nameRelOff) else { continue }
+                let nameVM = UInt64(bitPattern: Int64(bitPattern: nameFieldVM) &+ Int64(readSliceInt32(nameRelOff)))
+                guard let nameOff = vmToSliceRelOffset(nameVM) else { continue }
+                let name = readSliceCString(nameOff, maxLength: 200)
+                if name.isEmpty { continue }
+                if SafetyGuard.isRealMoneyBlocked(name) {
+                    filteredRealMoneyCount += 1
+                    continue
+                }
+                out.append(SwiftTypeInfo(
+                    kind: "protocol",
+                    name: name,
+                    fields: [],
+                    descriptorRVA: descVM >= baseVM ? (descVM - baseVM) : 0
+                ))
+            }
+        }
+
+        self.swiftTypes = out
+    }
+
+    private func executableTextSections() -> [SectionInfo] {
+        return sections.filter { sec in
+            sec.segName == "__TEXT"
+                && (sec.sectName == "__text" || (sec.flags & 0x8000_0000) != 0)
+                && sec.sectName != "__stubs"
+                && sec.size >= 16
+                && Int(sec.offset + sec.size) <= sliceSize
+                && !isInEncryptedRange(sliceRelOffset: Int(sec.offset))
+        }
+    }
+
+    private func enclosingFunctionStartRVA(forRVA rva: UInt64) -> UInt64? {
+        guard !functionStartsRVA.isEmpty else { return nil }
+        var lo = 0
+        var hi = functionStartsRVA.count - 1
+        var best: Int = -1
+        while lo <= hi {
+            let mid = (lo + hi) >> 1
+            let v = functionStartsRVA[mid]
+            if v <= rva {
+                best = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return best >= 0 ? functionStartsRVA[best] : nil
+    }
+
+    private func scanArm64PrologueFunctions() {
+        let execSecs = executableTextSections()
+        guard !execSecs.isEmpty else { return }
+        var starts: [UInt64] = []
+
+        @inline(__always)
+        func isTerminatorOrPad(_ w: UInt32) -> Bool {
+            if w == 0xD65F_03C0 || w == 0xD65F_0BFF || w == 0xD65F_0FFF || w == 0xD503_201F {
+                return true
+            }
+            let top16 = w >> 16
+            if top16 == 0xD420 || top16 == 0x0000 { // BRK / UDF 0
+                return true
+            }
+            if (w & 0xFC00_0000) == 0x1400_0000 { // unconditional B
+                return true
+            }
+            return false
+        }
+
+        for sec in execSecs {
+            let start = Int(sec.offset)
+            let end = min(sliceSize, start + Int(sec.size))
+            guard start + 8 <= end else { continue }
+            var p = start
+            while p + 4 <= end {
+                let w = readSliceUInt32(p)
+                let isPac = (w == 0xD503_237F)
+                let isFrameStp = ((w & 0xFFE0_7FFF) == 0xA9A0_7BFD) // STP X29, X30, [SP, #imm]!
+                if isPac || isFrameStp {
+                    if p == start || isTerminatorOrPad(readSliceUInt32(p - 4)) {
+                        let pcVM = sec.addr + UInt64(p - start)
+                        if pcVM >= baseVM && pcVM < maxVM {
+                            starts.append(pcVM - baseVM)
+                        }
+                        if isPac { p += 4 } // skip checking next frame STP if preceded by PACIBSP
+                    }
+                }
+                p += 4
+            }
+        }
+
+        if !starts.isEmpty {
+            self.functionStartsRVA = Array(Set(starts)).sorted()
+        }
+    }
+
+    private func scanArm64StringXRefs() {
+        let execSecs = executableTextSections()
+        guard !execSecs.isEmpty else { return }
+        var out: [NativeSymbolEntry] = []
+        out.reserveCapacity(8192)
+
+        for textSec in execSecs {
+            let start = Int(textSec.offset)
+            let end = min(sliceSize, start + Int(textSec.size))
+            var p = start
+            while p + 8 <= end {
+                let w1 = readSliceUInt32(p)
+                // ADRP Xd, imm
+                if (w1 & 0x9F00_0000) == 0x9000_0000 {
+                    let rd = Int(w1 & 0x1F)
+                    let immlo = Int64((w1 >> 29) & 0x3)
+                    let immhi = Int64((w1 >> 5) & 0x7FFFF)
+                    var imm21 = (immhi << 2) | immlo
+                    if (imm21 & 0x10_0000) != 0 { imm21 |= ~0x1F_FFFF }
+                    let pcVM = textSec.addr + UInt64(p - start)
+                    let pageBase = (pcVM & ~0xFFF) &+ UInt64(bitPattern: imm21 &* 4096)
+
+                    let maxLook = min(4, (end - p) / 4 - 1)
+                    if maxLook >= 1 {
+                        for step in 1...maxLook {
+                            let w2 = readSliceUInt32(p + step * 4)
+                            if ((w2 & 0xFFC0_0000) == 0x9100_0000) && Int((w2 >> 5) & 0x1F) == rd {
+                                let addImm = UInt64((w2 >> 10) & 0xFFF)
+                                let targetVM = pageBase + addImm
+                                if let s = cstringByVM[targetVM], s.count >= 4 && s.count <= 96 {
+                                    if SafetyGuard.isRealMoneyBlocked(s) {
+                                        filteredRealMoneyCount += 1
+                                    } else {
+                                        let rva = pcVM >= baseVM ? (pcVM - baseVM) : 0
+                                        let label: String
+                                        if let fRVA = enclosingFunctionStartRVA(forRVA: rva) {
+                                            label = String(format: "sub_%llX -> \"%@\"", fRVA, s)
+                                        } else {
+                                            label = "XRef -> \"\(s)\""
+                                        }
+                                        out.append(NativeSymbolEntry(
+                                            name: label,
+                                            rva: rva,
+                                            va: pcVM,
+                                            fileOffset: UInt64(p),
+                                            source: "ARM64_XREF"
+                                        ))
+                                    }
+                                }
+                                break
+                            }
+                            // Stop lookahead if another instruction overwrites rd
+                            if (w2 & 0x9F00_0000) == 0x9000_0000 && Int(w2 & 0x1F) == rd {
+                                break
+                            }
+                        }
+                    }
+                }
+                p += 4
+            }
         }
         self.xrefFunctions = out
     }

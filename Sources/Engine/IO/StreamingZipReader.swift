@@ -241,6 +241,62 @@ public final class StreamingZipReader {
         return entry.localHeaderOffset + 30 + nameLen + extraLen
     }
 
+    public func peekEntryPrefix(_ entry: ZipEntry, maxBytes: Int = 4) -> [UInt8]? {
+        guard maxBytes > 0, entry.compressedSize > 0, entry.uncompressedSize >= UInt64(maxBytes) else {
+            return nil
+        }
+        guard let startOffset = try? dataOffset(for: entry) else {
+            return nil
+        }
+
+        if entry.compressionMethod == 0 {
+            return try? preadExact(offset: startOffset, length: maxBytes)
+        }
+
+        guard entry.compressionMethod == 8 else {
+            return nil
+        }
+
+        let toRead = Int(min(UInt64(512), entry.compressedSize))
+        guard toRead > 0, let inBuf = try? preadExact(offset: startOffset, length: toRead) else {
+            return nil
+        }
+
+        let streamPtr = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        memset(streamPtr, 0, MemoryLayout<compression_stream>.size)
+        guard compression_stream_init(streamPtr, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) != COMPRESSION_STATUS_ERROR else {
+            streamPtr.deallocate()
+            return nil
+        }
+        defer {
+            compression_stream_destroy(streamPtr)
+            streamPtr.deallocate()
+        }
+
+        let dstCap = max(64, maxBytes)
+        var outBuf = [UInt8](repeating: 0, count: dstCap)
+        let flags: Int32 = (UInt64(toRead) == entry.compressedSize) ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
+        var produced = 0
+
+        inBuf.withUnsafeBytes { inRaw in
+            guard let srcBase = inRaw.bindMemory(to: UInt8.self).baseAddress else { return }
+            streamPtr.pointee.src_ptr = srcBase
+            streamPtr.pointee.src_size = toRead
+            outBuf.withUnsafeMutableBytes { outRaw in
+                guard let dstBase = outRaw.bindMemory(to: UInt8.self).baseAddress else { return }
+                streamPtr.pointee.dst_ptr = dstBase
+                streamPtr.pointee.dst_size = dstCap
+                let status = compression_stream_process(streamPtr, flags)
+                if status != COMPRESSION_STATUS_ERROR {
+                    produced = dstCap - streamPtr.pointee.dst_size
+                }
+            }
+        }
+
+        guard produced >= maxBytes else { return nil }
+        return Array(outBuf.prefix(maxBytes))
+    }
+
     public func extractSmallEntryData(_ entry: ZipEntry, maxBytes: Int = 8 * 1024 * 1024) throws -> Data {
         guard entry.uncompressedSize <= UInt64(maxBytes) else {
             throw ZipReaderError.ioFailed("Tệp \(entry.path) vượt quá giới hạn đọc nhanh")

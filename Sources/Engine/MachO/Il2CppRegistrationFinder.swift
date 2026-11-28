@@ -8,7 +8,7 @@ public enum Il2CppRegistrationFinder {
         typeDefsCount: Int,
         totalMethodsCount: Int,
         metadataVersion: Int32,
-        ctorPairsByImage: [String: [(typeDefIndex: Int, methodId: Int)]],
+        ctorPairsByImage: [String: [(typeDefIndex: Int, ridIndex: Int, globalIndex: Int)]],
         log: (String) -> Void
     ) -> Il2CppRegistrationResult {
         var codeGenModules: [String: CodeGenModuleInfo] = [:]
@@ -18,16 +18,22 @@ public enum Il2CppRegistrationFinder {
         var codeRegRVA: UInt64 = 0
         var metaRegRVA: UInt64 = 0
         var strategyUsed = "None"
+        var foundCodeRegBaseOff: Int? = nil
+        var foundCodeGenModulesOff: Int? = nil
+        var rawGenericMethodPairs: [(methodDefIndex: Int, ptrIndex: Int)] = []
+        var maxGenericPtrIndex: Int = -1
 
         let wantedSet = Set(imageNames)
         let sliceSize = macho.sliceSize
         let baseVM = macho.baseVM
 
+        let excludedSects: Set<String> = [
+            "__bss", "__common", "__text", "__stubs", "__cstring",
+            "__objc_methname", "__objc_classname", "__objc_methtype"
+        ]
         let dataSections = macho.sections.filter { sec in
-            let isDataSeg = sec.segName == "__DATA_CONST" || sec.segName == "__AUTH_CONST" || sec.segName == "__AUTH" || sec.segName == "__DATA" || sec.segName == "__DATA_DIRTY"
-            let isConstText = sec.segName == "__TEXT" && sec.sectName == "__const"
-            let notBss = sec.sectName != "__bss" && sec.sectName != "__common"
-            return (isDataSeg && notBss || isConstText)
+            !excludedSects.contains(sec.sectName)
+                && (sec.flags & 0xFF) != 0x01
                 && sec.size >= 24
                 && Int(sec.offset + sec.size) <= sliceSize
                 && !macho.isInEncryptedRange(sliceRelOffset: Int(sec.offset))
@@ -41,9 +47,11 @@ public enum Il2CppRegistrationFinder {
             guard namePtrVM != 0, let nameOff = macho.vmToSliceRelOffset(namePtrVM), !macho.isInEncryptedRange(sliceRelOffset: nameOff) else {
                 return nil
             }
-            let dllName = macho.readSliceCString(nameOff, maxLength: 120)
-            guard dllName.lowercased().hasSuffix(".dll") else { return nil }
-            if !allowUnknownImage && !wantedSet.isEmpty && !wantedSet.contains(dllName) {
+            let dllName = macho.readSliceCString(nameOff, maxLength: 160)
+            let lowerDll = dllName.lowercased()
+            let knownMatch = wantedSet.contains(dllName)
+            guard knownMatch || lowerDll.hasSuffix(".dll") || lowerDll.hasSuffix(".exe") else { return nil }
+            if !allowUnknownImage && !wantedSet.isEmpty && !knownMatch {
                 return nil
             }
 
@@ -294,6 +302,69 @@ public enum Il2CppRegistrationFinder {
                 }
             }
 
+            // Parse methodSpecs at p - 16 and genericMethodTable at p - 48
+            if rawGenericMethodPairs.isEmpty && p >= 48 && totalMethodsCount > 0 {
+                let msCnt = Int(macho.readSliceUInt32(p - 16))
+                let msHi = macho.readSliceUInt32(p - 12)
+                let msPtrVM = macho.decodePointer(atSliceRelOffset: p - 8)
+                var parsedSpecs: [Int32] = []
+                if msHi == 0 && msCnt > 0 && msCnt <= 1_000_000,
+                   let msOff = macho.vmToSliceRelOffset(msPtrVM),
+                   msOff + msCnt * 12 <= sliceSize,
+                   !macho.isInEncryptedRange(sliceRelOffset: msOff) {
+                    var validSpecs = 0
+                    let specSamples = min(msCnt, 16)
+                    let specStep = max(1, msCnt / specSamples)
+                    for si in stride(from: 0, to: msCnt, by: specStep) {
+                        let mdIdx = Int(macho.readSliceInt32(msOff + si * 12))
+                        if mdIdx >= 0 && mdIdx < totalMethodsCount {
+                            validSpecs += 1
+                        }
+                    }
+                    if validSpecs > 0 {
+                        parsedSpecs.reserveCapacity(msCnt)
+                        for si in 0..<msCnt {
+                            parsedSpecs.append(macho.readSliceInt32(msOff + si * 12))
+                        }
+                    }
+                }
+
+                let gmCnt = Int(macho.readSliceUInt32(p - 48))
+                let gmHi = macho.readSliceUInt32(p - 44)
+                let gmPtrVM = macho.decodePointer(atSliceRelOffset: p - 40)
+                if !parsedSpecs.isEmpty && gmHi == 0 && gmCnt > 0 && gmCnt <= 1_000_000,
+                   let gmOff = macho.vmToSliceRelOffset(gmPtrVM),
+                   !macho.isInEncryptedRange(sliceRelOffset: gmOff) {
+                    let strideCandidates = metadataVersion >= 25 ? [16, 12] : [12, 16]
+                    for gmStride in strideCandidates {
+                        guard gmOff + gmCnt * gmStride <= sliceSize else { continue }
+                        var gmHits = 0
+                        let gmSamples = min(gmCnt, 32)
+                        let gmStep = max(1, gmCnt / gmSamples)
+                        for gi in stride(from: 0, to: gmCnt, by: gmStep) {
+                            let specIdx = Int(macho.readSliceInt32(gmOff + gi * gmStride))
+                            let methIdx = Int(macho.readSliceInt32(gmOff + gi * gmStride + 4))
+                            if specIdx >= 0 && specIdx < parsedSpecs.count && methIdx >= -1 && methIdx < 2_000_000 {
+                                gmHits += 1
+                            }
+                        }
+                        if gmHits >= max(1, gmSamples / 2) {
+                            rawGenericMethodPairs.reserveCapacity(gmCnt)
+                            for gi in 0..<gmCnt {
+                                let specIdx = Int(macho.readSliceInt32(gmOff + gi * gmStride))
+                                let methIdx = Int(macho.readSliceInt32(gmOff + gi * gmStride + 4))
+                                guard specIdx >= 0 && specIdx < parsedSpecs.count && methIdx >= 0 else { continue }
+                                let mdIdx = Int(parsedSpecs[specIdx])
+                                guard mdIdx >= 0 && mdIdx < totalMethodsCount else { continue }
+                                rawGenericMethodPairs.append((mdIdx, methIdx))
+                                if methIdx > maxGenericPtrIndex { maxGenericPtrIndex = methIdx }
+                            }
+                            break
+                        }
+                    }
+                }
+            }
+
             metaRegRVA = (macho.sliceRelOffsetToVM(p) ?? baseVM) - baseVM
             return true
         }
@@ -308,7 +379,8 @@ public enum Il2CppRegistrationFinder {
                 let cnt = Int(macho.readSliceUInt32(off))
                 let hi = macho.readSliceUInt32(off + 4)
                 guard hi == 0 && cnt >= 1 && cnt <= 3000 else { continue }
-                if !imageNames.isEmpty && abs(cnt - imageNames.count) > 12 { continue }
+                let tol = max(16, imageNames.count / 5)
+                if !imageNames.isEmpty && abs(cnt - imageNames.count) > tol { continue }
                 let tblVM = macho.decodePointer(atSliceRelOffset: off + 8)
                 guard let tblOff = macho.vmToSliceRelOffset(tblVM),
                       tblOff + cnt * 8 <= sliceSize,
@@ -333,6 +405,8 @@ public enum Il2CppRegistrationFinder {
                         }
                     }
                     if loaded > 0 {
+                        foundCodeRegBaseOff = crOff
+                        foundCodeGenModulesOff = off
                         codeRegRVA = (macho.sliceRelOffsetToVM(crOff) ?? baseVM) - baseVM
                         return loaded
                     }
@@ -347,7 +421,7 @@ public enum Il2CppRegistrationFinder {
             if (sec.sectName == "__mod_init_func" || (sec.flags & 0xFF) == 0x09),
                sec.size >= 8, Int(sec.offset + sec.size) <= sliceSize,
                !macho.isInEncryptedRange(sliceRelOffset: Int(sec.offset)) {
-                let cnt = min(Int(sec.size / 8), 2048)
+                let cnt = Int(sec.size / 8)
                 for i in 0..<cnt {
                     let fVM = macho.decodePointer(atSliceRelOffset: Int(sec.offset) + i * 8)
                     if fVM != 0 && macho.isInTextCode(fVM) { initFuncVMs.append(fVM) }
@@ -355,7 +429,7 @@ public enum Il2CppRegistrationFinder {
             } else if sec.sectName == "__init_offsets",
                       sec.size >= 4, Int(sec.offset + sec.size) <= sliceSize,
                       !macho.isInEncryptedRange(sliceRelOffset: Int(sec.offset)) {
-                let cnt = min(Int(sec.size / 4), 2048)
+                let cnt = Int(sec.size / 4)
                 for i in 0..<cnt {
                     let rel = UInt64(macho.readSliceUInt32(Int(sec.offset) + i * 4))
                     if rel > 0 && baseVM + rel < macho.maxVM { initFuncVMs.append(baseVM + rel) }
@@ -363,26 +437,33 @@ public enum Il2CppRegistrationFinder {
             }
         }
 
-        for fVM in initFuncVMs {
-            guard let fOff = macho.vmToSliceRelOffset(fVM),
-                  fOff + 12 <= sliceSize,
-                  !macho.isInEncryptedRange(sliceRelOffset: fOff) else { continue }
-            var adrpPages: [Int: UInt64] = [:]
-            var regs: [Int: UInt64] = [:]
+        func decodeRegistrationRegs(atVM startVM: UInt64, adrpPages: inout [Int: UInt64], regs: inout [Int: UInt64], allowBranchHop: Bool) {
+            guard let fOff = macho.vmToSliceRelOffset(startVM),
+                  fOff + 8 <= sliceSize,
+                  !macho.isInEncryptedRange(sliceRelOffset: fOff) else { return }
+            var hopTarget: UInt64? = nil
             for st in 0..<48 {
                 let ioff = fOff + st * 4
                 guard ioff + 4 <= sliceSize else { break }
                 let w = macho.readSliceUInt32(ioff)
                 if w == 0xD65F_03C0 { break }
-                if (w & 0xFFE0_FFE0) == 0xAA00_03E0 { // MOV Xd, Xm (ORR Xd, XZR, Xm)
+                if (w & 0xFFE0_FFE0) == 0xAA00_03E0 { // MOV Xd, Xm
                     let rd = Int(w & 0x1F)
                     let rm = Int((w >> 16) & 0x1F)
                     if let val = regs[rm] { regs[rd] = val }
+                } else if (w & 0x9F00_0000) == 0x1000_0000 { // ADR
+                    let rd = Int(w & 0x1F)
+                    var imm21 = (Int64((w >> 5) & 0x7FFFF) << 2) | Int64((w >> 29) & 0x3)
+                    if (imm21 & 0x10_0000) != 0 { imm21 |= ~0x1F_FFFF }
+                    let pcVM = startVM + UInt64(st * 4)
+                    let target = UInt64(bitPattern: Int64(bitPattern: pcVM) &+ imm21)
+                    adrpPages[rd] = target
+                    regs[rd] = target
                 } else if (w & 0x9F00_0000) == 0x9000_0000 { // ADRP
                     let rd = Int(w & 0x1F)
                     var imm21 = (Int64((w >> 5) & 0x7FFFF) << 2) | Int64((w >> 29) & 0x3)
                     if (imm21 & 0x10_0000) != 0 { imm21 |= ~0x1F_FFFF }
-                    let pcVM = fVM + UInt64(st * 4)
+                    let pcVM = startVM + UInt64(st * 4)
                     adrpPages[rd] = (pcVM & ~0xFFF) &+ UInt64(bitPattern: imm21 &* 4096)
                 } else if (w & 0xFF80_0000) == 0x9100_0000 { // ADD Xd, Xn, #imm12
                     let rd = Int(w & 0x1F)
@@ -398,8 +479,26 @@ public enum Il2CppRegistrationFinder {
                     if let pg = adrpPages[rn], let ptrOff = macho.vmToSliceRelOffset(pg + imm) {
                         regs[rd] = macho.decodePointer(atSliceRelOffset: ptrOff)
                     }
+                } else if allowBranchHop && ((w & 0xFC00_0000) == 0x1400_0000 || (w & 0xFC00_0000) == 0x9400_0000) {
+                    var imm26 = Int64(w & 0x03FF_FFFF)
+                    if (imm26 & 0x0200_0000) != 0 { imm26 |= ~0x03FF_FFFF }
+                    let pcVM = startVM + UInt64(st * 4)
+                    let dest = UInt64(bitPattern: Int64(bitPattern: pcVM) &+ imm26 &* 4)
+                    if macho.isInTextCode(dest) {
+                        hopTarget = dest
+                    }
+                    if (w & 0xFC00_0000) == 0x1400_0000 { break } // unconditional tail B
                 }
             }
+            if allowBranchHop, (regs[0] == nil || regs[1] == nil), let hop = hopTarget {
+                decodeRegistrationRegs(atVM: hop, adrpPages: &adrpPages, regs: &regs, allowBranchHop: false)
+            }
+        }
+
+        for fVM in initFuncVMs {
+            var adrpPages: [Int: UInt64] = [:]
+            var regs: [Int: UInt64] = [:]
+            decodeRegistrationRegs(atVM: fVM, adrpPages: &adrpPages, regs: &regs, allowBranchHop: true)
             if let x0 = regs[0], let x1 = regs[1],
                let crOff = macho.vmToSliceRelOffset(x0),
                let mrOff = macho.vmToSliceRelOffset(x1) {
@@ -416,10 +515,10 @@ public enum Il2CppRegistrationFinder {
         }
 
         // STRATEGY 2 & 3: Scan data/const sections structurally
-        if codeGenModules.isEmpty || fieldOffsetsByType.isEmpty {
+        if codeGenModules.count < imageNames.count || fieldOffsetsByType.isEmpty || (rawGenericMethodPairs.isEmpty && totalMethodsCount > 0) {
             for ds in dataSections {
                 let start = Int(ds.offset)
-                let end = min(sliceSize - 24, start + min(Int(ds.size), 120 * 1024 * 1024) - 24)
+                let end = min(sliceSize - 24, start + Int(ds.size) - 24)
                 guard start <= end else { continue }
                 for p in stride(from: start, through: end, by: 8) {
                     if !imageNames.isEmpty && codeGenModules.count < imageNames.count {
@@ -441,6 +540,7 @@ public enum Il2CppRegistrationFinder {
                                             codeGenModules[mod.imageName] = mod
                                         }
                                     }
+                                    if foundCodeGenModulesOff == nil { foundCodeGenModulesOff = p }
                                     if strategyUsed == "None" { strategyUsed = "CodeRegistrationScan" }
                                 }
                             }
@@ -490,6 +590,88 @@ public enum Il2CppRegistrationFinder {
             }
         }
 
+        // Resolve genericMethodPointers -> genericMethodRVAsByMethodDef
+        var genericMethodRVAsByMethodDef: [Int: [UInt64]] = [:]
+        if !rawGenericMethodPairs.isEmpty, maxGenericPtrIndex >= 0 {
+            let minNeeded = maxGenericPtrIndex + 1
+            var bestGPtrsOff: Int? = nil
+            var bestGCount: Int = 0
+            var bestSlack: Int = Int.max
+
+            func probeGenericPtrPair(atRel gpOff: Int) {
+                guard gpOff >= 0 && gpOff + 16 <= sliceSize && !macho.isInEncryptedRange(sliceRelOffset: gpOff) else { return }
+                let gCnt = Int(macho.readSliceUInt32(gpOff))
+                let gHi = macho.readSliceUInt32(gpOff + 4)
+                guard gHi == 0 && gCnt >= minNeeded && gCnt <= 2_000_000 else { return }
+                let gPtrVM = macho.decodePointer(atSliceRelOffset: gpOff + 8)
+                guard let gTblOff = macho.vmToSliceRelOffset(gPtrVM),
+                      gTblOff + gCnt * 8 <= sliceSize,
+                      !macho.isInEncryptedRange(sliceRelOffset: gTblOff) else {
+                    return
+                }
+                var nonZeroOk = 0
+                var nonZeroBad = 0
+                let sampleStep = max(1, gCnt / 24)
+                for k in stride(from: 0, to: gCnt, by: sampleStep) {
+                    let mp = macho.decodePointer(atSliceRelOffset: gTblOff + k * 8)
+                    if mp == 0 { continue }
+                    if macho.isInTextCode(mp) {
+                        nonZeroOk += 1
+                    } else {
+                        nonZeroBad += 1
+                    }
+                }
+                if nonZeroOk >= 1 && nonZeroBad == 0 {
+                    let slack = gCnt - minNeeded
+                    if slack < bestSlack {
+                        bestSlack = slack
+                        bestGPtrsOff = gTblOff
+                        bestGCount = gCnt
+                    }
+                }
+            }
+
+            if let anchor = foundCodeGenModulesOff ?? foundCodeRegBaseOff {
+                let lo = max(0, anchor - 0xC0)
+                let hi = min(sliceSize - 16, anchor + 0x40)
+                if lo <= hi {
+                    for gp in stride(from: lo, through: hi, by: 8) {
+                        probeGenericPtrPair(atRel: gp)
+                    }
+                }
+            }
+            if bestGPtrsOff == nil {
+                for ds in dataSections {
+                    let start = Int(ds.offset)
+                    let end = min(sliceSize - 16, start + Int(ds.size) - 16)
+                    guard start <= end else { continue }
+                    for gp in stride(from: start, through: end, by: 8) {
+                        probeGenericPtrPair(atRel: gp)
+                    }
+                }
+            }
+
+            if let gTblOff = bestGPtrsOff, bestGCount > 0 {
+                var genRVAs = [UInt64](repeating: 0, count: bestGCount)
+                for k in 0..<bestGCount {
+                    let mp = macho.decodePointer(atSliceRelOffset: gTblOff + k * 8)
+                    if mp >= baseVM && macho.isInTextCode(mp) {
+                        genRVAs[k] = mp - baseVM
+                    }
+                }
+                for pair in rawGenericMethodPairs {
+                    guard pair.ptrIndex >= 0 && pair.ptrIndex < genRVAs.count else { continue }
+                    let rva = genRVAs[pair.ptrIndex]
+                    guard rva > 0 else { continue }
+                    var existing = genericMethodRVAsByMethodDef[pair.methodDefIndex] ?? []
+                    if !existing.contains(rva) {
+                        existing.append(rva)
+                        genericMethodRVAsByMethodDef[pair.methodDefIndex] = existing
+                    }
+                }
+            }
+        }
+
         // Analyze .ctor ARM64 instructions to recover instance field initial values
         var ctorInits: [Int: [Int32: String]] = [:]
         if !codeGenModules.isEmpty || !legacyMethodRVAs.isEmpty {
@@ -497,10 +679,10 @@ public enum Il2CppRegistrationFinder {
                 let modRVAs = codeGenModules[imgName]?.methodRVAs
                 for pair in pairs {
                     let rva: UInt64
-                    if let modRVAs = modRVAs, pair.methodId >= 0 && pair.methodId < modRVAs.count {
-                        rva = modRVAs[pair.methodId]
-                    } else if pair.methodId >= 0 && pair.methodId < legacyMethodRVAs.count {
-                        rva = legacyMethodRVAs[pair.methodId]
+                    if let modRVAs = modRVAs, pair.ridIndex >= 0 && pair.ridIndex < modRVAs.count && modRVAs[pair.ridIndex] > 0 {
+                        rva = modRVAs[pair.ridIndex]
+                    } else if pair.globalIndex >= 0 && pair.globalIndex < legacyMethodRVAs.count && legacyMethodRVAs[pair.globalIndex] > 0 {
+                        rva = legacyMethodRVAs[pair.globalIndex]
                     } else {
                         continue
                     }
@@ -513,7 +695,7 @@ public enum Il2CppRegistrationFinder {
             }
         }
 
-        log("[IL2CPP Reg] Chiến lược=\(strategyUsed) · Modules=\(codeGenModules.count) · FieldOffsetTypes=\(fieldOffsetsByType.count) · Il2CppTypes=\(il2cppTypes.count) · CtorInits=\(ctorInits.count)")
+        log("[IL2CPP Reg] Chiến lược=\(strategyUsed) · Modules=\(codeGenModules.count) · FieldOffsetTypes=\(fieldOffsetsByType.count) · Il2CppTypes=\(il2cppTypes.count) · GenericMethodDefs=\(genericMethodRVAsByMethodDef.count) · CtorInits=\(ctorInits.count)")
 
         return Il2CppRegistrationResult(
             codeRegistrationRVA: codeRegRVA,
@@ -524,7 +706,8 @@ public enum Il2CppRegistrationFinder {
             fieldOffsetsByType: fieldOffsetsByType,
             il2cppTypes: il2cppTypes,
             stringLiteralAddresses: [],
-            ctorFieldInits: ctorInits
+            ctorFieldInits: ctorInits,
+            genericMethodRVAsByMethodDef: genericMethodRVAsByMethodDef
         )
     }
 }

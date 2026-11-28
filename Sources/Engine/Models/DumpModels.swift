@@ -226,6 +226,43 @@ public struct Il2CppMethodInfo: Codable, Equatable, Sendable {
     public var fileOffset: UInt64
     public var arm64Semantics: String
     public var attributes: [Il2CppAttributeInfo]
+    public var genericInstRVAs: [UInt64]
+
+    public init(
+        index: Int,
+        name: String,
+        returnTypeIndex: Int32,
+        returnTypeName: String,
+        genericParamNames: [String],
+        parameters: [Il2CppParameterInfo],
+        token: UInt32,
+        flags: UInt16,
+        iflags: UInt16,
+        slot: UInt16,
+        rva: UInt64,
+        va: UInt64,
+        fileOffset: UInt64,
+        arm64Semantics: String,
+        attributes: [Il2CppAttributeInfo],
+        genericInstRVAs: [UInt64] = []
+    ) {
+        self.index = index
+        self.name = name
+        self.returnTypeIndex = returnTypeIndex
+        self.returnTypeName = returnTypeName
+        self.genericParamNames = genericParamNames
+        self.parameters = parameters
+        self.token = token
+        self.flags = flags
+        self.iflags = iflags
+        self.slot = slot
+        self.rva = rva
+        self.va = va
+        self.fileOffset = fileOffset
+        self.arm64Semantics = arm64Semantics
+        self.attributes = attributes
+        self.genericInstRVAs = genericInstRVAs
+    }
 }
 
 public struct Il2CppPropertyInfo: Codable, Equatable, Sendable {
@@ -316,6 +353,31 @@ public struct Il2CppRegistrationResult: Sendable {
     public var il2cppTypes: [Il2CppTypeMetaEntry]
     public var stringLiteralAddresses: [UInt64]
     public var ctorFieldInits: [Int: [Int32: String]]
+    public var genericMethodRVAsByMethodDef: [Int: [UInt64]]
+
+    public init(
+        codeRegistrationRVA: UInt64,
+        metadataRegistrationRVA: UInt64,
+        strategyUsed: String,
+        codeGenModules: [String: CodeGenModuleInfo],
+        legacyMethodRVAs: [UInt64],
+        fieldOffsetsByType: [[Int32]],
+        il2cppTypes: [Il2CppTypeMetaEntry],
+        stringLiteralAddresses: [UInt64],
+        ctorFieldInits: [Int: [Int32: String]],
+        genericMethodRVAsByMethodDef: [Int: [UInt64]] = [:]
+    ) {
+        self.codeRegistrationRVA = codeRegistrationRVA
+        self.metadataRegistrationRVA = metadataRegistrationRVA
+        self.strategyUsed = strategyUsed
+        self.codeGenModules = codeGenModules
+        self.legacyMethodRVAs = legacyMethodRVAs
+        self.fieldOffsetsByType = fieldOffsetsByType
+        self.il2cppTypes = il2cppTypes
+        self.stringLiteralAddresses = stringLiteralAddresses
+        self.ctorFieldInits = ctorFieldInits
+        self.genericMethodRVAsByMethodDef = genericMethodRVAsByMethodDef
+    }
 }
 
 public enum ExplorerItemKind: String, Codable, CaseIterable, Sendable {
