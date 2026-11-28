@@ -241,8 +241,8 @@ public enum Il2CppMetadataParser {
                 var score = 0
                 for ti in stride(from: 0, to: min(totalTypes, tStep * 32), by: tStep) {
                     let tp = typeDefsOff + ti * typeStride
-                    let fs = mapped.readInt32(at: tp + 32 + sh)
-                    let ms = mapped.readInt32(at: tp + 36 + sh)
+                    let fs = Int(mapped.readInt32(at: tp + 32 + sh))
+                    let ms = Int(mapped.readInt32(at: tp + 36 + sh))
                     let mc = Int(mapped.readUInt16(at: tp + 64 + sh))
                     let fc = Int(mapped.readUInt16(at: tp + 68 + sh))
                     let tk = mapped.readUInt32(at: tp + 84 + sh)
