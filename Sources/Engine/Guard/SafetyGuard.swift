@@ -32,7 +32,7 @@ public enum SafetyGuard {
     )
 
     private static let iapPairRE = try! NSRegularExpression(
-        pattern: #"(?:\b(?:buy|purchase|spend|topup|recharge|pay)\s+(?:gem|gems|diamond|diamonds|gold|coin|coins|cash|money|currency|vip|premium|pack|bundle|pass|subscription|ads|noads|product|iap)\b|\b(?:add|set|get|grant|give|unlock|restore)\s+(?:gem|gems|diamond|diamonds|gold|coin|coins|cash|money|currency|vip|premium|noads|iap|product)\b)"#,
+        pattern: #"(?:\b(?:buy|purchase|spend|topup|recharge|pay)\s+(?:[a-z0-9]+\s+)?(?:gem|gems|diamond|diamonds|gold|coin|coins|cash|money|currency|vip|premium|pack|bundle|pass|subscription|ads|noads|product|iap)\b|\b(?:add|set|get|grant|give|unlock|restore)\s+(?:gem|gems|diamond|diamonds|gold|coin|coins|cash|money|currency|vip|premium|noads|iap|product)\b)"#,
         options: [.caseInsensitive]
     )
 
